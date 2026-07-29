@@ -1,0 +1,80 @@
+services:
+  # ─── BASE DE DONNÉES POSTGRESQL 16 ────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: forgeai_postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - forgeai_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ─── CHROMADB (BASE VECTORIELLE POUR LE RAG) ──────────────
+  chromadb:
+    image: chromadb/chroma:0.5.5
+    container_name: forgeai_chroma
+    volumes:
+      - chroma_data:/chroma/chroma
+    ports:
+      - "8001:8000"
+    environment:
+      - CHROMA_SERVER_AUTH_CREDENTIALS=${CHROMA_AUTH_TOKEN}
+      - CHROMA_SERVER_AUTH_CREDENTIALS_PROVIDER=chromadb.auth.token.TokenConfigServerAuthCredentialsProvider
+      - CHROMA_SERVER_AUTH_PROVIDER=chromadb.auth.token.TokenAuthServerProvider
+    networks:
+      - forgeai_network
+
+  # ─── REDIS (TICKETS SSE & CACHE EXPRESS) ──────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: forgeai_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - forgeai_network
+
+  # ─── BACKEND FASTAPI (PYTHON 3.11) ────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: forgeai_backend
+    working_dir: /app
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      chromadb:
+        condition: service_started
+    networks:
+      - forgeai_network
+    command: >
+      sh -c "uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+networks:
+  forgeai_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  chroma_data:
+  redis_data:
