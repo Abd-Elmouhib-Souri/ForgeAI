@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useForgeLanguage, type ForgeLang } from "@/lib/language-context";
 
@@ -14,6 +14,9 @@ type JourneyStep = {
   title: string;
   description: string;
   done: boolean;
+  doneLabel?: string;
+  pendingLabel?: string;
+  warning?: boolean;
 };
 
 function resolveLanguage(
@@ -26,108 +29,192 @@ function resolveLanguage(
 
 function hasPersonaData(analysisData: AnalysisData): boolean {
   const personaBuilder = getPersonaBuilderData(analysisData);
-
   if (!personaBuilder) return false;
-
-  const personasCount = personaBuilder.personas?.length || 0;
-  const hasPrimaryPersona = Boolean(personaBuilder.primary_persona);
-
-  return personasCount > 0 || hasPrimaryPersona;
+  return Boolean(
+    (personaBuilder.personas?.length || 0) > 0 || personaBuilder.primary_persona
+  );
 }
 
 function hasStrategicDecision(analysisData: AnalysisData): boolean {
   const debateRoom = analysisData.debate_room;
   const startupScore = analysisData.startup_score;
 
-  const hasDebateRounds = Boolean(debateRoom?.rounds?.length);
-  const hasJudge = Boolean(debateRoom?.judge);
-  const hasJudgeDecision = Boolean(
-    debateRoom?.judge?.verdict ||
+  return Boolean(
+    debateRoom?.rounds?.length ||
+      debateRoom?.judge?.verdict ||
       debateRoom?.judge?.final_recommendation ||
       debateRoom?.judge?.go_no_go_conditions?.length ||
       debateRoom?.judge?.next_actions?.length ||
-      debateRoom?.judge?.action_plan?.length
-  );
-
-  const hasStartupDecision = Boolean(
-    startupScore?.verdict ||
+      debateRoom?.judge?.action_plan?.length ||
+      startupScore?.verdict ||
       startupScore?.summary ||
       startupScore?.next_actions?.length
   );
-
-  return hasDebateRounds || hasJudge || hasJudgeDecision || hasStartupDecision;
 }
 
 function hasSourceData(analysisData: AnalysisData): boolean {
-  if (analysisData.forgecrawler) return true;
+  const crawler = analysisData.forgecrawler;
+  const competitive = analysisData.competitive_analysis;
 
-  const competitiveAnalysis = analysisData.competitive_analysis;
-  if (!competitiveAnalysis) return false;
+  const crawlerFinished = Boolean(
+    crawler &&
+      ["completed", "limited", "no_verified_sources"].includes(
+        String(crawler.status || "").toLowerCase()
+      ) &&
+      (typeof crawler.sources_count === "number" ||
+        typeof crawler.no_verified_relevant_source_found === "boolean")
+  );
 
-  const record = competitiveAnalysis as Record<string, unknown>;
+  const competitiveFinished = Boolean(
+    competitive &&
+      ["completed", "limited", "no_verified_sources"].includes(
+        String(competitive.status || "").toLowerCase()
+      )
+  );
 
-  const sourceKeys = [
-    "market_gap",
-    "coverage_status",
-    "source_confidence",
-    "confidence_level",
-    "verified_competitors",
-    "local_competitors",
-    "direct_competitors",
-    "adjacent_solutions",
-    "local_adjacent_solutions",
-    "regional_benchmarks",
-    "international_benchmarks",
-    "market_sources",
-    "close_solutions",
-    "indirect_competitors",
-    "competitive_advantages",
-    "external_sources",
-    "sources",
-  ];
+  return crawlerFinished || competitiveFinished;
+}
 
-  return sourceKeys.some((key) => {
-    const value = record[key];
+function retainedSourceCount(analysisData: AnalysisData): number {
+  const crawler = analysisData.forgecrawler;
+  const competitive = analysisData.competitive_analysis;
 
-    if (Array.isArray(value)) {
-      return value.length > 0;
-    }
+  const candidates = [
+    crawler?.sources_count,
+    crawler?.sources?.length,
+    crawler?.public_sources?.length,
+    competitive?.sources_count,
+    competitive?.sources?.length,
+    competitive?.public_sources?.length,
+  ].filter((value): value is number => typeof value === "number");
 
-    if (typeof value === "string") {
-      return value.trim().length > 0;
-    }
+  return candidates.length > 0 ? Math.max(...candidates) : 0;
+}
 
-    if (typeof value === "number") {
-      return value > 0;
-    }
+function hasFinalVerification(analysisData: AnalysisData): boolean {
+  const report = analysisData.fact_check_report;
+  if (!report) return false;
 
-    return Boolean(value);
-  });
+  const status = String(report.status || "").toLowerCase();
+  return Boolean(
+    ["completed", "fallback_completed"].includes(status) &&
+      Array.isArray(report.claims) &&
+      report.claims.some((claim) => String(claim.claim || "").trim().length > 0)
+  );
+}
+
+
+function contextReadinessState(analysisData: AnalysisData): {
+  hasContract: boolean;
+  ready: boolean;
+  blocked: boolean;
+  scorePercent: number | null;
+} {
+  const readiness = analysisData.idea_readiness;
+  const confidence =
+    analysisData.context_confidence ||
+    readiness?.context_confidence ||
+    analysisData.project_context_packet?.confidence;
+
+  const status = String(
+    readiness?.status || confidence?.status || ""
+  )
+    .trim()
+    .toLowerCase();
+
+  const readyForAgents =
+    typeof readiness?.ready_for_agents === "boolean"
+      ? readiness.ready_for_agents
+      : typeof confidence?.ready_for_agents === "boolean"
+        ? confidence.ready_for_agents
+        : null;
+
+  const score =
+    typeof readiness?.score === "number"
+      ? readiness.score
+      : typeof confidence?.score === "number"
+        ? confidence.score
+        : null;
+
+  return {
+    hasContract: Boolean(
+      readiness ||
+        confidence ||
+        analysisData.project_context_packet ||
+        analysisData.needs_clarification
+    ),
+    ready:
+      readyForAgents === true ||
+      ["ready", "ready_cautious"].includes(status),
+    blocked:
+      analysisData.needs_clarification === true ||
+      ["needs_clarification", "insufficient_context"].includes(status),
+    scorePercent:
+      score === null
+        ? null
+        : Math.round(Math.max(0, Math.min(1, score)) * 100),
+  };
 }
 
 function buildSteps(
   analysisData: AnalysisData,
   language: ForgeLang
 ): JourneyStep[] {
-  const hasMarket =
-    Boolean(analysisData.market_study) ||
-    Boolean(analysisData.swot) ||
-    Boolean(analysisData.business_model_canvas);
+  const hasMarket = Boolean(
+    analysisData.market_study ||
+      analysisData.swot ||
+      analysisData.business_model_canvas
+  );
+  const sourceSearchCompleted = hasSourceData(analysisData);
+  const sourcesRetained = retainedSourceCount(analysisData);
+  const context = contextReadinessState(analysisData);
+
+  const legacyIdeaStructured = Boolean(
+    analysisData.summary ||
+      analysisData.problem ||
+      analysisData.problem_solved ||
+      analysisData.target_market ||
+      analysisData.target_users
+  );
+
+  const contextDone = context.hasContract
+    ? context.ready
+    : legacyIdeaStructured;
+
+  const contextDescription = context.blocked
+    ? language === "en"
+      ? "The analysis is paused until the missing or ambiguous project details are clarified."
+      : "L’analyse est suspendue jusqu’à la clarification des informations manquantes ou ambiguës."
+    : context.ready
+      ? language === "en"
+        ? `The canonical project context is ready for agents${
+            context.scorePercent === null
+              ? "."
+              : ` with a ${context.scorePercent}% context score.`
+          }`
+        : `Le contexte canonique du projet est prêt pour les agents${
+            context.scorePercent === null
+              ? "."
+              : ` avec un score de contexte de ${context.scorePercent} %.`
+          }`
+      : language === "en"
+        ? "Summary, sector, problem, target users, solution, workflow, and MVP scope."
+        : "Résumé, secteur, problème, cibles, solution, workflow et périmètre MVP.";
 
   return [
     {
-      title: language === "en" ? "Idea structured" : "Idée structurée",
-      description:
+      title:
         language === "en"
-          ? "Summary, sector, problem, target and solution."
-          : "Résumé, secteur, problème, cible et solution.",
-      done: Boolean(
-        analysisData.summary ||
-          analysisData.problem ||
-          analysisData.problem_solved ||
-          analysisData.target_market ||
-          analysisData.target_users
-      ),
+          ? "Project context validated"
+          : "Contexte projet validé",
+      description: contextDescription,
+      done: contextDone,
+      pendingLabel: context.blocked
+        ? language === "en"
+          ? "Clarification required"
+          : "Clarification requise"
+        : undefined,
+      warning: context.blocked,
     },
     {
       title: language === "en" ? "Market analyzed" : "Marché analysé",
@@ -138,12 +225,29 @@ function buildSteps(
       done: hasMarket,
     },
     {
-      title: language === "en" ? "Sources checked" : "Sources vérifiées",
+      title:
+        sourcesRetained > 0
+          ? language === "en"
+            ? "Sources checked"
+            : "Sources vérifiées"
+          : language === "en"
+            ? "Source search completed"
+            : "Recherche de sources terminée",
       description:
-        language === "en"
-          ? "External sources, benchmarks and competition."
-          : "Sources externes, benchmarks et concurrence.",
-      done: hasSourceData(analysisData),
+        sourcesRetained > 0
+          ? language === "en"
+            ? `${sourcesRetained} compatible external source(s) retained for evidence and competition.`
+            : `${sourcesRetained} source(s) externe(s) compatible(s) retenue(s) pour les preuves et la concurrence.`
+          : language === "en"
+            ? "No compatible external evidence was retained; manual verification and field validation remain required."
+            : "Aucune preuve externe compatible n’a été retenue ; une vérification manuelle et une validation terrain restent nécessaires.",
+      done: sourceSearchCompleted,
+      doneLabel:
+        sourceSearchCompleted && sourcesRetained === 0
+          ? language === "en"
+            ? "Completed — insufficient evidence"
+            : "Terminée — preuves insuffisantes"
+          : undefined,
     },
     {
       title: language === "en" ? "Personas generated" : "Personas générés",
@@ -167,7 +271,7 @@ function buildSteps(
         language === "en"
           ? "Sourced, estimated or field-validation-required claims."
           : "Affirmations sourcées, estimées ou à valider.",
-      done: Boolean(analysisData.fact_check_report),
+      done: hasFinalVerification(analysisData),
     },
   ];
 }
@@ -199,20 +303,20 @@ export default function AnalysisJourneySection({
           <h2 className="mt-2 text-2xl font-black tracking-tight text-slate-950">
             {reportLanguage === "en"
               ? "Strategic project progress"
-              : "Progression stratégique du projet"}
+              : "Progression stratÃ©gique du projet"}
           </h2>
 
           <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">
             {cleanText(project.title, reportLanguage)} {"\u2014"}{" "}
             {reportLanguage === "en"
               ? "ForgeAI turns the idea into a decision-ready report step by step."
-              : "ForgeAI transforme l’idée en rapport décisionnel étape par étape."}
+              : "ForgeAI transforme lâ€™idÃ©e en rapport dÃ©cisionnel Ã©tape par Ã©tape."}
           </p>
         </div>
 
         <div className="rounded-3xl bg-gradient-to-br from-sky-400 via-violet-500 to-rose-400 px-6 py-4 text-center text-white shadow-lg shadow-violet-200">
           <p className="text-xs font-black uppercase opacity-80">
-            {reportLanguage === "en" ? "Completion" : "Complétion"}
+            {reportLanguage === "en" ? "Completion" : "ComplÃ©tion"}
           </p>
           <p className="text-3xl font-black">{progress}%</p>
         </div>
@@ -230,32 +334,34 @@ export default function AnalysisJourneySection({
           <div
             key={step.title}
             className={
-              step.done
-                ? "rounded-3xl border border-emerald-200 bg-emerald-50/80 p-5"
-                : "rounded-3xl border border-slate-200/70 bg-white/70 p-5"
+              step.warning
+                ? "rounded-3xl border border-amber-200 bg-amber-50/80 p-5"
+                : step.done
+                  ? "rounded-3xl border border-emerald-200 bg-emerald-50/80 p-5"
+                  : "rounded-3xl border border-slate-200/70 bg-white/70 p-5"
             }
           >
             <div className="flex items-center gap-3">
               <div
                 className={
-                  step.done
-                    ? "flex h-9 w-9 items-center justify-center rounded-full bg-emerald-500 text-sm font-black text-white"
-                    : "flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-sm font-black text-slate-400"
+                  step.warning
+                    ? "flex h-9 w-9 items-center justify-center rounded-full bg-amber-500 text-sm font-black text-white"
+                    : step.done
+                      ? "flex h-9 w-9 items-center justify-center rounded-full bg-emerald-500 text-sm font-black text-white"
+                      : "flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-sm font-black text-slate-400"
                 }
               >
-                {step.done ? "\u2713" : index + 1}
+                {step.warning ? "!" : step.done ? "\u2713" : index + 1}
               </div>
 
               <div>
                 <p className="font-black text-slate-900">{step.title}</p>
                 <p className="text-xs font-semibold text-slate-400">
                   {step.done
-                    ? reportLanguage === "en"
-                      ? "Completed"
-                      : "Terminé"
-                    : reportLanguage === "en"
-                      ? "Pending"
-                      : "En attente"}
+                    ? step.doneLabel ||
+                      (reportLanguage === "en" ? "Completed" : "Terminé")
+                    : step.pendingLabel ||
+                      (reportLanguage === "en" ? "Pending" : "En attente")}
                 </p>
               </div>
             </div>

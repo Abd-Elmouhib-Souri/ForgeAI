@@ -1,7 +1,9 @@
 export type AnalysisStatus =
   | "not_started"
+  | "queued"
   | "pending"
   | "running"
+  | "needs_clarification"
   | "completed"
   | "failed"
   | string;
@@ -9,6 +11,80 @@ export type AnalysisStatus =
 export type OutputLanguage = "fr" | "en" | string;
 
 export type TextList = string[] | string | null | undefined;
+
+
+export type ContextReadinessStatus =
+  | "ready"
+  | "ready_cautious"
+  | "needs_clarification"
+  | "insufficient_context"
+  | "out_of_scope"
+  | string;
+
+export interface ContextConfidenceData {
+  score?: number;
+  status?: ContextReadinessStatus;
+  missing_fields?: string[];
+  ambiguous_fields?: string[];
+  blockers?: string[];
+  clarification_questions?: string[];
+  reasons?: string[];
+  ready_for_agents?: boolean;
+}
+
+export interface IdeaReadinessChecklistItem {
+  key?: string;
+  label?: string;
+  checked?: boolean;
+  required?: boolean;
+}
+
+export interface IdeaReadinessData {
+  format?: string;
+  canonical_format?: string;
+  schema_version?: string;
+  status?: ContextReadinessStatus;
+  score?: number;
+  threshold?: number;
+  ready_for_agents?: boolean;
+  detected?: Record<string, unknown>;
+  missing_fields?: string[];
+  ambiguous_fields?: string[];
+  blockers?: string[];
+  assumptions?: string[];
+  questions?: string[];
+  clarification_questions?: string[];
+  checklist?: IdeaReadinessChecklistItem[];
+  recommendation?: string;
+  reasons?: string[];
+  context_confidence?: ContextConfidenceData;
+  project_context_packet?: ProjectContextPacketData;
+  legacy_project_context?: Record<string, unknown>;
+}
+
+export interface ProjectContextPacketData {
+  schema_version?: string;
+  project_name?: string;
+  description?: string;
+  language?: OutputLanguage;
+  target_region?: string;
+  industry_user_input?: string;
+  primary_archetype?: string;
+  secondary_archetypes?: string[];
+  business_model_hypotheses?: string[];
+  mvp_scope?: string[];
+  constraints?: string[];
+  success_metrics?: string[];
+  confidence?: ContextConfidenceData;
+  [key: string]: unknown;
+}
+
+export interface ContextExtractionQuality {
+  score?: number;
+  missing_fields?: string[];
+  ambiguous_fields?: string[];
+  ready_for_agents?: boolean;
+}
 
 export type SourceDisplayContext = {
   isGlobal: boolean;
@@ -35,6 +111,9 @@ export interface Project {
   analysis_error?: string | null;
   analysis_started_at?: string | null;
   analysis_completed_at?: string | null;
+  analysis_run_id?: string | null;
+  analysis_heartbeat_at?: string | null;
+  analysis_attempt?: number | null;
   created_at?: string | null;
   updated_at?: string | null;
 }
@@ -46,8 +125,9 @@ export interface MarketStudy {
   output_language?: OutputLanguage;
   market_size?: string;
   target_market?: string;
+  target_customers?: TextList;
   market_trends?: string[];
-  customer_segments?: string[];
+  customer_segments?: TextList;
   opportunities?: string[];
   risks?: string[];
   data_confidence?: string;
@@ -86,8 +166,16 @@ export interface SourceItem {
   snippet?: string;
   extracted_text_preview?: string;
   source_type?: string;
+  source_role?: string;
+  comparison_scope?: string;
+  technology_supplier?: boolean;
+  canonical_source_id?: string;
   region_match?: string;
   is_direct_competitor?: boolean;
+  target_match_level?: string;
+  is_product_page?: boolean;
+  grounded?: boolean;
+  provider?: string;
   why_relevant?: string;
   search_query?: string | null;
   extraction_method?: string;
@@ -99,7 +187,37 @@ export interface SourceItem {
   public_display?: boolean;
   internal_only?: boolean;
   rejected?: boolean;
+  matched_strong_terms?: string[];
+  matched_weak_terms?: string[];
+  matched_forbidden_terms?: string[];
+  matched_domain_terms?: string[];
+  matched_target_terms?: string[];
+  matched_use_case_terms?: string[];
+  matched_solution_terms?: string[];
+  product_evidence_signals?: string[];
+  market_evidence_signals?: string[];
+  evidence_categories?: string[];
+  same_or_close_target_user?: boolean;
+  same_or_close_use_case?: boolean;
+  same_or_close_solution_category?: boolean;
+  clear_contextual_link?: boolean;
+  vendor_key?: string;
+  vendor_name?: string;
+  canonical_vendor_domain?: string;
+  sector_mismatch?: boolean;
+  mismatch_terms?: string[];
+  search_provider?: string;
+  provider_score?: number;
+  rejection_reason?: string;
   error?: string | null;
+}
+
+export interface CanonicalSourceLedger {
+  version?: string;
+  sources?: SourceItem[];
+  sources_count?: number;
+  roles?: Record<string, SourceItem[]>;
+  counts?: Record<string, number>;
 }
 
 export interface ExternalSources {
@@ -112,14 +230,21 @@ export interface ExternalSources {
   source_based?: boolean;
   context_locked?: boolean;
   sources_count?: number;
+  canonical_sources_count?: number;
+  canonical_source_ledger?: CanonicalSourceLedger;
   internal_sources_count?: number;
   rejected_sources_count?: number;
   local_competitors_found?: boolean;
   local_competitors_count?: number;
   regional_competitors_count?: number;
   international_benchmarks_count?: number;
+  technology_providers_count?: number;
   market_sources_count?: number;
   sources?: SourceItem[];
+  public_sources?: SourceItem[];
+  retained_sources?: SourceItem[];
+  technology_provider_sources?: SourceItem[];
+  adjacent_solution_sources?: SourceItem[];
   local_competitor_sources?: SourceItem[];
   regional_competitor_sources?: SourceItem[];
   international_benchmark_sources?: SourceItem[];
@@ -134,12 +259,22 @@ export interface VerifiedCompetitor {
   name?: string;
   title?: string;
   region?: string;
+  region_match?: string;
+  source_type?: string;
+  source_role?: string;
+  comparison_scope?: string;
+  technology_supplier?: boolean;
+  canonical_source_id?: string;
   description?: string;
   evidence?: string;
   source_url?: string;
   url?: string;
   pricing?: string;
   why_relevant?: string;
+  vendor_key?: string;
+  canonical_vendor_domain?: string;
+  sector_mismatch?: boolean;
+  mismatch_terms?: string[];
 }
 
 export interface MarketContextSource {
@@ -163,18 +298,35 @@ export interface CompetitiveAnalysis {
   source_based?: boolean;
   confidence_level?: string;
   sources_count?: number;
+  canonical_sources_count?: number;
+  canonical_source_ledger?: CanonicalSourceLedger;
   limitations?: string[];
   local_competitors_count?: number;
   local_adjacent_solutions_count?: number;
   regional_competitors_count?: number;
   international_benchmarks_count?: number;
+  technology_providers_count?: number;
   market_sources_count?: number;
   no_local_competitor_found?: boolean;
   local_direct_competitors?: VerifiedCompetitor[];
   local_adjacent_solutions?: VerifiedCompetitor[];
   regional_competitors?: VerifiedCompetitor[];
   international_benchmarks?: VerifiedCompetitor[];
+  technology_providers?: VerifiedCompetitor[];
   market_context_sources?: MarketContextSource[];
+  sources?: SourceItem[];
+  public_sources?: SourceItem[];
+  technology_provider_sources?: SourceItem[];
+  adjacent_solution_sources?: SourceItem[];
+  local_competitor_sources?: SourceItem[];
+  regional_competitor_sources?: SourceItem[];
+  international_benchmark_sources?: SourceItem[];
+  market_sources?: SourceItem[];
+  external_sources?: SourceItem[];
+  coverage_status?: string;
+  search_coverage?: string;
+  source_relevance_confidence?: string;
+  source_confidence?: string;
 }
 
 export interface FinancialEstimation {
@@ -210,6 +362,8 @@ export interface StartupScore {
   summary?: string;
   score_explanation?: string;
   verdict?: string;
+  verdict_code?: string;
+  canonical_verdict_code?: string;
   risk_level?: string;
   confidence_level?: string;
   investment_readiness?: string;
@@ -219,6 +373,13 @@ export interface StartupScore {
   strengths?: string[];
   weaknesses?: string[];
   next_actions?: string[];
+
+  potential_score?: number;
+  evidence_confidence_score?: number;
+  execution_readiness_score?: number;
+  evidence_confidence_level?: string;
+  overall_evidence_confidence?: string;
+  decision_score?: number;
 
   manual_review_required?: boolean;
   score_warning?: string | null;
@@ -278,6 +439,18 @@ export interface PersonaBuilderData {
   error_handled?: boolean;
 }
 
+export interface FactCheckEvidence {
+  title?: string;
+  url?: string;
+  source_type?: string;
+  region_match?: string;
+  confidence?: string;
+  source_relevance_score?: number;
+  why_relevant?: string;
+  evidence_categories?: string[];
+  is_direct_competitor?: boolean;
+}
+
 export interface FactCheckClaim {
   claim?: string;
   category?: string;
@@ -285,7 +458,7 @@ export interface FactCheckClaim {
   public_status?: string;
   confidence?: string;
   public_confidence?: string;
-  evidence?: string[];
+  evidence?: Array<FactCheckEvidence | string>;
   correction?: string | null;
 }
 
@@ -293,6 +466,17 @@ export interface FactCheckSourceSummary {
   total_sources?: number;
   sources_with_url?: number;
   verified_competitors?: number;
+  relevant_sources?: number;
+  local_competitor_sources?: number;
+  local_adjacent_solutions?: number;
+  regional_benchmarks?: number;
+  international_benchmarks?: number;
+  market_evidence?: number;
+  market_size_evidence?: number;
+  market_demand_evidence?: number;
+  problem_evidence?: number;
+  solution_evidence?: number;
+  pricing_evidence?: number;
   source_confidence?: string;
 }
 
@@ -303,9 +487,14 @@ export interface FactCheckReport {
   summary?: string;
   fact_check_summary?: string;
   claims?: FactCheckClaim[];
+  source_count?: number;
+  relevant_source_count?: number;
   source_summary?: FactCheckSourceSummary;
+  retained_sources?: FactCheckEvidence[];
   global_confidence?: string;
   confidence_level?: string;
+  supported_claims?: string[];
+  uncertain_claims?: string[];
   warnings?: string[];
   red_flags?: string[];
   recommended_next_checks?: string[];
@@ -320,6 +509,71 @@ export interface DebateRoomModerator {
   focus?: string;
   key_question?: string;
   data_sources?: string[];
+}
+
+export interface DebateCommitteeMember {
+  id?: string;
+  role?: string;
+  mandate?: string;
+  voting_member?: boolean;
+}
+
+export interface DebateMemberPosition {
+  member?: string;
+  position?: string;
+  confidence?: string | number;
+  summary?: string;
+}
+
+export interface DebateQuestionAnswer {
+  direct_answer?: string;
+  reasoning_summary?: string;
+  confidence?: number;
+  evidence_status?: string;
+  evidence_ids?: string[];
+  unresolved_point?: string;
+}
+
+export interface DebateQuestionMeetingPreparation {
+  likely_real_question?: string;
+  recommended_answer?: string;
+  proofs_to_prepare?: string[];
+  answer_to_avoid?: string;
+}
+
+export interface DebateCommitteeQuestion {
+  question_id?: string;
+  asked_by?: string;
+  addressed_to?: string;
+  question?: string;
+  question_type?: string;
+  answer?: DebateQuestionAnswer;
+  follow_up_question?: string;
+  meeting_preparation?: DebateQuestionMeetingPreparation;
+}
+
+export interface DebateEvidenceAuditItem {
+  claim?: string;
+  status?: string;
+  confidence?: string | number;
+  evidence_ids?: string[];
+}
+
+export interface DebateRoundMeetingPreparation {
+  likely_questions?: string[];
+  recommended_answers?: string[];
+  proofs_to_prepare?: string[];
+  answers_to_avoid?: string[];
+}
+
+export interface DebateGlobalMeetingPreparation {
+  title?: string;
+  project?: string;
+  top_questions?: string[];
+  recommended_answers?: string[];
+  proofs_to_prepare?: string[];
+  answers_to_avoid?: string[];
+  unresolved_questions?: string[];
 }
 
 export interface DebateRoomDefender {
@@ -347,17 +601,31 @@ export interface DebateRoomCritic {
 
 export interface DebateRoomRoundSummary {
   validated_points?: string[];
+  potential_opportunities?: string[];
   remaining_risks?: string[];
   decision?: string;
   synthesis?: string;
+  next_action?: string;
+  go_conditions?: string[];
+  no_go_conditions?: string[];
 }
 
 export interface DebateRoomRound {
   round?: number;
   topic?: string;
+  objective?: string;
+  main_question?: string;
   moderator?: DebateRoomModerator;
+  member_positions?: DebateMemberPosition[];
   defender?: DebateRoomDefender;
   critic?: DebateRoomCritic;
+  committee_questions?: DebateCommitteeQuestion[];
+  cross_examination?: DebateCommitteeQuestion[];
+  evidence_audit?: DebateEvidenceAuditItem[];
+  agreements?: string[];
+  disagreements?: string[];
+  unresolved_questions?: string[];
+  meeting_preparation?: DebateRoundMeetingPreparation;
   round_summary?: DebateRoomRoundSummary;
   context_locked?: boolean;
   output_language?: OutputLanguage;
@@ -372,6 +640,15 @@ export interface DebateDecisionByRound {
   synthesis?: string;
 }
 
+export interface DebateCommitteeVote {
+  member?: string;
+  vote?: string;
+  confidence?: number;
+  blocking_conditions?: string[];
+  reason?: string;
+  veto?: boolean;
+}
+
 export interface DebateRoomJudge {
   format?: string;
   status?: string;
@@ -379,11 +656,18 @@ export interface DebateRoomJudge {
   output_language?: OutputLanguage;
   role?: string;
   verdict?: string;
+  verdict_code?: string;
   argument_strength_score?: number;
   confidence_score?: number;
   risk_level?: string;
   critical_risks?: string[];
+  validated_findings?: string[];
   validated_opportunities?: string[];
+  potential_opportunities?: string[];
+  potential_score?: number;
+  evidence_confidence_score?: number;
+  execution_readiness_score?: number;
+  investment_attractiveness_score?: number;
   improved_idea?: string;
   final_recommendation?: string;
   next_actions?: string[];
@@ -391,8 +675,13 @@ export interface DebateRoomJudge {
   decision_by_round?: DebateDecisionByRound[];
   debate_synthesis?: string;
   go_no_go_conditions?: string[];
+  go_conditions?: string[];
+  no_go_conditions?: string[];
   missing_evidence?: string[];
   weak_assumptions?: string[];
+  committee_votes?: DebateCommitteeVote[];
+  committee_vote?: Record<string, number>;
+  vetoes?: DebateCommitteeVote[];
 }
 
 export interface DebateRoomMeta {
@@ -405,6 +694,10 @@ export interface DebateRoomMeta {
   output_language?: OutputLanguage;
   context_locked?: boolean;
   llm_used?: boolean;
+  evidence_aware?: boolean;
+  questions_visible?: boolean;
+  meeting_preparation_enabled?: boolean;
+  fallback_used?: boolean;
   format?: string;
   status?: string;
 }
@@ -415,9 +708,14 @@ export interface DebateRoomData {
   status?: string;
   output_language?: OutputLanguage;
   context_locked?: boolean;
+  max_rounds?: number;
+  committee?: DebateCommitteeMember[];
   rounds?: DebateRoomRound[];
   judge?: DebateRoomJudge;
+  meeting_preparation?: DebateGlobalMeetingPreparation;
   meta?: DebateRoomMeta;
+  project_context_used?: Record<string, unknown>;
+  evidence_packet_used?: Record<string, unknown>;
 }
 
 export interface StartupEvaluatorMeta {
@@ -467,6 +765,33 @@ export interface AnalysisData {
   debate_room?: DebateRoomData;
   startup_evaluator_meta?: StartupEvaluatorMeta;
   public_limitations?: string[];
+  evidence_ledger?: {
+    format?: string;
+    claims?: Array<{
+      claim_id?: string; category?: string; claim?: string; source_ids?: string[];
+      status?: string; confidence?: string; public_text?: string;
+    }>;
+    confidence_by_category?: Record<string, string>;
+  };
+  evidence_confidence?: Record<string, string>;
+  overall_evidence_confidence?: string;
+  search_coverage?: string;
+  source_relevance_confidence?: string;
+  verdict_code?: string;
+  needs_clarification?: boolean;
+  idea_readiness?: IdeaReadinessData;
+  context_confidence?: ContextConfidenceData;
+  context_extraction_quality?: ContextExtractionQuality;
+  project_context_packet?: ProjectContextPacketData;
+  legacy_project_context?: Record<string, unknown>;
+  agent_context_packet?: Record<string, unknown>;
+  query_planner?: Record<string, unknown>;
+
+  structured_project_context?: Record<string, unknown>;
+  project_intelligence?: {
+    structured_project_context?: Record<string, unknown>;
+    [key: string]: unknown;
+  };
   partial_completion?: boolean;
 }
 
@@ -479,4 +804,7 @@ export interface ProjectAnalysisResponse {
   analysis_error?: string | null;
   analysis_started_at?: string | null;
   analysis_completed_at?: string | null;
+  analysis_run_id?: string | null;
+  analysis_heartbeat_at?: string | null;
+  analysis_attempt?: number | null;
 }
