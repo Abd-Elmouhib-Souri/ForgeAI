@@ -1,8 +1,8 @@
-﻿# ============================================================
+# ============================================================
 # backend/app/agents/startup_evaluator_graph.py
 # ============================================================
 #
-# StartupEvaluatorGraph V6.1 — Professional Agent Pipeline
+# StartupEvaluatorGraph V7.0 — Professional Agent Pipeline
 #
 # Corrections :
 # - garde Lot Backend 2A : Idea Readiness Check ;
@@ -40,6 +40,7 @@ from app.services.domain_integrity_guard import (
     normalize_output_language,
 )
 from app.services.idea_readiness_checker import idea_readiness_checker
+from app.services.evidence_ledger import evidence_ledger
 from app.services.project_context_builder import project_context_builder
 from app.services.project_intelligence_layer import project_intelligence_layer
 
@@ -74,16 +75,18 @@ class StartupEvaluatorGraph:
         workflow.add_node("persona_builder", self.persona_builder_node)
         workflow.add_node("fact_checker", self.fact_checker_node)
 
-        workflow.set_entry_point("market_study")
+        # Evidence-first pipeline: sources are collected before the market study,
+        # and the Startup Score is computed only after Fact Checker.
+        workflow.set_entry_point("competitive_analysis")
 
+        workflow.add_edge("competitive_analysis", "market_study")
         workflow.add_edge("market_study", "swot")
         workflow.add_edge("swot", "bmc")
-        workflow.add_edge("bmc", "competitive_analysis")
-        workflow.add_edge("competitive_analysis", "financial_estimation")
-        workflow.add_edge("financial_estimation", "startup_score")
-        workflow.add_edge("startup_score", "persona_builder")
+        workflow.add_edge("bmc", "financial_estimation")
+        workflow.add_edge("financial_estimation", "persona_builder")
         workflow.add_edge("persona_builder", "fact_checker")
-        workflow.add_edge("fact_checker", END)
+        workflow.add_edge("fact_checker", "startup_score")
+        workflow.add_edge("startup_score", END)
 
         return workflow.compile()
 
@@ -92,173 +95,910 @@ class StartupEvaluatorGraph:
         input_data: Dict[str, Any],
         on_step_complete: Optional[StepCallback] = None,
     ) -> Dict[str, Any]:
+        """
+        Exécute le pipeline avec un gate de contexte obligatoire.
+
+        Ordre garanti :
+
+        1. construction du contexte de base ;
+        2. extraction du ProjectContextPacketV3 ;
+        3. Context Confidence Gate ;
+        4. arrêt immédiat si clarification nécessaire ;
+        5. Project Intelligence Layer ;
+        6. agents, recherches et scoring.
+
+        Aucun flag d'entrée ne peut désactiver le gate.
+        """
         self.on_step_complete = on_step_complete
 
-        output_language = normalize_output_language(
-            input_data.get("output_language", "fr")
-        )
-
-        analysis_data = dict(input_data.get("analysis_data") or {})
-
-        target_region = (
-            input_data.get("market_region")
-            or input_data.get("region")
-            or input_data.get("target_region")
-            or "Tunisie"
-        )
-
-        base_project_context = input_data.get("project_context") or project_context_builder.build(
-            title=input_data.get("title", ""),
-            description=input_data.get("description", ""),
-            industry=input_data.get("industry") or "Non spécifié",
-            market_region=target_region,
-            output_language=output_language,
-            analysis_data=analysis_data,
-        )
-
-        idea_readiness = idea_readiness_checker.evaluate(
-            title=input_data.get("title", ""),
-            description=input_data.get("description", ""),
-            industry=input_data.get("industry") or "Non spécifié",
-            target_region=target_region,
-            output_language=output_language,
-            project_context=base_project_context,
-            analysis_data=analysis_data,
-        )
-
-        project_intelligence = project_intelligence_layer.build(
-            title=input_data.get("title", ""),
-            description=input_data.get("description", ""),
-            industry=input_data.get("industry") or "Non spécifié",
-            target_region=target_region,
-            output_language=output_language,
-            project_context=base_project_context,
-            idea_readiness=idea_readiness,
-            analysis_data=analysis_data,
-        )
-
-        project_context = project_intelligence_layer.merge_into_project_context(
-            base_project_context=base_project_context,
-            intelligence=project_intelligence,
-        )
-
-        analysis_data["idea_readiness"] = idea_readiness
-        analysis_data["context_extraction_quality"] = {
-            "score": idea_readiness.get("score", 0),
-            "missing_fields": idea_readiness.get("missing_fields", []),
-            "ambiguous_fields": idea_readiness.get("ambiguous_fields", []),
-            "ready_for_agents": idea_readiness.get("ready_for_agents", False),
-        }
-
-        analysis_data["project_intelligence"] = project_intelligence
-        analysis_data["structured_project_context"] = project_intelligence.get(
-            "structured_project_context",
-            {},
-        )
-        analysis_data["query_planner"] = project_intelligence.get("query_planner", {})
-        analysis_data["agent_context_packet"] = project_intelligence.get(
-            "agent_context_packet",
-            {},
-        )
-
-        analysis_data["project_context_meta"] = {
-            "domain_label": project_context.get("domain_label"),
-            "output_language": output_language,
-            "anchor_terms": project_context.get("anchor_terms", [])[:30],
-            "strong_keywords": project_context.get("strong_keywords", [])[:30],
-            "must_match_terms": project_context.get("must_match_terms", [])[:20],
-            "context_locked": True,
-            "idea_readiness_score": idea_readiness.get("score", 0),
-            "ready_for_agents": idea_readiness.get("ready_for_agents", False),
-            "project_intelligence_status": project_intelligence.get("status"),
-            "context_confidence": (
-                project_intelligence.get("context_confidence") or {}
-            ).get("score"),
-        }
-
-        enforce_idea_readiness = bool(input_data.get("enforce_idea_readiness", False))
-
-        initial_state: StartupEvaluatorState = {
-            "project_id": int(input_data.get("project_id", 0)),
-            "title": input_data.get("title", ""),
-            "description": input_data.get("description", ""),
-            "industry": input_data.get("industry") or "Non spécifié",
-            "region": target_region,
-            "output_language": output_language,
-            "project_context": project_context,
-            "analysis_data": analysis_data,
-            "completed_steps": [
-                "idea_readiness_check",
-                "project_intelligence_layer",
-            ],
-            "failed_steps": [],
-            "current_step": "project_intelligence_layer",
-            "progress": 7,
-            "error": None,
-            "partial_completion": False,
-        }
-
-        if enforce_idea_readiness and not idea_readiness.get("ready_for_agents", False):
-            return await self._return_needs_clarification_state(initial_state)
-
         try:
-            final_state = await self.app.ainvoke(initial_state)
-
-            final_analysis_data = dict(final_state.get("analysis_data") or {})
-            failed_steps = list(final_state.get("failed_steps", []) or [])
-            completed_steps = list(final_state.get("completed_steps", []) or [])
-
-            partial_completion = bool(
-                final_state.get("partial_completion", False) or failed_steps
+            output_language = normalize_output_language(
+                input_data.get("output_language", "fr")
             )
 
-            final_analysis_data["partial_completion"] = partial_completion
-            final_analysis_data["startup_evaluator_meta"] = {
-                "completed_steps": completed_steps,
-                "failed_steps": failed_steps,
-                "progress": final_state.get("progress", 0),
-                "current_step": final_state.get("current_step", "completed"),
-                "error": final_state.get("error"),
+            analysis_data = dict(
+                input_data.get("analysis_data") or {}
+            )
+
+            title = str(
+                input_data.get("title") or ""
+            ).strip()
+
+            description = str(
+                input_data.get("description") or ""
+            ).strip()
+
+            industry = str(
+                input_data.get("industry") or ""
+            ).strip()
+
+            target_region = str(
+                input_data.get("market_region")
+                or input_data.get("region")
+                or input_data.get("target_region")
+                or ""
+            ).strip()
+
+            supplied_project_context = (
+                input_data.get("project_context")
+            )
+
+            if isinstance(
+                supplied_project_context,
+                dict,
+            ):
+                base_project_context = dict(
+                    supplied_project_context
+                )
+            else:
+                base_project_context = (
+                    project_context_builder.build(
+                        title=title,
+                        description=description,
+                        industry=industry,
+                        market_region=target_region,
+                        output_language=output_language,
+                        analysis_data=analysis_data,
+                    )
+                )
+
+            idea_readiness = (
+                idea_readiness_checker.evaluate(
+                    title=title,
+                    description=description,
+                    industry=industry,
+                    target_region=target_region,
+                    output_language=output_language,
+                    project_context=(
+                        base_project_context
+                    ),
+                    analysis_data=analysis_data,
+                )
+            )
+
+            analysis_data = (
+                self._store_canonical_readiness(
+                    analysis_data=analysis_data,
+                    idea_readiness=idea_readiness,
+                )
+            )
+
+            pre_intelligence_context = (
+                self._build_pre_intelligence_context(
+                    base_project_context=(
+                        base_project_context
+                    ),
+                    idea_readiness=idea_readiness,
+                )
+            )
+
+            readiness_state: StartupEvaluatorState = {
+                "project_id": int(
+                    input_data.get(
+                        "project_id",
+                        0,
+                    )
+                    or 0
+                ),
+                "title": title,
+                "description": description,
+                "industry": industry,
+                "region": target_region,
                 "output_language": output_language,
-                "context_locked": True,
-                "idea_readiness_score": idea_readiness.get("score", 0),
-                "ready_for_agents": idea_readiness.get("ready_for_agents", False),
-                "project_intelligence_status": project_intelligence.get("status"),
-                "context_confidence": (
-                    project_intelligence.get("context_confidence") or {}
-                ).get("score"),
+                "project_context": (
+                    pre_intelligence_context
+                ),
+                "analysis_data": analysis_data,
+                "completed_steps": [
+                    "idea_readiness_check",
+                ],
+                "failed_steps": [],
+                "current_step": (
+                    "idea_readiness_check"
+                ),
+                "progress": 5,
+                "error": None,
+                "partial_completion": False,
             }
 
-            final_state["analysis_data"] = final_analysis_data
-            final_state["partial_completion"] = partial_completion
+            if not idea_readiness.get(
+                "ready_for_agents",
+                False,
+            ):
+                logger.info(
+                    "[StartupEvaluatorGraph] "
+                    "Analyse bloquée par le Context Gate "
+                    "| status=%s | score=%s | blockers=%s",
+                    idea_readiness.get("status"),
+                    idea_readiness.get("score"),
+                    idea_readiness.get(
+                        "blockers",
+                        [],
+                    ),
+                )
 
-            return dict(final_state)
+                return await (
+                    self
+                    ._return_needs_clarification_state(
+                        readiness_state
+                    )
+                )
+
+            project_intelligence = (
+                project_intelligence_layer.build(
+                    title=title,
+                    description=description,
+                    industry=industry,
+                    target_region=target_region,
+                    output_language=output_language,
+                    project_context=(
+                        pre_intelligence_context
+                    ),
+                    idea_readiness=idea_readiness,
+                    analysis_data=analysis_data,
+                )
+            )
+
+            merged_project_context = (
+                project_intelligence_layer
+                .merge_into_project_context(
+                    base_project_context=(
+                        pre_intelligence_context
+                    ),
+                    intelligence=(
+                        project_intelligence
+                    ),
+                )
+            )
+
+            project_context = (
+                self._lock_canonical_context(
+                    merged_project_context=(
+                        merged_project_context
+                    ),
+                    idea_readiness=idea_readiness,
+                )
+            )
+
+            agent_context_packet = (
+                self._build_agent_context_packet(
+                    project_intelligence=(
+                        project_intelligence
+                    ),
+                    idea_readiness=(
+                        idea_readiness
+                    ),
+                )
+            )
+
+            analysis_data[
+                "project_intelligence"
+            ] = project_intelligence
+
+            analysis_data[
+                "structured_project_context"
+            ] = project_intelligence.get(
+                "structured_project_context",
+                {},
+            )
+
+            analysis_data[
+                "query_planner"
+            ] = project_intelligence.get(
+                "query_planner",
+                {},
+            )
+
+            analysis_data[
+                "agent_context_packet"
+            ] = agent_context_packet
+
+            analysis_data[
+                "needs_clarification"
+            ] = False
+
+            analysis_data[
+                "project_context_meta"
+            ] = {
+                "domain_label": (
+                    project_context.get(
+                        "domain_label"
+                    )
+                ),
+                "output_language": (
+                    output_language
+                ),
+                "anchor_terms": (
+                    project_context.get(
+                        "anchor_terms",
+                        [],
+                    )[:30]
+                ),
+                "strong_keywords": (
+                    project_context.get(
+                        "strong_keywords",
+                        [],
+                    )[:30]
+                ),
+                "must_match_terms": (
+                    project_context.get(
+                        "must_match_terms",
+                        [],
+                    )[:20]
+                ),
+                "context_locked": True,
+                "canonical_schema_version": (
+                    idea_readiness.get(
+                        "schema_version"
+                    )
+                ),
+                "readiness_enforced": True,
+                "idea_readiness_status": (
+                    idea_readiness.get(
+                        "status"
+                    )
+                ),
+                "idea_readiness_score": (
+                    idea_readiness.get(
+                        "score",
+                        0,
+                    )
+                ),
+                "ready_for_agents": True,
+                "project_intelligence_status": (
+                    project_intelligence.get(
+                        "status"
+                    )
+                ),
+                "context_confidence": (
+                    (
+                        idea_readiness.get(
+                            "context_confidence"
+                        )
+                        or {}
+                    ).get(
+                        "score",
+                        idea_readiness.get(
+                            "score",
+                            0,
+                        ),
+                    )
+                ),
+            }
+
+            initial_state: StartupEvaluatorState = {
+                **readiness_state,
+                "project_context": (
+                    project_context
+                ),
+                "analysis_data": analysis_data,
+                "completed_steps": [
+                    "idea_readiness_check",
+                    "project_intelligence_layer",
+                ],
+                "current_step": (
+                    "project_intelligence_layer"
+                ),
+                "progress": 7,
+            }
+
+            final_state = await self.app.ainvoke(
+                initial_state
+            )
+
+            final_analysis_data = dict(
+                final_state.get(
+                    "analysis_data"
+                )
+                or {}
+            )
+
+            failed_steps = list(
+                final_state.get(
+                    "failed_steps",
+                    [],
+                )
+                or []
+            )
+
+            completed_steps = list(
+                final_state.get(
+                    "completed_steps",
+                    [],
+                )
+                or []
+            )
+
+            partial_completion = bool(
+                final_state.get(
+                    "partial_completion",
+                    False,
+                )
+                or failed_steps
+            )
+
+            final_analysis_data[
+                "partial_completion"
+            ] = partial_completion
+
+            final_analysis_data[
+                "needs_clarification"
+            ] = False
+
+            final_analysis_data[
+                "startup_evaluator_meta"
+            ] = {
+                **(
+                    final_analysis_data.get(
+                        "startup_evaluator_meta"
+                    )
+                    or {}
+                ),
+                "completed_steps": (
+                    completed_steps
+                ),
+                "failed_steps": failed_steps,
+                "progress": final_state.get(
+                    "progress",
+                    0,
+                ),
+                "current_step": (
+                    final_state.get(
+                        "current_step",
+                        "completed",
+                    )
+                ),
+                "error": final_state.get(
+                    "error"
+                ),
+                "output_language": (
+                    output_language
+                ),
+                "context_locked": True,
+                "canonical_schema_version": (
+                    idea_readiness.get(
+                        "schema_version"
+                    )
+                ),
+                "readiness_enforced": True,
+                "pipeline_blocked_before_agents": (
+                    False
+                ),
+                "heavy_agents_started": True,
+                "idea_readiness_status": (
+                    idea_readiness.get(
+                        "status"
+                    )
+                ),
+                "idea_readiness_score": (
+                    idea_readiness.get(
+                        "score",
+                        0,
+                    )
+                ),
+                "ready_for_agents": True,
+                "project_intelligence_status": (
+                    project_intelligence.get(
+                        "status"
+                    )
+                ),
+                "context_confidence": (
+                    (
+                        idea_readiness.get(
+                            "context_confidence"
+                        )
+                        or {}
+                    ).get(
+                        "score",
+                        idea_readiness.get(
+                            "score",
+                            0,
+                        ),
+                    )
+                ),
+            }
+
+            final_state[
+                "analysis_data"
+            ] = final_analysis_data
+
+            final_state[
+                "partial_completion"
+            ] = partial_completion
+
+            return dict(
+                final_state
+            )
 
         finally:
             self.on_step_complete = None
+
+    def _store_canonical_readiness(
+        self,
+        *,
+        analysis_data: Dict[str, Any],
+        idea_readiness: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Persiste la même vérité canonique pour tout le run.
+        """
+        stored = dict(
+            analysis_data
+        )
+
+        project_context_packet = dict(
+            idea_readiness.get(
+                "project_context_packet"
+            )
+            or {}
+        )
+
+        context_confidence = dict(
+            idea_readiness.get(
+                "context_confidence"
+            )
+            or {}
+        )
+
+        legacy_project_context = dict(
+            idea_readiness.get(
+                "legacy_project_context"
+            )
+            or {}
+        )
+
+        stored[
+            "idea_readiness"
+        ] = idea_readiness
+
+        stored[
+            "project_context_packet"
+        ] = project_context_packet
+
+        stored[
+            "context_confidence"
+        ] = context_confidence
+
+        stored[
+            "legacy_project_context"
+        ] = legacy_project_context
+
+        stored[
+            "context_extraction_quality"
+        ] = {
+            "schema_version": (
+                idea_readiness.get(
+                    "schema_version"
+                )
+            ),
+            "status": (
+                idea_readiness.get(
+                    "status"
+                )
+            ),
+            "score": (
+                idea_readiness.get(
+                    "score",
+                    0,
+                )
+            ),
+            "missing_fields": list(
+                idea_readiness.get(
+                    "missing_fields",
+                    [],
+                )
+                or []
+            ),
+            "ambiguous_fields": list(
+                idea_readiness.get(
+                    "ambiguous_fields",
+                    [],
+                )
+                or []
+            ),
+            "blockers": list(
+                idea_readiness.get(
+                    "blockers",
+                    [],
+                )
+                or []
+            ),
+            "ready_for_agents": bool(
+                idea_readiness.get(
+                    "ready_for_agents",
+                    False,
+                )
+            ),
+            "readiness_enforced": True,
+        }
+
+        return stored
+
+    def _build_pre_intelligence_context(
+        self,
+        *,
+        base_project_context: Dict[str, Any],
+        idea_readiness: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Construit le contexte utilisé par la Project Intelligence Layer.
+
+        Le contexte canonique V3 écrase les anciennes inférences pour
+        les champs métier structurants.
+        """
+        context = dict(
+            base_project_context or {}
+        )
+
+        legacy_context = dict(
+            idea_readiness.get(
+                "legacy_project_context"
+            )
+            or {}
+        )
+
+        context.update(
+            legacy_context
+        )
+
+        context[
+            "project_context_packet"
+        ] = dict(
+            idea_readiness.get(
+                "project_context_packet"
+            )
+            or {}
+        )
+
+        context[
+            "context_confidence"
+        ] = dict(
+            idea_readiness.get(
+                "context_confidence"
+            )
+            or {}
+        )
+
+        context[
+            "idea_readiness"
+        ] = {
+            "schema_version": (
+                idea_readiness.get(
+                    "schema_version"
+                )
+            ),
+            "status": (
+                idea_readiness.get(
+                    "status"
+                )
+            ),
+            "score": (
+                idea_readiness.get(
+                    "score",
+                    0,
+                )
+            ),
+            "ready_for_agents": bool(
+                idea_readiness.get(
+                    "ready_for_agents",
+                    False,
+                )
+            ),
+            "missing_fields": list(
+                idea_readiness.get(
+                    "missing_fields",
+                    [],
+                )
+                or []
+            ),
+            "ambiguous_fields": list(
+                idea_readiness.get(
+                    "ambiguous_fields",
+                    [],
+                )
+                or []
+            ),
+            "blockers": list(
+                idea_readiness.get(
+                    "blockers",
+                    [],
+                )
+                or []
+            ),
+        }
+
+        context[
+            "context_locked"
+        ] = True
+
+        return context
+
+    def _lock_canonical_context(
+        self,
+        *,
+        merged_project_context: Dict[str, Any],
+        idea_readiness: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Réapplique le contexte V3 après la Project Intelligence Layer.
+
+        Cette étape empêche une ancienne inférence de remplacer le nom,
+        la région, les acteurs, le workflow, le MVP ou l'archétype
+        validés par le gate.
+        """
+        context = dict(
+            merged_project_context or {}
+        )
+
+        legacy_context = dict(
+            idea_readiness.get(
+                "legacy_project_context"
+            )
+            or {}
+        )
+
+        context.update(
+            legacy_context
+        )
+
+        context[
+            "project_context_packet"
+        ] = dict(
+            idea_readiness.get(
+                "project_context_packet"
+            )
+            or {}
+        )
+
+        context[
+            "context_confidence"
+        ] = dict(
+            idea_readiness.get(
+                "context_confidence"
+            )
+            or {}
+        )
+
+        context[
+            "context_locked"
+        ] = True
+
+        context[
+            "canonical_schema_version"
+        ] = idea_readiness.get(
+            "schema_version"
+        )
+
+        return context
+
+    def _build_agent_context_packet(
+        self,
+        *,
+        project_intelligence: Dict[str, Any],
+        idea_readiness: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Étend le packet historique sans casser ses consommateurs.
+
+        Tous les agents reçoivent désormais le même packet V3 et la
+        même décision de confiance.
+        """
+        agent_packet = dict(
+            project_intelligence.get(
+                "agent_context_packet"
+            )
+            or {}
+        )
+
+        agent_packet[
+            "canonical_schema_version"
+        ] = "agent_context_packet_v3"
+
+        agent_packet[
+            "project_context_packet"
+        ] = dict(
+            idea_readiness.get(
+                "project_context_packet"
+            )
+            or {}
+        )
+
+        agent_packet[
+            "context_confidence"
+        ] = dict(
+            idea_readiness.get(
+                "context_confidence"
+            )
+            or {}
+        )
+
+        agent_packet[
+            "legacy_project_context"
+        ] = dict(
+            idea_readiness.get(
+                "legacy_project_context"
+            )
+            or {}
+        )
+
+        agent_packet[
+            "idea_readiness"
+        ] = {
+            "schema_version": (
+                idea_readiness.get(
+                    "schema_version"
+                )
+            ),
+            "status": (
+                idea_readiness.get(
+                    "status"
+                )
+            ),
+            "score": (
+                idea_readiness.get(
+                    "score",
+                    0,
+                )
+            ),
+            "ready_for_agents": bool(
+                idea_readiness.get(
+                    "ready_for_agents",
+                    False,
+                )
+            ),
+            "missing_fields": list(
+                idea_readiness.get(
+                    "missing_fields",
+                    [],
+                )
+                or []
+            ),
+            "ambiguous_fields": list(
+                idea_readiness.get(
+                    "ambiguous_fields",
+                    [],
+                )
+                or []
+            ),
+            "blockers": list(
+                idea_readiness.get(
+                    "blockers",
+                    [],
+                )
+                or []
+            ),
+        }
+
+        agent_packet[
+            "context_locked"
+        ] = True
+
+        return agent_packet
 
     async def _return_needs_clarification_state(
         self,
         state: StartupEvaluatorState,
     ) -> Dict[str, Any]:
-        analysis_data = dict(state.get("analysis_data") or {})
-        idea_readiness = analysis_data.get("idea_readiness") or {}
+        """
+        Retourne avant Project Intelligence, Tavily, ForgeCrawler et LLM.
+        """
+        analysis_data = dict(
+            state.get("analysis_data") or {}
+        )
 
-        analysis_data["needs_clarification"] = True
-        analysis_data["partial_completion"] = False
-        analysis_data["startup_evaluator_meta"] = {
+        idea_readiness = dict(
+            analysis_data.get(
+                "idea_readiness"
+            )
+            or {}
+        )
+
+        analysis_data[
+            "needs_clarification"
+        ] = True
+
+        analysis_data[
+            "partial_completion"
+        ] = False
+
+        analysis_data[
+            "pipeline_stop"
+        ] = {
+            "stage": (
+                "context_confidence_gate"
+            ),
+            "reason": (
+                "needs_clarification"
+            ),
+            "external_search_started": False,
+            "project_intelligence_started": False,
+            "heavy_agents_started": False,
+        }
+
+        analysis_data[
+            "startup_evaluator_meta"
+        ] = {
             "completed_steps": [
                 "idea_readiness_check",
-                "project_intelligence_layer",
             ],
             "failed_steps": [],
-            "progress": 7,
-            "current_step": "needs_clarification",
+            "progress": 5,
+            "current_step": (
+                "needs_clarification"
+            ),
             "error": None,
-            "output_language": state.get("output_language", "fr"),
+            "output_language": (
+                state.get(
+                    "output_language",
+                    "fr",
+                )
+            ),
             "context_locked": True,
-            "idea_readiness_score": idea_readiness.get("score", 0),
+            "canonical_schema_version": (
+                idea_readiness.get(
+                    "schema_version"
+                )
+            ),
+            "readiness_enforced": True,
+            "pipeline_blocked_before_agents": (
+                True
+            ),
+            "external_search_started": False,
+            "project_intelligence_started": False,
+            "heavy_agents_started": False,
+            "idea_readiness_status": (
+                idea_readiness.get(
+                    "status"
+                )
+            ),
+            "idea_readiness_score": (
+                idea_readiness.get(
+                    "score",
+                    0,
+                )
+            ),
             "ready_for_agents": False,
+            "missing_fields": list(
+                idea_readiness.get(
+                    "missing_fields",
+                    [],
+                )
+                or []
+            ),
+            "ambiguous_fields": list(
+                idea_readiness.get(
+                    "ambiguous_fields",
+                    [],
+                )
+                or []
+            ),
+            "blockers": list(
+                idea_readiness.get(
+                    "blockers",
+                    [],
+                )
+                or []
+            ),
         }
 
         clarification_state: StartupEvaluatorState = {
@@ -266,25 +1006,30 @@ class StartupEvaluatorGraph:
             "analysis_data": analysis_data,
             "completed_steps": [
                 "idea_readiness_check",
-                "project_intelligence_layer",
             ],
             "failed_steps": [],
-            "current_step": "needs_clarification",
-            "progress": 7,
+            "current_step": (
+                "needs_clarification"
+            ),
+            "progress": 5,
             "error": None,
             "partial_completion": False,
         }
 
-        await self._notify_step_complete(clarification_state)
+        await self._notify_step_complete(
+            clarification_state
+        )
 
-        return dict(clarification_state)
+        return dict(
+            clarification_state
+        )
 
     async def market_study_node(self, state: StartupEvaluatorState) -> StartupEvaluatorState:
         return await self._run_agent_step(
             state=state,
             step_name="market_study",
             result_key="market_study",
-            progress=14,
+            progress=32,
             agent=self.market_study_agent,
         )
 
@@ -293,7 +1038,7 @@ class StartupEvaluatorGraph:
             state=state,
             step_name="swot",
             result_key="swot",
-            progress=28,
+            progress=45,
             agent=self.swot_agent,
         )
 
@@ -302,25 +1047,33 @@ class StartupEvaluatorGraph:
             state=state,
             step_name="business_model_canvas",
             result_key="business_model_canvas",
-            progress=42,
+            progress=58,
             agent=self.bmc_agent,
         )
 
     async def competitive_analysis_node(self, state: StartupEvaluatorState) -> StartupEvaluatorState:
-        return await self._run_agent_step(
+        new_state = await self._run_agent_step(
             state=state,
             step_name="competitive_analysis",
             result_key="competitive_analysis",
-            progress=58,
+            progress=18,
             agent=self.competitive_analysis_agent,
         )
+        analysis_data = dict(new_state.get("analysis_data") or {})
+        ledger = evidence_ledger.build(analysis_data)
+        analysis_data["evidence_ledger"] = ledger
+        analysis_data["evidence_confidence"] = ledger.get("confidence_by_category") or {}
+        analysis_data["overall_evidence_confidence"] = (
+            analysis_data["evidence_confidence"].get("overall_evidence_confidence") or "low"
+        )
+        return {**new_state, "analysis_data": analysis_data}
 
     async def financial_estimation_node(self, state: StartupEvaluatorState) -> StartupEvaluatorState:
         return await self._run_agent_step(
             state=state,
             step_name="financial_estimation",
             result_key="financial_estimation",
-            progress=74,
+            progress=72,
             agent=self.financial_estimation_agent,
         )
 
@@ -329,7 +1082,7 @@ class StartupEvaluatorGraph:
             state=state,
             step_name="startup_score",
             result_key="startup_score",
-            progress=88,
+            progress=100,
             agent=self.startup_score_agent,
         )
 
@@ -340,15 +1093,15 @@ class StartupEvaluatorGraph:
 
         step_name = "persona_builder"
         result_key = "persona_builder"
-        progress = 95
+        progress = 84
 
         try:
             project_payload = project_context_builder.project_payload(
                 project_id=state.get("project_id"),
                 title=state.get("title", ""),
                 description=state.get("description", ""),
-                industry=state.get("industry") or "Non spécifié",
-                market_region=state.get("region") or "Tunisie",
+                industry=state.get("industry") or "",
+                market_region=state.get("region") or "",
                 output_language=state.get("output_language", "fr"),
             )
 
@@ -360,12 +1113,16 @@ class StartupEvaluatorGraph:
                     "project_intelligence": analysis_data.get("project_intelligence", {}),
                     "structured_project_context": analysis_data.get("structured_project_context", {}),
                     "agent_context_packet": analysis_data.get("agent_context_packet", {}),
+                    "project_context_packet": analysis_data.get("project_context_packet", {}),
+                    "context_confidence": analysis_data.get("context_confidence", {}),
+                    "idea_readiness": analysis_data.get("idea_readiness", {}),
+                    "legacy_project_context": analysis_data.get("legacy_project_context", {}),
                     "query_planner": analysis_data.get("query_planner", {}),
                     "output_language": state.get("output_language", "fr"),
                     "title": state.get("title", ""),
                     "description": state.get("description", ""),
-                    "industry": state.get("industry") or "Non spécifié",
-                    "region": state.get("region") or "Tunisie",
+                    "industry": state.get("industry") or "",
+                    "region": state.get("region") or "",
                 }
             )
 
@@ -412,15 +1169,15 @@ class StartupEvaluatorGraph:
 
         step_name = "fact_checker"
         result_key = "fact_check_report"
-        progress = 100
+        progress = 94
 
         try:
             project_payload = project_context_builder.project_payload(
                 project_id=state.get("project_id"),
                 title=state.get("title", ""),
                 description=state.get("description", ""),
-                industry=state.get("industry") or "Non spécifié",
-                market_region=state.get("region") or "Tunisie",
+                industry=state.get("industry") or "",
+                market_region=state.get("region") or "",
                 output_language=state.get("output_language", "fr"),
             )
 
@@ -432,12 +1189,16 @@ class StartupEvaluatorGraph:
                 "project_intelligence": analysis_data.get("project_intelligence", {}),
                 "structured_project_context": analysis_data.get("structured_project_context", {}),
                 "agent_context_packet": analysis_data.get("agent_context_packet", {}),
+                "project_context_packet": analysis_data.get("project_context_packet", {}),
+                "context_confidence": analysis_data.get("context_confidence", {}),
+                "idea_readiness": analysis_data.get("idea_readiness", {}),
+                "legacy_project_context": analysis_data.get("legacy_project_context", {}),
                 "query_planner": analysis_data.get("query_planner", {}),
                 "output_language": state.get("output_language", "fr"),
                 "title": state.get("title", ""),
                 "description": state.get("description", ""),
-                "industry": state.get("industry") or "Non spécifié",
-                "region": state.get("region") or "Tunisie",
+                "industry": state.get("industry") or "",
+                "region": state.get("region") or "",
             }
 
             result = await self.fact_checker_agent.run(fact_checker_state)
@@ -467,6 +1228,7 @@ class StartupEvaluatorGraph:
                 )
 
             analysis_data[result_key] = result
+            analysis_data = evidence_ledger.sanitize_public_claims(analysis_data)
 
             if step_name not in completed_steps:
                 completed_steps.append(step_name)
@@ -522,6 +1284,7 @@ class StartupEvaluatorGraph:
             )
 
             analysis_data[result_key] = fallback
+            analysis_data = evidence_ledger.sanitize_public_claims(analysis_data)
             analysis_data["fact_checker_fallback_used"] = True
             analysis_data["fact_checker_error_handled"] = True
             analysis_data["partial_completion"] = bool(
@@ -568,6 +1331,10 @@ class StartupEvaluatorGraph:
                 "project_intelligence": analysis_data.get("project_intelligence", {}),
                 "structured_project_context": analysis_data.get("structured_project_context", {}),
                 "agent_context_packet": analysis_data.get("agent_context_packet", {}),
+                "project_context_packet": analysis_data.get("project_context_packet", {}),
+                "context_confidence": analysis_data.get("context_confidence", {}),
+                "idea_readiness": analysis_data.get("idea_readiness", {}),
+                "legacy_project_context": analysis_data.get("legacy_project_context", {}),
                 "query_planner": analysis_data.get("query_planner", {}),
             }
 
@@ -585,11 +1352,64 @@ class StartupEvaluatorGraph:
             )
 
             if isinstance(extra_analysis_data, dict):
-                extra_analysis_data = self._sanitize_extra_analysis_data(
-                    data=extra_analysis_data,
-                    state=state,
-                )
-                analysis_data.update(extra_analysis_data)
+                if step_name == "competitive_analysis":
+                    # ForgeCrawler has already passed its dedicated relevance and
+                    # public-safety gates. A generic graph sanitizer must not
+                    # reclassify or delete these validated source structures.
+                    forgecrawler_payload = extra_analysis_data.get("forgecrawler")
+
+                    if isinstance(forgecrawler_payload, dict):
+                        analysis_data["forgecrawler"] = dict(forgecrawler_payload)
+
+                        logger.info(
+                            "[SourcePipeline][Graph] ForgeCrawler preserved | "
+                            "sources=%s | local=%s | regional=%s | "
+                            "international=%s | market=%s",
+                            len(forgecrawler_payload.get("sources") or []),
+                            len(
+                                forgecrawler_payload.get(
+                                    "local_competitor_sources"
+                                )
+                                or []
+                            ),
+                            len(
+                                forgecrawler_payload.get(
+                                    "regional_competitor_sources"
+                                )
+                                or []
+                            ),
+                            len(
+                                forgecrawler_payload.get(
+                                    "international_benchmark_sources"
+                                )
+                                or []
+                            ),
+                            len(
+                                forgecrawler_payload.get(
+                                    "market_context_sources"
+                                )
+                                or []
+                            ),
+                        )
+
+                    other_extra_data = {
+                        key: value
+                        for key, value in extra_analysis_data.items()
+                        if key != "forgecrawler"
+                    }
+
+                    if other_extra_data:
+                        sanitized_other_data = self._sanitize_extra_analysis_data(
+                            data=other_extra_data,
+                            state=state,
+                        )
+                        analysis_data.update(sanitized_other_data)
+                else:
+                    sanitized_extra_data = self._sanitize_extra_analysis_data(
+                        data=extra_analysis_data,
+                        state=state,
+                    )
+                    analysis_data.update(sanitized_extra_data)
 
             analysis_data[result_key] = result
 
@@ -640,7 +1460,7 @@ class StartupEvaluatorGraph:
 
         Important :
         - financial_estimation est maintenant déterministe et sans LLM ;
-        - competitive_analysis possède déjà son propre strict relevance gate ;
+        - competitive_analysis possède dï¿½jï¿½ son propre strict relevance gate ;
         - donc le graph ne doit plus relogger de faux positifs pour ces rôles ;
         - les autres agents restent contrôlés par le sanitizer context-aware.
         """
@@ -649,6 +1469,10 @@ class StartupEvaluatorGraph:
             internally_guarded_roles = {
                 "competitive_analysis",
                 "financial_estimation",
+                # PersonaBuilderAgent is deterministic, schema-validated and
+                # archetype-aware. Re-running the broad text guard here removes
+                # valid generic fields such as buying power and interview prompts.
+                "persona_builder",
             }
 
             if role in internally_guarded_roles:
@@ -904,12 +1728,11 @@ class StartupEvaluatorGraph:
             "medicine stock",
             "stock medicine",
             "stock medicines",
-            "stock médicaments",
+            "stock mï¿½dicaments",
             "stock medicaments",
             "pharmasoft",
             "infopharma",
             "medstock",
-            "super app",
             "orange max it",
             "crypto trading",
             "stock trading",
@@ -947,10 +1770,10 @@ class StartupEvaluatorGraph:
             "doctor",
             "patient",
             "hospital",
-            "médecin",
+            "mï¿½decin",
             "medecin",
             "clinique",
-            "santé",
+            "santï¿½",
             "sante",
         }
 
@@ -958,13 +1781,13 @@ class StartupEvaluatorGraph:
 
     def _normalize_contamination_text(self, value: Any) -> str:
         text = str(value or "").lower()
-        text = text.replace("’", "'")
-        text = text.replace("é", "e")
-        text = text.replace("è", "e")
-        text = text.replace("ê", "e")
-        text = text.replace("à", "a")
-        text = text.replace("ù", "u")
-        text = text.replace("ç", "c")
+        text = text.replace("ï¿½", "'")
+        text = text.replace("ï¿½", "e")
+        text = text.replace("ï¿½", "e")
+        text = text.replace("ï¿½", "e")
+        text = text.replace("ï¿½", "a")
+        text = text.replace("ï¿½", "u")
+        text = text.replace("ï¿½", "c")
         text = re.sub(r"\s+", " ", text).strip()
 
         return text
@@ -1024,4 +1847,3 @@ class StartupEvaluatorGraph:
             return
 
         await self.on_step_complete(dict(state))
-
