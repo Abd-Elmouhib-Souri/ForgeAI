@@ -19,8 +19,12 @@ from app.schemas.project import (
 )
 from app.security import get_current_user
 from app.services.domain_integrity_guard import normalize_output_language
+from app.services.idea_readiness_checker import idea_readiness_checker
 from app.services.project_context_builder import project_context_builder
 from app.services.public_analysis_sanitizer import sanitize_analysis_data_for_public
+from app.services.analysis_run_guard import analysis_run_guard
+from app.services.evidence_ledger import evidence_ledger
+from app.services.canonical_source_ledger import canonical_source_ledger
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +36,16 @@ def utc_now() -> datetime:
 
 
 def normalize_market_region(region: Optional[str]) -> str:
-    if not region:
-        return "Tunisie"
+    """
+    Normalise la région sans inventer de pays par défaut.
 
-    cleaned = region.strip()
-    return cleaned or "Tunisie"
+    Une région absente reste vide afin que le ContextConfidenceGate puisse
+    la signaler comme ambiguë ou bloquante selon le type de projet.
+    """
+    if region is None:
+        return ""
+
+    return str(region).strip()
 
 
 def public_analysis_step(
@@ -53,6 +62,7 @@ def public_analysis_step(
         replacements = {
             "Préparation de l’analyse": "Preparing analysis",
             "Préparation des données projet": "Preparing project data",
+            "Clarification du projet requise": "Project clarification required",
             "Sprint 2 - RAG global/local et analyse initiale": "Initial project analysis",
             "Sprint 2 terminé - préparation Startup Evaluator": "Initial analysis completed - preparing strategic evaluation",
             "Sprint 3 - lancement Startup Evaluator": "Launching strategic evaluation",
@@ -80,6 +90,7 @@ def public_analysis_step(
         }
     else:
         replacements = {
+            "Clarification du projet requise": "Clarification du projet requise",
             "Sprint 2 - RAG global/local et analyse initiale": "Analyse initiale du projet",
             "Sprint 2": "Analyse initiale",
             "Sprint 3": "Analyse stratégique",
@@ -178,8 +189,12 @@ def _safe_public_source_item(source: Any) -> dict:
         "pricing_found",
         "confidence",
         "source_type",
+        "source_role",
+        "comparison_scope",
         "region_match",
         "is_direct_competitor",
+        "technology_supplier",
+        "canonical_source_id",
         "why_relevant",
         "source_relevance_score",
         "public_display",
@@ -240,24 +255,34 @@ def restore_public_competitive_analysis(
 
     raw_sources = _safe_public_source_list(
         raw_competitive.get("sources")
+        or raw_competitive.get("public_sources")
     )
-    raw_local_sources = _safe_public_source_list(
-        raw_competitive.get("local_competitor_sources")
+    source_ledger = canonical_source_ledger.build(raw_sources)
+    raw_sources = list(source_ledger.get("sources") or [])
+    raw_local_sources = list(
+        source_ledger.get("local_direct_competitor_sources") or []
     )
-    raw_regional_sources = _safe_public_source_list(
-        raw_competitive.get("regional_competitor_sources")
+    raw_adjacent_sources = list(
+        source_ledger.get("adjacent_solution_sources") or []
     )
-    raw_international_sources = _safe_public_source_list(
-        raw_competitive.get("international_benchmark_sources")
+    raw_regional_sources = list(
+        source_ledger.get("regional_benchmark_sources") or []
     )
-    raw_market_sources = _safe_public_source_list(
-        raw_competitive.get("market_context_sources")
+    raw_international_sources = list(
+        source_ledger.get("international_benchmark_sources") or []
+    )
+    raw_technology_sources = list(
+        source_ledger.get("technology_provider_sources") or []
+    )
+    raw_market_sources = list(
+        source_ledger.get("evidence_sources") or []
     )
 
-    restored_sources_count = len(raw_sources)
+    restored_sources_count = int(source_ledger.get("sources_count") or len(raw_sources))
     restored_local_count = len(raw_local_sources)
     restored_regional_count = len(raw_regional_sources)
     restored_international_count = len(raw_international_sources)
+    restored_technology_count = len(raw_technology_sources)
     restored_market_count = len(raw_market_sources)
 
     if restored_sources_count <= 0:
@@ -282,15 +307,21 @@ def restore_public_competitive_analysis(
             "target_region": raw_competitive.get("target_region")
             or public_competitive.get("target_region"),
             "sources_count": restored_sources_count,
+            "canonical_sources_count": restored_sources_count,
+            "canonical_source_ledger": source_ledger,
             "local_competitors_found": restored_local_count > 0,
             "local_competitors_count": restored_local_count,
             "regional_competitors_count": restored_regional_count,
             "international_benchmarks_count": restored_international_count,
+            "technology_providers_count": restored_technology_count,
             "market_sources_count": restored_market_count,
             "sources": raw_sources,
+            "public_sources": raw_sources,
             "local_competitor_sources": raw_local_sources,
             "regional_competitor_sources": raw_regional_sources,
             "international_benchmark_sources": raw_international_sources,
+            "technology_provider_sources": raw_technology_sources,
+            "adjacent_solution_sources": raw_adjacent_sources,
             "market_context_sources": raw_market_sources,
             "no_verified_relevant_source_found": False,
             "no_source_message": "",
@@ -305,24 +336,75 @@ def restore_public_competitive_analysis(
     public_competitive["local_competitors"] = raw_local_sources
     public_competitive["regional_competitors"] = raw_regional_sources
     public_competitive["international_benchmarks"] = raw_international_sources
+    public_competitive["technology_providers"] = raw_technology_sources
+    public_competitive["local_adjacent_solutions"] = raw_adjacent_sources
     public_competitive["market_sources"] = raw_market_sources
 
     public_competitive["external_sources"] = {
+        "sources_count": restored_sources_count,
+        "canonical_sources_count": restored_sources_count,
+        "local_competitors_count": restored_local_count,
+        "local_adjacent_solutions_count": len(raw_adjacent_sources),
+        "regional_competitors_count": restored_regional_count,
+        "international_benchmarks_count": restored_international_count,
+        "technology_providers_count": restored_technology_count,
+        "market_sources_count": restored_market_count,
+        "canonical_source_ledger": source_ledger,
         "sources": raw_sources,
+        "public_sources": raw_sources,
         "local_competitor_sources": raw_local_sources,
         "regional_competitor_sources": raw_regional_sources,
         "international_benchmark_sources": raw_international_sources,
+        "technology_provider_sources": raw_technology_sources,
+        "adjacent_solution_sources": raw_adjacent_sources,
         "market_context_sources": raw_market_sources,
         "verified_competitors": raw_local_sources,
         "local_competitors": raw_local_sources,
         "regional_competitors": raw_regional_sources,
         "international_benchmarks": raw_international_sources,
+        "technology_providers": raw_technology_sources,
+        "local_adjacent_solutions": raw_adjacent_sources,
         "market_sources": raw_market_sources,
     }
 
     sanitized["competitive_analysis"] = public_competitive
 
     return sanitized
+
+
+def log_public_source_integrity(
+    *,
+    project_id: int,
+    raw_analysis_data: Optional[dict],
+    public_analysis_data: Optional[dict],
+) -> None:
+    raw_competitive = (
+        (raw_analysis_data or {}).get("competitive_analysis")
+        or {}
+    )
+    public_competitive = (
+        (public_analysis_data or {}).get("competitive_analysis")
+        or {}
+    )
+
+    raw_count = len(raw_competitive.get("sources") or [])
+    public_count = len(public_competitive.get("sources") or [])
+
+    if raw_count != public_count:
+        logger.error(
+            "[SourcePipeline][IntegrityError] "
+            "project_id=%s | raw=%s | public=%s",
+            project_id,
+            raw_count,
+            public_count,
+        )
+    else:
+        logger.info(
+            "[SourcePipeline][IntegrityOK] "
+            "project_id=%s | sources=%s",
+            project_id,
+            public_count,
+        )
 
 
 def project_to_public_response(project: Project) -> dict:
@@ -340,6 +422,12 @@ def project_to_public_response(project: Project) -> dict:
     sanitized_analysis_data = restore_public_competitive_analysis(
         raw_analysis_data=project.analysis_data,
         sanitized_analysis_data=sanitized_analysis_data,
+    )
+
+    log_public_source_integrity(
+        project_id=project.id,
+        raw_analysis_data=project.analysis_data,
+        public_analysis_data=sanitized_analysis_data,
     )
 
     return {
@@ -365,6 +453,9 @@ def project_to_public_response(project: Project) -> dict:
         ),
         "analysis_started_at": project.analysis_started_at,
         "analysis_completed_at": project.analysis_completed_at,
+        "analysis_run_id": project.analysis_run_id,
+        "analysis_heartbeat_at": project.analysis_heartbeat_at,
+        "analysis_attempt": project.analysis_attempt,
         "created_at": project.created_at,
         "updated_at": project.updated_at,
     }
@@ -387,6 +478,12 @@ def analysis_to_public_response(project: Project) -> dict:
         sanitized_analysis_data=sanitized_analysis_data,
     )
 
+    log_public_source_integrity(
+        project_id=project.id,
+        raw_analysis_data=project.analysis_data,
+        public_analysis_data=sanitized_analysis_data,
+    )
+
     return {
         "project_id": project.id,
         "analysis_status": project.analysis_status,
@@ -402,6 +499,9 @@ def analysis_to_public_response(project: Project) -> dict:
         ),
         "analysis_started_at": project.analysis_started_at,
         "analysis_completed_at": project.analysis_completed_at,
+        "analysis_run_id": project.analysis_run_id,
+        "analysis_heartbeat_at": project.analysis_heartbeat_at,
+        "analysis_attempt": project.analysis_attempt,
     }
 
 
@@ -431,6 +531,7 @@ def extract_official_startup_score(
         return fallback_score
 
     score_keys = [
+        "potential_score",
         "score",
         "startup_score",
         "overall_score",
@@ -495,7 +596,105 @@ async def set_analysis_progress(
     await db.commit()
 
 
-async def run_project_analysis_background(project_id: int) -> None:
+def _build_readiness_analysis_data(
+    idea_readiness: dict,
+) -> dict:
+    """
+    Construit le paquet de persistance canonique du préflight.
+
+    Ces clés sont enregistrées avant tout agent coûteux afin que le frontend
+    puisse afficher immédiatement le score, les champs ambigus et les
+    questions de clarification.
+    """
+    readiness = dict(idea_readiness or {})
+    ready_for_agents = bool(readiness.get("ready_for_agents", False))
+
+    return {
+        "idea_readiness": readiness,
+        "context_extraction_quality": {
+            "score": readiness.get("score", 0),
+            "status": readiness.get("status"),
+            "missing_fields": list(readiness.get("missing_fields") or []),
+            "ambiguous_fields": list(readiness.get("ambiguous_fields") or []),
+            "blockers": list(readiness.get("blockers") or []),
+            "ready_for_agents": ready_for_agents,
+        },
+        "project_context_packet": dict(
+            readiness.get("project_context_packet") or {}
+        ),
+        "context_confidence": dict(
+            readiness.get("context_confidence") or {}
+        ),
+        "legacy_project_context": dict(
+            readiness.get("legacy_project_context") or {}
+        ),
+        "needs_clarification": not ready_for_agents,
+        "partial_completion": False,
+    }
+
+
+def _analysis_requires_clarification(
+    state_or_result: Optional[dict],
+) -> bool:
+    """
+    Détecte un arrêt de clarification provenant du préflight ou du graphe.
+    """
+    payload = dict(state_or_result or {})
+    analysis_data = payload.get("analysis_data") or {}
+
+    if payload.get("current_step") == "needs_clarification":
+        return True
+
+    if analysis_data.get("needs_clarification") is True:
+        return True
+
+    readiness = analysis_data.get("idea_readiness") or {}
+
+    return readiness.get("ready_for_agents") is False
+
+
+def _clarification_step(output_language: str) -> str:
+    language = normalize_output_language(output_language)
+
+    if language == "en":
+        return "Project clarification required"
+
+    if language == "ar":
+        return "يلزم توضيح فكرة المشروع"
+
+    return "Clarification du projet requise"
+
+
+async def _persist_needs_clarification(
+    *,
+    db: AsyncSession,
+    project: Project,
+    analysis_data: Optional[dict],
+    output_language: str,
+) -> None:
+    """
+    Persiste un état terminal non échoué et non terminé.
+
+    Aucun score marché, débat ou résultat d'agent n'est fabriqué lorsque le
+    contexte est insuffisant.
+    """
+    stored_data = dict(analysis_data or {})
+    stored_data["needs_clarification"] = True
+    stored_data["partial_completion"] = False
+
+    project.analysis_data = stored_data
+    project.analysis_status = "needs_clarification"
+    project.analysis_step = _clarification_step(output_language)
+    project.analysis_progress = 10
+    project.analysis_error = None
+    project.analysis_completed_at = None
+    project.analysis_heartbeat_at = utc_now()
+
+    await db.commit()
+
+
+@analysis_run_guard.limit
+async def run_project_analysis_background(project_id: int, run_id: str) -> None:
     logger.info(
         "[ProjectAnalysis] Démarrage background task | project_id=%s",
         project_id,
@@ -510,6 +709,9 @@ async def run_project_analysis_background(project_id: int) -> None:
                     "[ProjectAnalysis] Projet introuvable | project_id=%s",
                     project_id,
                 )
+                return
+            if project.analysis_run_id != run_id:
+                logger.warning("[ProjectAnalysis] stale run ignored | project_id=%s | run_id=%s", project_id, run_id)
                 return
 
             project.analysis_status = "running"
@@ -537,22 +739,74 @@ async def run_project_analysis_background(project_id: int) -> None:
             agent_input = {
                 "title": project.title or "",
                 "description": project.description or "",
-                "industry": project.industry or "Non spécifié",
+                "industry": project.industry or "",
                 "region": market_region,
                 "market_region": market_region,
+                "target_region": market_region,
                 "output_language": output_language,
             }
+
+            # ------------------------------------------------------------
+            # Préflight canonique obligatoire
+            # ------------------------------------------------------------
+            # Aucun agent, aucune recherche web et aucun Debate Room ne doit
+            # démarrer avant cette décision.
+            idea_readiness = idea_readiness_checker.evaluate(
+                title=agent_input["title"],
+                description=agent_input["description"],
+                industry=agent_input["industry"],
+                target_region=market_region,
+                output_language=output_language,
+                analysis_data={},
+            )
+
+            readiness_analysis_data = _build_readiness_analysis_data(
+                idea_readiness
+            )
+
+            if not idea_readiness.get("ready_for_agents", False):
+                await _persist_needs_clarification(
+                    db=db,
+                    project=project,
+                    analysis_data=readiness_analysis_data,
+                    output_language=output_language,
+                )
+
+                logger.info(
+                    "[ProjectAnalysis] Clarification requise avant agents | "
+                    "project_id=%s | score=%s | missing=%s | ambiguous=%s",
+                    project_id,
+                    idea_readiness.get("score", 0),
+                    idea_readiness.get("missing_fields", []),
+                    idea_readiness.get("ambiguous_fields", []),
+                )
+                return
 
             project_context = project_context_builder.build(
                 title=agent_input["title"],
                 description=agent_input["description"],
                 industry=agent_input["industry"],
-                market_region=agent_input["region"],
+                market_region=market_region,
                 output_language=output_language,
-                analysis_data={},
+                analysis_data=readiness_analysis_data,
             )
 
-            agent_input["project_context"] = project_context
+            agent_input.update(
+                {
+                    "project_context": project_context,
+                    "analysis_data": readiness_analysis_data,
+                    "idea_readiness": idea_readiness,
+                    "project_context_packet": readiness_analysis_data.get(
+                        "project_context_packet", {}
+                    ),
+                    "context_confidence": readiness_analysis_data.get(
+                        "context_confidence", {}
+                    ),
+                    "legacy_project_context": readiness_analysis_data.get(
+                        "legacy_project_context", {}
+                    ),
+                }
+            )
 
             logger.info(
                 "[ProjectAnalysis] Agent input préparé | project_id=%s | industry=%s | region=%s | lang=%s",
@@ -571,7 +825,7 @@ async def run_project_analysis_background(project_id: int) -> None:
             )
 
             business_agent = AIBusinessAnalystAgent()
-            base_analysis = await business_agent.run(agent_input)
+            base_analysis_result = await business_agent.run(agent_input)
 
             project = await db.get(Project, project_id)
 
@@ -582,16 +836,30 @@ async def run_project_analysis_background(project_id: int) -> None:
                 )
                 return
 
+            if project.analysis_run_id != run_id:
+                logger.warning(
+                    "[ProjectAnalysis] stale Sprint 2 result ignored | "
+                    "project_id=%s | run_id=%s",
+                    project_id,
+                    run_id,
+                )
+                return
+
+            base_analysis = dict(base_analysis_result or {})
+
+            # Les données canoniques du préflight gagnent toujours sur une
+            # éventuelle clé homonyme retournée par un ancien agent.
+            base_analysis.update(readiness_analysis_data)
+
             project_context = project_context_builder.build(
                 title=agent_input["title"],
                 description=agent_input["description"],
                 industry=agent_input["industry"],
-                market_region=agent_input["region"],
+                market_region=market_region,
                 output_language=output_language,
                 analysis_data=base_analysis,
             )
 
-            base_analysis = dict(base_analysis or {})
             base_analysis["project_context_meta"] = {
                 "domain_label": project_context.get("domain_label"),
                 "output_language": output_language,
@@ -620,6 +888,9 @@ async def run_project_analysis_background(project_id: int) -> None:
                         project_id,
                     )
                     return
+                if current_project.analysis_run_id != run_id:
+                    logger.warning("[ProjectAnalysis] stale evaluator callback ignored | project_id=%s | run_id=%s", project_id, run_id)
+                    return
 
                 graph_progress = int(state.get("progress") or 0)
                 mapped_progress = 35 + int(graph_progress * 0.60)
@@ -629,8 +900,18 @@ async def run_project_analysis_background(project_id: int) -> None:
                 current_error = state.get("error")
                 current_analysis_data = state.get("analysis_data") or {}
 
+                if _analysis_requires_clarification(state):
+                    await _persist_needs_clarification(
+                        db=db,
+                        project=current_project,
+                        analysis_data=current_analysis_data,
+                        output_language=output_language,
+                    )
+                    return
+
                 current_project.analysis_data = current_analysis_data
                 current_project.analysis_status = "running"
+                current_project.analysis_heartbeat_at = utc_now()
                 current_project.analysis_step = f"Sprint 3 - {current_step}"
                 current_project.analysis_progress = mapped_progress
 
@@ -644,6 +925,25 @@ async def run_project_analysis_background(project_id: int) -> None:
 
                 if current_error:
                     current_project.analysis_error = str(current_error)[:2000]
+
+                competitive_payload = (
+                    current_analysis_data.get("competitive_analysis")
+                    or {}
+                )
+                forgecrawler_payload = (
+                    current_analysis_data.get("forgecrawler")
+                    or {}
+                )
+
+                logger.info(
+                    "[SourcePipeline][Persistence] project_id=%s | "
+                    "step=%s | competitive_sources=%s | "
+                    "forgecrawler_sources=%s",
+                    project_id,
+                    current_step,
+                    len(competitive_payload.get("sources") or []),
+                    len(forgecrawler_payload.get("sources") or []),
+                )
 
                 await db.commit()
 
@@ -663,10 +963,22 @@ async def run_project_analysis_background(project_id: int) -> None:
                     "title": agent_input["title"],
                     "description": agent_input["description"],
                     "industry": agent_input["industry"],
-                    "region": agent_input["region"],
+                    "region": market_region,
+                    "market_region": market_region,
+                    "target_region": market_region,
                     "output_language": output_language,
                     "project_context": project_context,
                     "analysis_data": base_analysis,
+                    "idea_readiness": idea_readiness,
+                    "project_context_packet": base_analysis.get(
+                        "project_context_packet", {}
+                    ),
+                    "context_confidence": base_analysis.get(
+                        "context_confidence", {}
+                    ),
+                    "legacy_project_context": base_analysis.get(
+                        "legacy_project_context", {}
+                    ),
                 },
                 on_step_complete=save_startup_evaluator_step,
             )
@@ -680,7 +992,28 @@ async def run_project_analysis_background(project_id: int) -> None:
                 )
                 return
 
+            if project.analysis_run_id != run_id:
+                logger.warning(
+                    "[ProjectAnalysis] stale Sprint 3 result ignored | "
+                    "project_id=%s | run_id=%s",
+                    project_id,
+                    run_id,
+                )
+                return
+
+            if _analysis_requires_clarification(graph_result):
+                await _persist_needs_clarification(
+                    db=db,
+                    project=project,
+                    analysis_data=graph_result.get("analysis_data") or {},
+                    output_language=output_language,
+                )
+                return
+
             final_analysis_data = graph_result.get("analysis_data") or {}
+            final_analysis_data = evidence_ledger.sanitize_public_claims(
+                final_analysis_data
+            )
 
             official_score = extract_official_startup_score(
                 final_analysis_data,
@@ -713,6 +1046,13 @@ async def run_project_analysis_background(project_id: int) -> None:
                         project_id,
                     )
                     return
+                if current_project.analysis_run_id != run_id:
+                    logger.warning(
+                        "[ProjectAnalysis] stale debate callback ignored | project_id=%s | run_id=%s",
+                        project_id,
+                        run_id,
+                    )
+                    return
 
                 debate_progress = int(state.get("progress") or 0)
                 mapped_progress = 95 + int(debate_progress * 0.04)
@@ -725,8 +1065,17 @@ async def run_project_analysis_background(project_id: int) -> None:
                 updated_analysis_data = dict(existing_analysis_data)
 
                 updated_analysis_data["debate_room"] = {
+                    "format": state.get(
+                        "format", "debate_room_pro_v9_investment_committee"
+                    ),
+                    "title": state.get("title"),
+                    "status": state.get("status", "running"),
+                    "committee": state.get("committee", []),
                     "rounds": state.get("rounds", []),
                     "judge": state.get("judge", {}),
+                    "meeting_preparation": state.get(
+                        "meeting_preparation", {}
+                    ),
                     "meta": {
                         "completed_steps": state.get("completed_steps", []),
                         "failed_steps": state.get("failed_steps", []),
@@ -741,6 +1090,7 @@ async def run_project_analysis_background(project_id: int) -> None:
 
                 current_project.analysis_data = updated_analysis_data
                 current_project.analysis_status = "running"
+                current_project.analysis_heartbeat_at = utc_now()
                 current_project.analysis_step = f"Debate Room - {current_step}"
                 current_project.analysis_progress = mapped_progress
 
@@ -775,7 +1125,7 @@ async def run_project_analysis_background(project_id: int) -> None:
                     title=agent_input["title"],
                     description=agent_input["description"],
                     industry=agent_input["industry"],
-                    region=agent_input["region"],
+                    region=market_region,
                     output_language=output_language,
                     project_context=project_context,
                     analysis_data=final_analysis_data,
@@ -786,6 +1136,11 @@ async def run_project_analysis_background(project_id: int) -> None:
 
                 final_analysis_data = dict(final_analysis_data)
                 final_analysis_data["debate_room"] = debate_room_data
+                # Reapply the canonical publication gate after the debate so
+                # every public section reads the same confidence contract.
+                final_analysis_data = evidence_ledger.sanitize_public_claims(
+                    final_analysis_data
+                )
 
             except Exception as debate_exc:
                 debate_failed = True
@@ -796,8 +1151,13 @@ async def run_project_analysis_background(project_id: int) -> None:
 
                 safe_judge = {
                     "role": "judge",
-                    "verdict": "PIVOTER" if output_language == "fr" else "PIVOT",
-                    "argument_strength_score": 5,
+                    "verdict": (
+                        "PREUVES_INSUFFISANTES"
+                        if output_language == "fr"
+                        else "INSUFFICIENT_EVIDENCE"
+                    ),
+                    "verdict_code": "insufficient_evidence",
+                    "argument_strength_score": 0,
                     "risk_level": "medium",
                     "critical_risks": [
                         (
@@ -833,8 +1193,12 @@ async def run_project_analysis_background(project_id: int) -> None:
 
                 final_analysis_data = dict(final_analysis_data)
                 final_analysis_data["debate_room"] = {
+                    "format": "debate_room_pro_v9_fallback",
+                    "status": "completed_with_fallback",
+                    "committee": [],
                     "rounds": [],
                     "judge": safe_judge,
+                    "meeting_preparation": {},
                     "meta": {
                         "completed_steps": [],
                         "failed_steps": ["debate_room"],
@@ -846,6 +1210,9 @@ async def run_project_analysis_background(project_id: int) -> None:
                         "context_locked": True,
                     },
                 }
+                final_analysis_data = evidence_ledger.sanitize_public_claims(
+                    final_analysis_data
+                )
 
             project = await db.get(Project, project_id)
 
@@ -853,6 +1220,13 @@ async def run_project_analysis_background(project_id: int) -> None:
                 logger.error(
                     "[ProjectAnalysis] Projet supprimé avant finalisation | project_id=%s",
                     project_id,
+                )
+                return
+            if project.analysis_run_id != run_id:
+                logger.warning(
+                    "[ProjectAnalysis] stale final write ignored | project_id=%s | run_id=%s",
+                    project_id,
+                    run_id,
                 )
                 return
 
@@ -892,6 +1266,7 @@ async def run_project_analysis_background(project_id: int) -> None:
             )
             project.analysis_progress = 100
             project.analysis_completed_at = utc_now()
+            project.analysis_heartbeat_at = utc_now()
 
             if has_partial_result:
                 project.analysis_error = (
@@ -1042,15 +1417,19 @@ async def start_project_analysis(
 ):
     project = await get_project_or_404(project_id, db, current_user)
 
-    if project.analysis_status == "running":
+    if project.analysis_status in {"queued", "running"}:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Une analyse est déjà en cours pour ce projet.",
         )
 
-    project.analysis_status = "running"
-    project.analysis_step = "Préparation de l’analyse"
-    project.analysis_progress = 5
+    run_id = analysis_run_guard.new_run_id()
+    project.analysis_run_id = run_id
+    project.analysis_attempt = int(project.analysis_attempt or 0) + 1
+    project.analysis_heartbeat_at = utc_now()
+    project.analysis_status = "queued"
+    project.analysis_step = "Analyse en attente d’un créneau"
+    project.analysis_progress = 2
     project.analysis_data = None
     project.analysis_error = None
     project.analysis_started_at = utc_now()
@@ -1062,6 +1441,7 @@ async def start_project_analysis(
     background_tasks.add_task(
         run_project_analysis_background,
         project.id,
+        run_id,
     )
 
     return analysis_to_public_response(project)
