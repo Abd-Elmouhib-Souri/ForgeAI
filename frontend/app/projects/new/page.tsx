@@ -31,8 +31,9 @@ const content = {
     industryLabel: "Secteur",
     industryPlaceholder: "ex: EdTech, HealthTech, FinTech, SaaS...",
     regionLabel: "Pays/Région cible",
+    regionPlaceholder: "Sélectionnez un pays ou une région",
     regionHelp:
-      "Exemple : Tunisie pour une analyse locale, MENA pour une analyse régionale, Global pour une analyse internationale.",
+      "Ce champ peut rester vide. ForgeAI demandera une clarification si la région est nécessaire pour une analyse locale, réglementée ou fortement contextualisée.",
     languageLabel: "Langue du rapport IA",
     languageHelp:
       "Le bouton FR / EN global détermine la langue de sortie de l’analyse IA.",
@@ -65,8 +66,9 @@ const content = {
     industryLabel: "Sector",
     industryPlaceholder: "e.g. EdTech, HealthTech, FinTech, SaaS...",
     regionLabel: "Target country/region",
+    regionPlaceholder: "Select a country or region",
     regionHelp:
-      "Example: Tunisia for a local analysis, MENA for a regional analysis, Global for an international analysis.",
+      "This field may remain empty. ForgeAI will request clarification when a region is required for a local, regulated, or strongly contextual analysis.",
     languageLabel: "AI report language",
     languageHelp:
       "The global FR / EN switch determines the output language of the AI analysis.",
@@ -98,7 +100,7 @@ function NewProjectContent() {
 
   const [title, setTitle] = useState("");
   const [industry, setIndustry] = useState("");
-  const [marketRegion, setMarketRegion] = useState("Tunisie");
+  const [marketRegion, setMarketRegion] = useState("");
   const [description, setDescription] = useState("");
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -113,7 +115,7 @@ function NewProjectContent() {
       const res = await api.post("/projects", {
         title,
         industry: industry || null,
-        market_region: marketRegion,
+        market_region: marketRegion || null,
         description,
         output_language: lang,
       });
@@ -169,6 +171,8 @@ function NewProjectContent() {
                   onChange={(e) => setMarketRegion(e.target.value)}
                   className="forge-select"
                 >
+                  <option value="">{t.regionPlaceholder}</option>
+
                   {MARKET_REGION_OPTIONS.map((region) => (
                     <option key={region} value={region}>
                       {region}
@@ -262,8 +266,3 @@ export default function NewProjectPage() {
     </ProtectedPage>
   );
 }
-
-
-
-
-
