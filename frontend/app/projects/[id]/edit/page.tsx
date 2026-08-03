@@ -43,8 +43,9 @@ const content = {
     industryLabel: "Secteur",
     industryPlaceholder: "ex: EdTech, HealthTech, FinTech, SaaS...",
     regionLabel: "Pays/Région cible",
+    regionPlaceholder: "Sélectionnez un pays ou une région",
     regionHelp:
-      "Ce choix sera utilisé par le RAG web local lors de la prochaine analyse IA.",
+      "Ce champ peut rester vide. La prochaine analyse demandera une clarification si une région est indispensable.",
     languageLabel: "Langue du rapport IA",
     languageHelp:
       "Le bouton FR / EN global sera envoyé au backend comme langue de sortie.",
@@ -69,8 +70,9 @@ const content = {
     industryLabel: "Sector",
     industryPlaceholder: "e.g. EdTech, HealthTech, FinTech, SaaS...",
     regionLabel: "Target country/region",
+    regionPlaceholder: "Select a country or region",
     regionHelp:
-      "This choice will be used by the local web RAG during the next AI analysis.",
+      "This field may remain empty. The next analysis will request clarification if a region is required.",
     languageLabel: "AI report language",
     languageHelp:
       "The global FR / EN switch will be sent to the backend as the output language.",
@@ -96,7 +98,7 @@ function EditProjectContent() {
 
   const [title, setTitle] = useState("");
   const [industry, setIndustry] = useState("");
-  const [marketRegion, setMarketRegion] = useState("Tunisie");
+  const [marketRegion, setMarketRegion] = useState("");
   const [description, setDescription] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -109,7 +111,7 @@ function EditProjectContent() {
 
         setTitle(res.data.title);
         setIndustry(res.data.industry || "");
-        setMarketRegion(res.data.market_region || "Tunisie");
+        setMarketRegion(res.data.market_region || "");
         setDescription(res.data.description);
 
         if (
@@ -126,7 +128,7 @@ function EditProjectContent() {
     };
 
     if (id) {
-      fetchProject();
+      void fetchProject();
     }
   }, [id, setLang, t.notFound]);
 
@@ -140,7 +142,7 @@ function EditProjectContent() {
       await api.patch(`/projects/${id}`, {
         title,
         industry: industry || null,
-        market_region: marketRegion,
+        market_region: marketRegion || null,
         description,
         output_language: lang,
       });
@@ -202,6 +204,8 @@ function EditProjectContent() {
                     onChange={(e) => setMarketRegion(e.target.value)}
                     className="forge-select"
                   >
+                    <option value="">{t.regionPlaceholder}</option>
+
                     {MARKET_REGION_OPTIONS.map((region) => (
                       <option key={region} value={region}>
                         {region}
@@ -291,8 +295,3 @@ export default function EditProjectPage() {
     </ProtectedPage>
   );
 }
-
-
-
-
-
