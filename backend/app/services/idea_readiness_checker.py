@@ -1,183 +1,47 @@
-# ============================================================
-# backend/app/services/idea_readiness_checker.py
-# ============================================================
-#
-# IdeaReadinessChecker V1 — Context Confidence Score
-#
-# Objectifs :
-# - analyser la clarté de l'idée avant les agents lourds ;
-# - détecter les champs manquants ;
-# - détecter les champs ambigus ;
-# - produire un score de confiance contextuelle ;
-# - générer des questions guidées ;
-# - générer des checklists à afficher côté frontend ;
-# - fournir des hypothèses prudentes si certaines informations manquent ;
-# - ne jamais appeler de LLM : service déterministe, rapide et stable.
-# ============================================================
-
 from __future__ import annotations
 
-import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
-from app.services.domain_integrity_guard import normalize_output_language
+from app.schemas.analysis_context import (
+    ContextReadinessStatus,
+    ProjectContextPacketV3,
+    clean_text,
+    comparison_key,
+    unique_texts,
+)
+from app.services.context_confidence_gate import (
+    context_confidence_gate,
+)
+from app.services.domain_integrity_guard import (
+    normalize_output_language,
+)
+from app.services.project_context_extractor import (
+    project_context_extractor,
+)
 
 
 class IdeaReadinessChecker:
-    MIN_READY_SCORE = 0.75
+    """
+    Adaptateur de compatibilité Sprint 3.
 
-    GENERIC_SECTORS = {
-        "",
-        "non spécifié",
-        "non specifie",
-        "not specified",
-        "unknown",
-        "general",
-        "startup",
-        "business",
-        "tech",
-        "technology",
-        "saas",
-        "app",
-        "application",
-    }
+    La compréhension et le score ne sont plus recalculés ici :
 
-    GENERIC_REGIONS = {
-        "",
-        "global",
-        "international",
-        "worldwide",
-        "unknown",
-        "non spécifié",
-        "non specifie",
-        "not specified",
-    }
+    - ProjectContextExtractor construit ProjectContextPacketV3 ;
+    - ContextConfidenceGate décide si les agents peuvent démarrer.
 
-    PROBLEM_HINTS = {
-        "problem",
-        "problème",
-        "probleme",
-        "pain",
-        "struggle",
-        "difficult",
-        "difficile",
-        "hard",
-        "manual",
-        "fragmented",
-        "scattered",
-        "inefficient",
-        "inefficace",
-        "perte",
-        "loss",
-        "waste",
-        "slow",
-        "lent",
-        "cost",
-        "coût",
-        "cout",
-        "risk",
-        "risque",
-        "lack",
-        "manque",
-        "besoin",
-        "need",
-    }
+    Les anciennes clés sont conservées afin de ne pas casser :
 
-    SOLUTION_HINTS = {
-        "solution",
-        "platform",
-        "plateforme",
-        "app",
-        "application",
-        "robot",
-        "saas",
-        "dashboard",
-        "system",
-        "système",
-        "systeme",
-        "tool",
-        "outil",
-        "helps",
-        "aide",
-        "automate",
-        "automatiser",
-        "manage",
-        "gérer",
-        "gerer",
-        "detect",
-        "détecter",
-        "detecter",
-        "create",
-        "créer",
-        "creer",
-        "track",
-        "suivre",
-    }
+    - startup_evaluator_graph ;
+    - project_intelligence_layer ;
+    - le frontend ;
+    - les rapports et tests Sprint 3.
+    """
 
-    TARGET_HINTS = {
-        "users",
-        "utilisateurs",
-        "clients",
-        "target",
-        "cible",
-        "farmers",
-        "agriculteurs",
-        "students",
-        "étudiants",
-        "etudiants",
-        "teachers",
-        "enseignants",
-        "instructors",
-        "formateurs",
-        "centers",
-        "centres",
-        "doctors",
-        "médecins",
-        "medecins",
-        "patients",
-        "freelance",
-        "companies",
-        "entreprises",
-        "training centers",
-        "centres de formation",
-    }
-
-    BUSINESS_HINTS = {
-        "subscription",
-        "abonnement",
-        "pricing",
-        "price",
-        "prix",
-        "freemium",
-        "commission",
-        "paid",
-        "pay",
-        "payer",
-        "revenue",
-        "revenu",
-        "business model",
-        "modèle économique",
-        "modele economique",
-        "plans",
-        "monthly",
-        "mensuel",
-    }
-
-    MVP_HINTS = {
-        "mvp",
-        "first version",
-        "première version",
-        "premiere version",
-        "prototype",
-        "pilot",
-        "pilote",
-        "beta",
-        "minimum",
-        "core features",
-        "features",
-        "fonctionnalités",
-        "fonctionnalites",
-    }
+    MIN_READY_SCORE = (
+        context_confidence_gate
+        .policy
+        .cautious_score
+    )
 
     def evaluate(
         self,
@@ -190,780 +54,1431 @@ class IdeaReadinessChecker:
         project_context: Dict[str, Any] | None = None,
         analysis_data: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
-        language = normalize_output_language(output_language)
-        project_context = project_context or {}
-        analysis_data = analysis_data or {}
+        """
+        Évalue une idée et retourne un payload compatible Sprint 3.
 
-        title = self._clean_text(title or project_context.get("title") or project_context.get("project_name") or "")
-        description = self._clean_text(description or project_context.get("description") or "")
-        industry = self._clean_text(industry or project_context.get("industry") or "")
-        target_region = self._clean_text(
-            target_region
-            or project_context.get("market_region")
-            or project_context.get("target_region")
-            or ""
+        Le service peut :
+
+        - reconstruire un packet depuis les champs bruts ;
+        - réutiliser un ProjectContextPacketV3 déjà persisté ;
+        - refuser un packet provenant d'un ancien projet ;
+        - conserver les anciennes clés publiques.
+        """
+        language = normalize_output_language(
+            output_language
         )
 
-        text_blob = self._clean_text(
-            " ".join(
-                [
-                    title,
-                    description,
-                    industry,
-                    target_region,
-                    self._safe_join(project_context.get("target_users")),
-                    self._safe_join(project_context.get("anchor_terms")),
-                    self._safe_join(project_context.get("strong_keywords")),
-                    self._safe_join(analysis_data.get("target_users")),
-                ]
+        project_context = dict(
+            project_context or {}
+        )
+
+        analysis_data = dict(
+            analysis_data or {}
+        )
+
+        title = clean_text(
+            title
+            or project_context.get(
+                "project_name"
+            )
+            or project_context.get(
+                "title"
             )
         )
 
-        detected = self._detect_fields(
+        description = clean_text(
+            description
+            or project_context.get(
+                "description"
+            )
+        )
+
+        industry = clean_text(
+            industry
+            or project_context.get(
+                "industry"
+            )
+        )
+
+        target_region = clean_text(
+            target_region
+            or project_context.get(
+                "target_region"
+            )
+            or project_context.get(
+                "market_region"
+            )
+        )
+
+        packet = self._existing_packet(
             title=title,
             description=description,
-            industry=industry,
-            target_region=target_region,
-            text_blob=text_blob,
             project_context=project_context,
+            analysis_data=analysis_data,
         )
 
-        missing_fields, ambiguous_fields = self._field_quality(detected)
+        if packet is None:
+            packet = (
+                project_context_extractor
+                .extract(
+                    title=title,
+                    description=description,
+                    industry=industry,
+                    target_region=target_region,
+                    output_language=language,
+                    project_context=(
+                        project_context
+                    ),
+                    analysis_data=analysis_data,
+                )
+            )
 
-        score, scoring_details = self._score(
-            detected=detected,
-            missing_fields=missing_fields,
-            ambiguous_fields=ambiguous_fields,
+        packet = (
+            context_confidence_gate
+            .apply(
+                packet
+            )
         )
 
-        ready_for_agents = score >= self.MIN_READY_SCORE
+        confidence = packet.confidence
 
-        assumptions = self._assumptions(
-            detected=detected,
-            missing_fields=missing_fields,
-            language=language,
+        ready_for_agents = (
+            context_confidence_gate
+            .should_run_agents(
+                confidence
+            )
         )
 
-        questions = self._questions(
-            missing_fields=missing_fields,
-            ambiguous_fields=ambiguous_fields,
-            language=language,
+        detected = self._detected(
+            packet
         )
 
-        checklist = self._checklist(language=language)
-
-        suggested_options = self._suggested_options(
-            detected=detected,
-            language=language,
-        )
-
-        status = "ready" if ready_for_agents else "needs_clarification"
-
-        recommendation = self._recommendation(
-            score=score,
-            ready_for_agents=ready_for_agents,
-            missing_fields=missing_fields,
-            ambiguous_fields=ambiguous_fields,
-            language=language,
+        questions = list(
+            confidence
+            .clarification_questions
         )
 
         return {
-            "format": "idea_readiness_v1_context_confidence",
-            "status": status,
-            "score": score,
-            "ready_for_agents": ready_for_agents,
-            "threshold": self.MIN_READY_SCORE,
+            # Ancienne valeur conservée pour les
+            # consommateurs Sprint 3.
+            "format": (
+                "idea_readiness_v1_"
+                "context_confidence"
+            ),
+
+            # Nouvelle identité canonique.
+            "canonical_format": (
+                "idea_readiness_v3_"
+                "project_context"
+            ),
+
+            "schema_version": (
+                packet.schema_version
+            ),
+
+            "status": (
+                confidence.status.value
+            ),
+
+            "score": (
+                confidence.score
+            ),
+
+            "ready_for_agents": (
+                ready_for_agents
+            ),
+
+            "threshold": (
+                self.MIN_READY_SCORE
+            ),
+
             "detected": detected,
-            "missing_fields": missing_fields,
-            "ambiguous_fields": ambiguous_fields,
-            "assumptions": assumptions,
+
+            "missing_fields": list(
+                confidence.missing_fields
+            ),
+
+            "ambiguous_fields": list(
+                confidence.ambiguous_fields
+            ),
+
+            "blockers": list(
+                confidence.blockers
+            ),
+
+            "assumptions": (
+                self._assumptions(
+                    packet
+                )
+            ),
+
             "questions": questions,
-            "suggested_options": suggested_options,
-            "checklist": checklist,
-            "scoring_details": scoring_details,
-            "recommendation": recommendation,
-            "output_language": language,
+
+            "clarification_questions": (
+                questions
+            ),
+
+            "suggested_options": (
+                self._suggested_options(
+                    packet
+                )
+            ),
+
+            "checklist": (
+                self._checklist(
+                    packet
+                )
+            ),
+
+            "scoring_details": (
+                self._scoring_details(
+                    packet
+                )
+            ),
+
+            "recommendation": (
+                self._recommendation(
+                    status=confidence.status,
+                    language=packet.language,
+                    blockers=(
+                        confidence.blockers
+                    ),
+                    ambiguous_fields=(
+                        confidence
+                        .ambiguous_fields
+                    ),
+                )
+            ),
+
+            "reasons": list(
+                confidence.reasons
+            ),
+
+            "output_language": (
+                packet.language
+            ),
+
+            "project_context_packet": (
+                packet.model_dump(
+                    mode="json"
+                )
+            ),
+
+            "legacy_project_context": (
+                packet.to_legacy_dict()
+            ),
+
+            "context_confidence": (
+                confidence.model_dump(
+                    mode="json"
+                )
+            ),
         }
 
-    # ========================================================
-    # Detection
-    # ========================================================
+    def evaluate_packet(
+        self,
+        packet: ProjectContextPacketV3,
+    ) -> Dict[str, Any]:
+        """
+        Évalue directement un packet canonique.
+        """
+        return self.evaluate(
+            title=packet.project_name,
+            description=packet.description,
+            industry=(
+                packet.industry_user_input
+            ),
+            target_region=(
+                packet.target_region
+            ),
+            output_language=(
+                packet.language
+            ),
+            project_context={
+                "project_context_packet": (
+                    packet.model_dump(
+                        mode="json"
+                    )
+                )
+            },
+        )
 
-    def _detect_fields(
+    def evaluate_mapping(
+        self,
+        data: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Évalue un packet sérialisé provenant de Redis
+        ou de la base de données.
+        """
+        packet = (
+            ProjectContextPacketV3
+            .model_validate(
+                dict(
+                    data
+                )
+            )
+        )
+
+        return self.evaluate_packet(
+            packet
+        )
+
+    def _existing_packet(
         self,
         *,
         title: str,
         description: str,
-        industry: str,
-        target_region: str,
-        text_blob: str,
-        project_context: Dict[str, Any],
+        project_context: Mapping[str, Any],
+        analysis_data: Mapping[str, Any],
+    ) -> ProjectContextPacketV3 | None:
+        """
+        Réutilise un packet existant uniquement s'il
+        correspond au projet courant.
+
+        Cette protection évite qu'un ancien run ou un
+        autre projet contamine l'analyse.
+        """
+        candidates: List[Any] = [
+            analysis_data.get(
+                "project_context_packet"
+            ),
+            project_context.get(
+                "project_context_packet"
+            ),
+        ]
+
+        if (
+            project_context.get(
+                "schema_version"
+            )
+            == "project_context_v3"
+        ):
+            candidates.append(
+                project_context
+            )
+
+        for candidate in candidates:
+            if not isinstance(
+                candidate,
+                Mapping,
+            ):
+                continue
+
+            try:
+                packet = (
+                    ProjectContextPacketV3
+                    .model_validate(
+                        dict(
+                            candidate
+                        )
+                    )
+                )
+
+            except (
+                TypeError,
+                ValueError,
+            ):
+                continue
+
+            if (
+                title
+                and comparison_key(
+                    packet.project_name
+                )
+                != comparison_key(
+                    title
+                )
+            ):
+                continue
+
+            if description:
+                expected_description = (
+                    comparison_key(
+                        description
+                    )
+                )
+
+                packet_description = (
+                    comparison_key(
+                        packet.description
+                    )
+                )
+
+                if (
+                    expected_description
+                    and packet_description
+                    and expected_description
+                    != packet_description
+                ):
+                    continue
+
+            return packet
+
+        return None
+
+    def _detected(
+        self,
+        packet: ProjectContextPacketV3,
     ) -> Dict[str, Any]:
-        lower_blob = text_blob.lower()
+        """
+        Produit les anciennes clés `detected`
+        à partir du packet canonique.
+        """
+        confidence = packet.confidence
 
-        target_users = self._extract_target_users(
-            description=description,
-            project_context=project_context,
+        primary_workflow = (
+            packet.primary_workflow
         )
 
-        problem = self._extract_sentence_by_hints(
-            text=description,
-            hints=self.PROBLEM_HINTS,
+        explicit_business_model = (
+            "business_model"
+            not in confidence
+            .ambiguous_fields
         )
 
-        solution = self._extract_sentence_by_hints(
-            text=description,
-            hints=self.SOLUTION_HINTS,
+        target_users = (
+            packet.actor_names(
+                explicit_only=True
+            )
+            or packet.actor_names()
         )
 
-        business_model = self._extract_sentence_by_hints(
-            text=description,
-            hints=self.BUSINESS_HINTS,
-        )
-
-        mvp = self._extract_sentence_by_hints(
-            text=description,
-            hints=self.MVP_HINTS,
-        )
-
-        use_case = self._extract_use_case(
-            description=description,
-            solution=solution,
-            project_context=project_context,
+        main_use_case = (
+            primary_workflow.sentence
+            if primary_workflow
+            else ""
         )
 
         return {
-            "project_name": title,
-            "description_length": len(description),
-            "sector": industry,
-            "target_region": target_region,
-            "target_users": target_users,
-            "problem": problem,
-            "solution": solution,
-            "main_use_case": use_case,
-            "business_model": business_model,
-            "mvp_scope": mvp,
-            "has_problem_signal": self._contains_any(lower_blob, self.PROBLEM_HINTS),
-            "has_solution_signal": self._contains_any(lower_blob, self.SOLUTION_HINTS),
-            "has_target_signal": self._contains_any(lower_blob, self.TARGET_HINTS) or bool(target_users),
-            "has_business_signal": self._contains_any(lower_blob, self.BUSINESS_HINTS),
-            "has_mvp_signal": self._contains_any(lower_blob, self.MVP_HINTS),
+            "project_name": (
+                packet.project_name
+            ),
+
+            "description_length": len(
+                packet.description
+            ),
+
+            "sector": (
+                packet
+                .industry_user_input
+            ),
+
+            "sector_labels": list(
+                packet.sector_labels
+            ),
+
+            "target_region": (
+                packet.target_region
+            ),
+
+            "target_users": (
+                target_users
+            ),
+
+            "actors": [
+                actor.model_dump(
+                    mode="json"
+                )
+                for actor in packet.actors
+            ],
+
+            "problem": clean_text(
+                packet.problem.pain
+            ),
+
+            "solution": clean_text(
+                packet.solution.mechanism
+            ),
+
+            "main_use_case": (
+                main_use_case
+            ),
+
+            "priority_workflow": (
+                main_use_case
+            ),
+
+            "priority_workflows": [
+                workflow.sentence
+                for workflow
+                in packet
+                .priority_workflows
+                if workflow.sentence
+            ],
+
+            "business_model": (
+                "; ".join(
+                    packet
+                    .business_model_hypotheses
+                )
+                if explicit_business_model
+                else ""
+            ),
+
+            "business_model_hypotheses": (
+                list(
+                    packet
+                    .business_model_hypotheses
+                )
+            ),
+
+            "mvp_scope": (
+                "; ".join(
+                    packet.mvp_scope
+                )
+            ),
+
+            "mvp_scope_items": list(
+                packet.mvp_scope
+            ),
+
+            "project_archetype": (
+                packet.primary_archetype
+            ),
+
+            "secondary_archetypes": (
+                list(
+                    packet
+                    .secondary_archetypes
+                )
+            ),
+
+            "constraints": list(
+                packet.constraints
+            ),
+
+            "success_metrics": list(
+                packet.success_metrics
+            ),
+
+            "regulatory_flags": list(
+                packet.regulatory_flags
+            ),
+
+            "has_problem_signal": bool(
+                packet.problem.pain
+            ),
+
+            "has_solution_signal": bool(
+                packet.solution.mechanism
+            ),
+
+            "has_target_signal": bool(
+                target_users
+            ),
+
+            "has_workflow_signal": bool(
+                primary_workflow
+            ),
+
+            "has_business_signal": (
+                explicit_business_model
+            ),
+
+            "has_mvp_signal": bool(
+                packet.mvp_scope
+            ),
         }
 
-    def _field_quality(self, detected: Dict[str, Any]) -> Tuple[List[str], List[str]]:
-        missing_fields: List[str] = []
-        ambiguous_fields: List[str] = []
-
-        project_name = self._clean_text(detected.get("project_name"))
-        sector = self._clean_text(detected.get("sector")).lower()
-        region = self._clean_text(detected.get("target_region")).lower()
-        target_users = detected.get("target_users") or []
-        problem = self._clean_text(detected.get("problem"))
-        solution = self._clean_text(detected.get("solution"))
-        business_model = self._clean_text(detected.get("business_model"))
-        mvp_scope = self._clean_text(detected.get("mvp_scope"))
-
-        if not project_name or len(project_name) < 3:
-            missing_fields.append("project_name")
-
-        if not sector or sector in self.GENERIC_SECTORS:
-            missing_fields.append("sector")
-        elif sector in {"edtech", "hrtech", "healthtech", "agritech", "fintech"}:
-            ambiguous_fields.append("sector_detail")
-
-        if not region or region in self.GENERIC_REGIONS:
-            ambiguous_fields.append("target_region")
-
-        if not target_users:
-            missing_fields.append("target_users")
-
-        if not problem or len(problem) < 30:
-            missing_fields.append("problem")
-
-        if not solution or len(solution) < 30:
-            missing_fields.append("solution")
-
-        if not business_model:
-            ambiguous_fields.append("business_model")
-
-        if not mvp_scope:
-            ambiguous_fields.append("mvp_scope")
-
-        return self._unique(missing_fields), self._unique(ambiguous_fields)
-
-    # ========================================================
-    # Score
-    # ========================================================
-
-    def _score(
+    def _assumptions(
         self,
-        *,
-        detected: Dict[str, Any],
-        missing_fields: List[str],
-        ambiguous_fields: List[str],
-    ) -> Tuple[float, Dict[str, Any]]:
-        weights = {
-            "project_name": 0.08,
-            "description_depth": 0.14,
-            "sector": 0.10,
-            "target_region": 0.07,
-            "target_users": 0.16,
-            "problem": 0.18,
-            "solution": 0.18,
-            "business_model": 0.05,
-            "mvp_scope": 0.04,
-        }
-
-        details: Dict[str, Any] = {}
-
-        project_name_ok = bool(self._clean_text(detected.get("project_name")))
-        description_length = int(detected.get("description_length") or 0)
-
-        sector = self._clean_text(detected.get("sector")).lower()
-        region = self._clean_text(detected.get("target_region")).lower()
-
-        details["project_name"] = weights["project_name"] if project_name_ok else 0.0
-
-        if description_length >= 500:
-            details["description_depth"] = weights["description_depth"]
-        elif description_length >= 250:
-            details["description_depth"] = weights["description_depth"] * 0.75
-        elif description_length >= 120:
-            details["description_depth"] = weights["description_depth"] * 0.45
-        else:
-            details["description_depth"] = 0.0
-
-        details["sector"] = (
-            weights["sector"]
-            if sector and sector not in self.GENERIC_SECTORS
-            else 0.0
-        )
-
-        details["target_region"] = (
-            weights["target_region"]
-            if region and region not in self.GENERIC_REGIONS
-            else weights["target_region"] * 0.35
-        )
-
-        details["target_users"] = (
-            weights["target_users"]
-            if detected.get("target_users")
-            else 0.0
-        )
-
-        details["problem"] = (
-            weights["problem"]
-            if detected.get("has_problem_signal") and self._clean_text(detected.get("problem"))
-            else 0.0
-        )
-
-        details["solution"] = (
-            weights["solution"]
-            if detected.get("has_solution_signal") and self._clean_text(detected.get("solution"))
-            else 0.0
-        )
-
-        details["business_model"] = (
-            weights["business_model"]
-            if detected.get("has_business_signal")
-            else weights["business_model"] * 0.25
-        )
-
-        details["mvp_scope"] = (
-            weights["mvp_scope"]
-            if detected.get("has_mvp_signal")
-            else weights["mvp_scope"] * 0.25
-        )
-
-        raw_score = sum(float(value) for value in details.values())
-
-        penalty = 0.0
-        penalty += 0.08 * len(missing_fields)
-        penalty += 0.035 * len(ambiguous_fields)
-
-        final_score = max(0.0, min(1.0, raw_score - penalty))
-
-        details["raw_score"] = round(raw_score, 3)
-        details["penalty"] = round(penalty, 3)
-        details["final_score"] = round(final_score, 3)
-
-        return round(final_score, 2), details
-
-    # ========================================================
-    # Questions / checklist / recommendations
-    # ========================================================
-
-    def _questions(
-        self,
-        *,
-        missing_fields: List[str],
-        ambiguous_fields: List[str],
-        language: str,
+        packet: ProjectContextPacketV3,
     ) -> List[str]:
-        fr = {
-            "project_name": "Quel est le nom du projet ou de la solution ?",
-            "sector": "Dans quel secteur principal se situe l’idée ?",
-            "target_users": "Qui va utiliser ou payer cette solution en premier ?",
-            "problem": "Quel problème précis cette cible rencontre aujourd’hui ?",
-            "solution": "Comment votre solution résout-elle ce problème concrètement ?",
-            "target_region": "Dans quel pays ou marché voulez-vous commencer ?",
-            "business_model": "Comment pensez-vous gagner de l’argent avec cette solution ?",
-            "mvp_scope": "Quelle est la première version minimale à construire ?",
-            "sector_detail": "Pouvez-vous préciser le sous-secteur exact ou le cas d’usage métier ?",
+        """
+        Produit uniquement des hypothèses prudentes.
+
+        Un champ absent ne devient jamais un fait confirmé.
+        """
+        labels = self._texts(
+            packet.language
+        )
+
+        assumptions = list(
+            packet.assumptions
+        )
+
+        ambiguous_fields = set(
+            packet
+            .confidence
+            .ambiguous_fields
+        )
+
+        for field_name in (
+            "business_model",
+            "target_region",
+            "mvp_scope",
+            "success_metrics",
+        ):
+            if (
+                field_name
+                in ambiguous_fields
+            ):
+                assumptions.append(
+                    labels[
+                        "assumption_"
+                        + field_name
+                    ]
+                )
+
+        return unique_texts(
+            assumptions
+        )
+
+    def _checklist(
+        self,
+        packet: ProjectContextPacketV3,
+    ) -> List[Dict[str, Any]]:
+        """
+        Checklist compatible avec le frontend existant.
+        """
+        confidence = (
+            packet.confidence
+        )
+
+        unresolved_fields = {
+            *confidence.missing_fields,
+            *confidence.ambiguous_fields,
+            *confidence.blockers,
         }
 
-        en = {
-            "project_name": "What is the name of the project or solution?",
-            "sector": "What is the main sector of this idea?",
-            "target_users": "Who will use or pay for this solution first?",
-            "problem": "What exact problem does this target face today?",
-            "solution": "How does your solution solve this problem concretely?",
-            "target_region": "Which country or market do you want to start with?",
-            "business_model": "How do you plan to make money with this solution?",
-            "mvp_scope": "What is the minimum first version to build?",
-            "sector_detail": "Can you specify the exact sub-sector or business use case?",
+        required_fields = {
+            "project_name",
+            "problem",
+            "solution",
+            "actors",
+            "priority_workflow",
         }
-
-        labels = en if language == "en" else fr
-
-        keys = self._unique(missing_fields + ambiguous_fields)
-
-        questions = [labels[key] for key in keys if key in labels]
-
-        return questions[:8]
-
-    def _checklist(self, language: str) -> List[Dict[str, Any]]:
-        if language == "en":
-            items = [
-                ("project_name", "Project name is clear"),
-                ("sector", "Sector and sub-sector are clear"),
-                ("target_users", "First target users are defined"),
-                ("problem", "Main problem is specific"),
-                ("solution", "Solution is concrete"),
-                ("target_region", "Launch region is defined"),
-                ("mvp_scope", "MVP scope is reduced"),
-                ("business_model", "Business model is described"),
-                ("alternatives", "Current alternatives are mentioned"),
-                ("success_metric", "A measurable success metric is defined"),
-            ]
-        else:
-            items = [
-                ("project_name", "Le nom du projet est clair"),
-                ("sector", "Le secteur et sous-secteur sont clairs"),
-                ("target_users", "Les premiers utilisateurs cibles sont définis"),
-                ("problem", "Le problème principal est précis"),
-                ("solution", "La solution est concrète"),
-                ("target_region", "La région de lancement est définie"),
-                ("mvp_scope", "Le périmètre MVP est réduit"),
-                ("business_model", "Le modèle économique est décrit"),
-                ("alternatives", "Les alternatives actuelles sont mentionnées"),
-                ("success_metric", "Un indicateur de succès mesurable est défini"),
-            ]
 
         return [
             {
                 "key": key,
                 "label": label,
-                "checked": False,
-                "required": key in {
-                    "project_name",
-                    "sector",
-                    "target_users",
-                    "problem",
-                    "solution",
-                },
+                "checked": (
+                    key
+                    not in unresolved_fields
+                ),
+                "required": (
+                    key
+                    in required_fields
+                ),
             }
-            for key, label in items
+            for key, label
+            in self._checklist_labels(
+                packet.language
+            )
         ]
 
     def _suggested_options(
         self,
-        *,
-        detected: Dict[str, Any],
-        language: str,
+        packet: ProjectContextPacketV3,
     ) -> Dict[str, List[str]]:
-        sector = self._clean_text(detected.get("sector")).lower()
+        """
+        Suggestions de formulaire basées sur
+        l'archétype du projet.
 
+        Elles ne constituent pas des conclusions marché.
+        """
+        texts = self._texts(
+            packet.language
+        )
+
+        archetypes = {
+            comparison_key(
+                packet.primary_archetype
+            ),
+            *(
+                comparison_key(
+                    value
+                )
+                for value
+                in packet
+                .secondary_archetypes
+            ),
+        }
+
+        business_models: List[str] = []
+
+        if (
+            comparison_key(
+                "hardware_iot"
+            )
+            in archetypes
+        ):
+            business_models.extend(
+                texts[
+                    "models_hardware"
+                ]
+            )
+
+        if (
+            comparison_key(
+                "two_sided_marketplace"
+            )
+            in archetypes
+        ):
+            business_models.extend(
+                texts[
+                    "models_marketplace"
+                ]
+            )
+
+        if (
+            comparison_key(
+                "b2b_workflow_saas"
+            )
+            in archetypes
+        ):
+            business_models.extend(
+                texts[
+                    "models_saas"
+                ]
+            )
+
+        business_models.extend(
+            texts[
+                "models_generic"
+            ]
+        )
+
+        return {
+            "target_region": list(
+                texts["regions"]
+            ),
+
+            "target_users": (
+                packet.actor_names(
+                    explicit_only=True
+                )
+                or packet.actor_names()
+            ),
+
+            "business_model": (
+                unique_texts(
+                    business_models
+                )[:8]
+            ),
+
+            "mvp_scope": list(
+                texts["mvp_options"]
+            ),
+
+            "success_metrics": list(
+                texts[
+                    "metric_options"
+                ]
+            ),
+        }
+
+    def _scoring_details(
+        self,
+        packet: ProjectContextPacketV3,
+    ) -> Dict[str, Any]:
+        """
+        Conserve les anciennes clés de scoring.
+
+        Il n'existe désormais qu'une seule source de vérité :
+        ContextConfidenceGate.
+        """
+        confidence = (
+            packet.confidence
+        )
+
+        return {
+            "source": (
+                "context_confidence_gate_v1"
+            ),
+
+            "schema_version": (
+                packet.schema_version
+            ),
+
+            "raw_score": (
+                confidence.score
+            ),
+
+            "penalty": 0.0,
+
+            "final_score": (
+                confidence.score
+            ),
+
+            "status": (
+                confidence.status.value
+            ),
+
+            "ready_threshold": (
+                context_confidence_gate
+                .policy
+                .ready_score
+            ),
+
+            "cautious_threshold": (
+                context_confidence_gate
+                .policy
+                .cautious_score
+            ),
+
+            "clarification_threshold": (
+                context_confidence_gate
+                .policy
+                .clarification_score
+            ),
+
+            "missing_count": len(
+                confidence
+                .missing_fields
+            ),
+
+            "ambiguous_count": len(
+                confidence
+                .ambiguous_fields
+            ),
+
+            "blocker_count": len(
+                confidence.blockers
+            ),
+
+            "explicit_actor_count": sum(
+                actor.is_explicit
+                for actor
+                in packet.actors
+            ),
+
+            "workflow_count": len(
+                packet
+                .priority_workflows
+            ),
+
+            "context_only": True,
+
+            "market_validation_included": (
+                False
+            ),
+        }
+
+    def _recommendation(
+        self,
+        *,
+        status: ContextReadinessStatus,
+        language: str,
+        blockers: Sequence[str],
+        ambiguous_fields: Sequence[str],
+    ) -> str:
+        """
+        Produit une recommandation utilisateur.
+        """
+        texts = self._texts(
+            language
+        )
+
+        if (
+            status
+            == ContextReadinessStatus.READY
+        ):
+            return texts[
+                "recommendation_ready"
+            ]
+
+        if (
+            status
+            == ContextReadinessStatus
+            .READY_CAUTIOUS
+        ):
+            return texts[
+                "recommendation_cautious"
+            ]
+
+        fields = unique_texts(
+            [
+                *blockers,
+                *ambiguous_fields,
+            ]
+        )
+
+        suffix = (
+            (
+                f" {texts['fields_label']}: "
+                f"{', '.join(fields)}."
+            )
+            if fields
+            else ""
+        )
+
+        return (
+            texts[
+                "recommendation_blocked"
+            ]
+            + suffix
+        )
+
+    def _checklist_labels(
+        self,
+        language: str,
+    ) -> List[tuple[str, str]]:
+        return list(
+            self._texts(
+                language
+            )["checklist"]
+        )
+
+    def _texts(
+        self,
+        language: str,
+    ) -> Dict[str, Any]:
+        """
+        Textes frontend et suggestions dans
+        la langue de l'analyse.
+        """
         if language == "en":
-            base = {
-                "target_region": [
+            return {
+                "assumption_business_model": (
+                    "The revenue model is not confirmed "
+                    "and must be validated."
+                ),
+
+                "assumption_target_region": (
+                    "The launch region is not confirmed "
+                    "and must not be inferred."
+                ),
+
+                "assumption_mvp_scope": (
+                    "The first testable scope remains "
+                    "to be defined."
+                ),
+
+                "assumption_success_metrics": (
+                    "The pilot success metrics remain "
+                    "to be defined."
+                ),
+
+                "recommendation_ready": (
+                    "The project context is complete "
+                    "enough to run the agents. Market "
+                    "evidence must still be verified "
+                    "separately."
+                ),
+
+                "recommendation_cautious": (
+                    "The analysis may start cautiously. "
+                    "Remaining ambiguities must stay "
+                    "explicit and must not be presented "
+                    "as facts."
+                ),
+
+                "recommendation_blocked": (
+                    "Complete the blocking context fields "
+                    "before starting the market and "
+                    "strategy analysis."
+                ),
+
+                "fields_label": "Fields",
+
+                "regions": [
                     "Tunisia",
                     "North Africa",
                     "France",
                     "Europe",
                     "Global",
                 ],
-                "business_model": [
-                    "Monthly subscription",
-                    "Freemium",
-                    "Commission",
-                    "Direct sale",
-                    "Rental",
-                    "Service-based model",
-                    "B2B SaaS",
+
+                "models_hardware": [
+                    (
+                        "Hardware sale + "
+                        "software subscription"
+                    ),
+                    (
+                        "Equipment rental + "
+                        "maintenance"
+                    ),
                 ],
-                "mvp_scope": [
-                    "One target user",
-                    "One core feature",
-                    "One measurable result",
-                    "Manual pilot before automation",
-                    "Landing page + interviews",
-                    "Clickable prototype",
+
+                "models_marketplace": [
+                    "Commission per transaction",
+                    "Provider subscription",
+                ],
+
+                "models_saas": [
+                    (
+                        "Monthly subscription "
+                        "per organization"
+                    ),
+                    "Subscription per user",
+                    "Freemium + paid plans",
+                ],
+
+                "models_generic": [
+                    "Direct sale",
+                    "Usage-based pricing",
+                    "Professional services",
+                ],
+
+                "mvp_options": [
+                    "One target segment",
+                    "One end-to-end workflow",
+                    "One measurable outcome",
+                    "One launch region",
+                    (
+                        "A manual pilot before "
+                        "automation"
+                    ),
+                ],
+
+                "metric_options": [
+                    "Task completion rate",
+                    "Time saved",
+                    "Pilot retention",
+                    "Error reduction",
+                    "Willingness to pay",
+                ],
+
+                "checklist": [
+                    (
+                        "project_name",
+                        "Project name is clear",
+                    ),
+                    (
+                        "problem",
+                        "The main problem is specific",
+                    ),
+                    (
+                        "solution",
+                        (
+                            "The solution mechanism "
+                            "is concrete"
+                        ),
+                    ),
+                    (
+                        "actors",
+                        (
+                            "Users, buyers, and operators "
+                            "are identified"
+                        ),
+                    ),
+                    (
+                        "priority_workflow",
+                        (
+                            "The main workflow "
+                            "is actionable"
+                        ),
+                    ),
+                    (
+                        "target_region",
+                        (
+                            "The launch region "
+                            "is defined"
+                        ),
+                    ),
+                    (
+                        "project_archetype",
+                        (
+                            "The project archetype "
+                            "is specific"
+                        ),
+                    ),
+                    (
+                        "business_model",
+                        (
+                            "The business model "
+                            "is explicit"
+                        ),
+                    ),
+                    (
+                        "mvp_scope",
+                        (
+                            "The MVP scope is separated "
+                            "from the workflow"
+                        ),
+                    ),
+                    (
+                        "constraints",
+                        (
+                            "The main constraints "
+                            "are listed"
+                        ),
+                    ),
+                    (
+                        "success_metrics",
+                        (
+                            "Success metrics "
+                            "are measurable"
+                        ),
+                    ),
                 ],
             }
 
-            if "edtech" in sector or "hrtech" in sector:
-                base["target_users"] = [
-                    "Small training centers",
-                    "Independent instructors",
-                    "Language teachers",
-                    "Coding bootcamps",
-                    "Professional training providers",
-                    "Learners needing certificates",
-                ]
-            elif "health" in sector or "med" in sector:
-                base["target_users"] = [
-                    "Patients",
-                    "Doctors",
-                    "Private clinics",
-                    "Medical offices",
-                    "Receptionists",
-                    "Healthcare administrators",
-                ]
-            elif "agri" in sector or "robot" in sector:
-                base["target_users"] = [
-                    "Small greenhouse owners",
-                    "Farmers using plastic tunnels",
-                    "Agricultural technicians",
-                    "Nurseries",
-                    "Agricultural cooperatives",
-                ]
-            else:
-                base["target_users"] = [
-                    "Small businesses",
-                    "Freelancers",
-                    "Students",
-                    "Professionals",
-                    "Local organizations",
-                    "End customers",
-                ]
+        if language == "ar":
+            return {
+                "assumption_business_model": (
+                    "نموذج الإيرادات غير مؤكد "
+                    "ويجب التحقق منه."
+                ),
 
-            return base
+                "assumption_target_region": (
+                    "منطقة الإطلاق غير مؤكدة "
+                    "ولا يجب افتراضها."
+                ),
 
-        base = {
-            "target_region": [
+                "assumption_mvp_scope": (
+                    "لا يزال نطاق أول نسخة قابلة "
+                    "للاختبار بحاجة إلى تحديد."
+                ),
+
+                "assumption_success_metrics": (
+                    "لا تزال مؤشرات نجاح التجربة "
+                    "بحاجة إلى تحديد."
+                ),
+
+                "recommendation_ready": (
+                    "سياق المشروع مكتمل بما يكفي "
+                    "لتشغيل وكلاء التحليل، لكن يجب "
+                    "التحقق من أدلة السوق بشكل منفصل."
+                ),
+
+                "recommendation_cautious": (
+                    "يمكن بدء التحليل بحذر، مع إبقاء "
+                    "النقاط الغامضة واضحة وعدم عرضها "
+                    "كحقائق."
+                ),
+
+                "recommendation_blocked": (
+                    "يجب استكمال معلومات السياق "
+                    "الأساسية قبل بدء تحليل السوق "
+                    "والاستراتيجية."
+                ),
+
+                "fields_label": "الحقول",
+
+                "regions": [
+                    "تونس",
+                    "شمال أفريقيا",
+                    "فرنسا",
+                    "أوروبا",
+                    "السوق العالمي",
+                ],
+
+                "models_hardware": [
+                    (
+                        "بيع الجهاز مع "
+                        "اشتراك برمجي"
+                    ),
+                    (
+                        "تأجير الجهاز مع "
+                        "الصيانة"
+                    ),
+                ],
+
+                "models_marketplace": [
+                    "عمولة على كل معاملة",
+                    "اشتراك لمقدمي الخدمة",
+                ],
+
+                "models_saas": [
+                    "اشتراك شهري للمؤسسة",
+                    "اشتراك لكل مستخدم",
+                    (
+                        "نسخة مجانية مع "
+                        "خطط مدفوعة"
+                    ),
+                ],
+
+                "models_generic": [
+                    "بيع مباشر",
+                    "تسعير حسب الاستخدام",
+                    "خدمات مهنية",
+                ],
+
+                "mvp_options": [
+                    "شريحة مستخدمين واحدة",
+                    (
+                        "مسار استخدام رئيسي "
+                        "واحد"
+                    ),
+                    (
+                        "نتيجة واحدة قابلة "
+                        "للقياس"
+                    ),
+                    "منطقة إطلاق واحدة",
+                    (
+                        "تجربة يدوية قبل "
+                        "الأتمتة"
+                    ),
+                ],
+
+                "metric_options": [
+                    "نسبة إكمال المهمة",
+                    "الوقت الموفر",
+                    "استمرار مستخدمي التجربة",
+                    "انخفاض الأخطاء",
+                    "الاستعداد للدفع",
+                ],
+
+                "checklist": [
+                    (
+                        "project_name",
+                        "اسم المشروع واضح",
+                    ),
+                    (
+                        "problem",
+                        (
+                            "المشكلة الرئيسية "
+                            "محددة"
+                        ),
+                    ),
+                    (
+                        "solution",
+                        "آلية الحل واضحة",
+                    ),
+                    (
+                        "actors",
+                        (
+                            "المستخدمون والمشترون "
+                            "والمشغلون محددون"
+                        ),
+                    ),
+                    (
+                        "priority_workflow",
+                        (
+                            "مسار الاستخدام الرئيسي "
+                            "قابل للتنفيذ"
+                        ),
+                    ),
+                    (
+                        "target_region",
+                        "منطقة الإطلاق محددة",
+                    ),
+                    (
+                        "project_archetype",
+                        "نوع المشروع محدد",
+                    ),
+                    (
+                        "business_model",
+                        "نموذج الإيرادات واضح",
+                    ),
+                    (
+                        "mvp_scope",
+                        (
+                            "نطاق النسخة الأولى "
+                            "منفصل عن مسار الاستخدام"
+                        ),
+                    ),
+                    (
+                        "constraints",
+                        "القيود الرئيسية محددة",
+                    ),
+                    (
+                        "success_metrics",
+                        (
+                            "مؤشرات النجاح "
+                            "قابلة للقياس"
+                        ),
+                    ),
+                ],
+            }
+
+        return {
+            "assumption_business_model": (
+                "Le modèle économique n’est pas "
+                "confirmé et doit être validé."
+            ),
+
+            "assumption_target_region": (
+                "La région de lancement n’est pas "
+                "confirmée et ne doit pas être déduite."
+            ),
+
+            "assumption_mvp_scope": (
+                "Le périmètre de la première version "
+                "testable reste à définir."
+            ),
+
+            "assumption_success_metrics": (
+                "Les indicateurs de succès du pilote "
+                "restent à définir."
+            ),
+
+            "recommendation_ready": (
+                "Le contexte du projet est suffisamment "
+                "complet pour lancer les agents. Les "
+                "preuves marché restent à vérifier "
+                "séparément."
+            ),
+
+            "recommendation_cautious": (
+                "L’analyse peut commencer avec prudence. "
+                "Les ambiguïtés restantes doivent rester "
+                "explicites et ne pas être présentées "
+                "comme des faits."
+            ),
+
+            "recommendation_blocked": (
+                "Complétez les informations de contexte "
+                "bloquantes avant de lancer l’analyse "
+                "marché et stratégique."
+            ),
+
+            "fields_label": (
+                "Champs concernés"
+            ),
+
+            "regions": [
                 "Tunisie",
                 "Afrique du Nord",
                 "France",
                 "Europe",
                 "Global",
             ],
-            "business_model": [
-                "Abonnement mensuel",
-                "Freemium",
-                "Commission",
-                "Vente directe",
-                "Location",
-                "Service à la demande",
-                "SaaS B2B",
+
+            "models_hardware": [
+                (
+                    "Vente du matériel + "
+                    "abonnement logiciel"
+                ),
+                (
+                    "Location du matériel + "
+                    "maintenance"
+                ),
             ],
-            "mvp_scope": [
-                "Une seule cible",
-                "Une seule fonctionnalité principale",
-                "Un seul résultat mesurable",
-                "Pilote manuel avant automatisation",
-                "Landing page + interviews",
-                "Prototype cliquable",
+
+            "models_marketplace": [
+                "Commission par transaction",
+                "Abonnement des prestataires",
+            ],
+
+            "models_saas": [
+                (
+                    "Abonnement mensuel "
+                    "par organisation"
+                ),
+                "Abonnement par utilisateur",
+                (
+                    "Freemium avec "
+                    "plans payants"
+                ),
+            ],
+
+            "models_generic": [
+                "Vente directe",
+                "Paiement à l’usage",
+                "Services professionnels",
+            ],
+
+            "mvp_options": [
+                "Un seul segment cible",
+                (
+                    "Un seul workflow "
+                    "de bout en bout"
+                ),
+                (
+                    "Un seul résultat "
+                    "mesurable"
+                ),
+                (
+                    "Une seule région "
+                    "de lancement"
+                ),
+                (
+                    "Un pilote manuel "
+                    "avant automatisation"
+                ),
+            ],
+
+            "metric_options": [
+                (
+                    "Taux d’accomplissement "
+                    "de la tâche"
+                ),
+                "Temps économisé",
+                (
+                    "Rétention pendant "
+                    "le pilote"
+                ),
+                "Réduction des erreurs",
+                "Volonté de payer",
+            ],
+
+            "checklist": [
+                (
+                    "project_name",
+                    (
+                        "Le nom du projet "
+                        "est clair"
+                    ),
+                ),
+                (
+                    "problem",
+                    (
+                        "Le problème principal "
+                        "est précis"
+                    ),
+                ),
+                (
+                    "solution",
+                    (
+                        "Le mécanisme de solution "
+                        "est concret"
+                    ),
+                ),
+                (
+                    "actors",
+                    (
+                        "Les utilisateurs, acheteurs "
+                        "et opérateurs sont identifiés"
+                    ),
+                ),
+                (
+                    "priority_workflow",
+                    (
+                        "Le workflow principal "
+                        "est actionnable"
+                    ),
+                ),
+                (
+                    "target_region",
+                    (
+                        "La région de lancement "
+                        "est définie"
+                    ),
+                ),
+                (
+                    "project_archetype",
+                    (
+                        "L’archétype du projet "
+                        "est spécifique"
+                    ),
+                ),
+                (
+                    "business_model",
+                    (
+                        "Le modèle économique "
+                        "est explicite"
+                    ),
+                ),
+                (
+                    "mvp_scope",
+                    (
+                        "Le MVP est séparé "
+                        "du workflow principal"
+                    ),
+                ),
+                (
+                    "constraints",
+                    (
+                        "Les contraintes principales "
+                        "sont indiquées"
+                    ),
+                ),
+                (
+                    "success_metrics",
+                    (
+                        "Les indicateurs de succès "
+                        "sont mesurables"
+                    ),
+                ),
             ],
         }
 
-        if "edtech" in sector or "hrtech" in sector:
-            base["target_users"] = [
-                "Petits centres de formation",
-                "Formateurs indépendants",
-                "Professeurs de langues",
-                "Bootcamps de programmation",
-                "Organismes de formation professionnelle",
-                "Apprenants ayant besoin de certificats",
-            ]
-        elif "health" in sector or "med" in sector or "santé" in sector or "sante" in sector:
-            base["target_users"] = [
-                "Patients",
-                "Médecins",
-                "Cliniques privées",
-                "Cabinets médicaux",
-                "Secrétaires médicales",
-                "Administrateurs de santé",
-            ]
-        elif "agri" in sector or "robot" in sector:
-            base["target_users"] = [
-                "Propriétaires de petites serres",
-                "Agriculteurs avec tunnels plastiques",
-                "Techniciens agricoles",
-                "Pépinières",
-                "Coopératives agricoles",
-            ]
-        else:
-            base["target_users"] = [
-                "Petites entreprises",
-                "Freelances",
-                "Étudiants",
-                "Professionnels",
-                "Organisations locales",
-                "Clients finaux",
-            ]
 
-        return base
-
-    def _assumptions(
-        self,
-        *,
-        detected: Dict[str, Any],
-        missing_fields: List[str],
-        language: str,
-    ) -> List[str]:
-        assumptions: List[str] = []
-
-        if "target_region" in missing_fields or not detected.get("target_region"):
-            assumptions.append(
-                "The launch region is assumed from the project settings and must be confirmed."
-                if language == "en"
-                else "La région de lancement est supposée depuis les paramètres du projet et doit être confirmée."
-            )
-
-        if "business_model" in missing_fields or not detected.get("business_model"):
-            assumptions.append(
-                "The business model is not fully validated and must be tested with target users."
-                if language == "en"
-                else "Le modèle économique n’est pas entièrement validé et doit être testé avec les utilisateurs cibles."
-            )
-
-        if "mvp_scope" in missing_fields or not detected.get("mvp_scope"):
-            assumptions.append(
-                "The MVP should be reduced to one target, one pain point and one measurable result."
-                if language == "en"
-                else "Le MVP doit être réduit à une cible, un problème et un résultat mesurable."
-            )
-
-        return assumptions
-
-    def _recommendation(
-        self,
-        *,
-        score: float,
-        ready_for_agents: bool,
-        missing_fields: List[str],
-        ambiguous_fields: List[str],
-        language: str,
-    ) -> str:
-        if language == "en":
-            if ready_for_agents:
-                if ambiguous_fields:
-                    return (
-                        "The idea is clear enough to start the full analysis. "
-                        "Some points remain ambiguous and should be listed as assumptions or limitations."
-                    )
-
-                return "The idea is clear enough to start the full analysis."
-
-            return (
-                "The idea is not clear enough for a reliable full analysis. "
-                "Ask the user to complete the missing fields before launching the agents."
-            )
-
-        if ready_for_agents:
-            if ambiguous_fields:
-                return (
-                    "L’idée est assez claire pour lancer l’analyse complète. "
-                    "Certains points restent ambigus et doivent être listés comme hypothèses ou limites."
-                )
-
-            return "L’idée est assez claire pour lancer l’analyse complète."
-
-        return (
-            "L’idée n’est pas assez claire pour une analyse fiable. "
-            "Il faut demander à l’utilisateur de compléter les informations manquantes avant de lancer les agents."
-        )
-
-    # ========================================================
-    # Extractors
-    # ========================================================
-
-    def _extract_target_users(
-        self,
-        *,
-        description: str,
-        project_context: Dict[str, Any],
-    ) -> List[str]:
-        explicit = self._safe_list(project_context.get("target_users"))
-
-        if explicit:
-            return explicit[:8]
-
-        patterns = [
-            r"(?:target users are|first target users are|target users include)\s+(.+?)(?:\.|\n|$)",
-            r"(?:users are|customers are|clients are)\s+(.+?)(?:\.|\n|$)",
-            r"(?:les utilisateurs cibles sont|les premiers utilisateurs sont|les clients cibles sont)\s+(.+?)(?:\.|\n|$)",
-            r"(?:la cible est|les cibles sont)\s+(.+?)(?:\.|\n|$)",
-        ]
-
-        for pattern in patterns:
-            match = re.search(pattern, description, flags=re.IGNORECASE)
-
-            if not match:
-                continue
-
-            extracted = match.group(1)
-            users = self._split_items(extracted)
-
-            if users:
-                return users[:8]
-
-        sentence = self._extract_sentence_by_hints(
-            text=description,
-            hints=self.TARGET_HINTS,
-        )
-
-        return self._split_items(sentence)[:6]
-
-    def _extract_use_case(
-        self,
-        *,
-        description: str,
-        solution: str,
-        project_context: Dict[str, Any],
-    ) -> str:
-        explicit = self._clean_text(
-            project_context.get("main_use_case")
-            or project_context.get("use_case")
-        )
-
-        if explicit:
-            return explicit
-
-        if solution:
-            return solution
-
-        return self._extract_sentence_by_hints(
-            text=description,
-            hints=self.SOLUTION_HINTS,
-        )
-
-    def _extract_sentence_by_hints(self, text: str, hints: set[str]) -> str:
-        text = self._clean_text(text)
-
-        if not text:
-            return ""
-
-        sentences = re.split(r"(?<=[.!?])\s+|\n+", text)
-
-        best_sentence = ""
-        best_score = 0
-
-        for sentence in sentences:
-            clean = self._clean_text(sentence)
-            lower = clean.lower()
-
-            if len(clean) < 20:
-                continue
-
-            score = sum(1 for hint in hints if hint in lower)
-
-            if score > best_score:
-                best_score = score
-                best_sentence = clean
-
-        return best_sentence if best_score > 0 else ""
-
-    # ========================================================
-    # Helpers
-    # ========================================================
-
-    def _contains_any(self, text: str, hints: set[str]) -> bool:
-        lower = text.lower()
-        return any(hint in lower for hint in hints)
-
-    def _split_items(self, value: str) -> List[str]:
-        clean = self._clean_text(value)
-
-        if not clean:
-            return []
-
-        parts = re.split(r",|;|\band\b|\bet\b|\+|/", clean, flags=re.IGNORECASE)
-
-        result = []
-
-        for part in parts:
-            item = self._clean_text(part)
-
-            if len(item) >= 3:
-                result.append(item)
-
-        return self._unique(result)
-
-    def _safe_join(self, value: Any) -> str:
-        return " ".join(self._safe_list(value))
-
-    def _safe_list(self, value: Any) -> List[str]:
-        if value is None:
-            return []
-
-        if isinstance(value, list):
-            result = []
-
-            for item in value:
-                if item is None:
-                    continue
-
-                clean = self._clean_text(str(item))
-
-                if clean:
-                    result.append(clean)
-
-            return result
-
-        if isinstance(value, str):
-            clean = self._clean_text(value)
-
-            if not clean:
-                return []
-
-            if "," in clean or ";" in clean:
-                return self._split_items(clean)
-
-            return [clean]
-
-        clean = self._clean_text(str(value))
-        return [clean] if clean else []
-
-    def _clean_text(self, value: Any) -> str:
-        if value is None:
-            return ""
-
-        text = str(value)
-        text = re.sub(r"\s+", " ", text).strip()
-
-        return text
-
-    def _unique(self, values: List[str]) -> List[str]:
-        result: List[str] = []
-        seen = set()
-
-        for value in values:
-            clean = self._clean_text(value)
-
-            if not clean:
-                continue
-
-            key = clean.lower()
-
-            if key in seen:
-                continue
-
-            seen.add(key)
-            result.append(clean)
-
-        return result
-
-
-idea_readiness_checker = IdeaReadinessChecker()
+idea_readiness_checker = (
+    IdeaReadinessChecker()
+)

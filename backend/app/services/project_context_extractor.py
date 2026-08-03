@@ -440,6 +440,7 @@ class ProjectContextExtractor:
             secondary_archetypes,
         ) = self._resolve_archetypes(
             description=description,
+            industry=industry,
             structured=structured,
         )
 
@@ -1367,15 +1368,29 @@ class ProjectContextExtractor:
         self,
         *,
         description: str,
+        industry: str,
         structured: Dict[str, Any],
     ) -> Tuple[
         str,
         List[str],
     ]:
         """
-        Résout un archétype principal et plusieurs archétypes secondaires.
+        Résout l'archétype principal et les archétypes secondaires.
 
-        Le secteur n'est pas utilisé comme archétype.
+        Règles universelles :
+
+        1. Les preuves explicites présentes dans la description
+           et le secteur fourni par l'utilisateur sont prioritaires.
+
+        2. L'ancien ProjectIntelligenceLayer fournit seulement
+           un signal secondaire. Il ne peut pas écraser une preuve
+           explicite plus forte.
+
+        3. Une capacité IA intégrée à un robot ne transforme pas
+           automatiquement le projet en simple outil analytics/IA.
+
+        4. Un projet peut conserver plusieurs archétypes :
+           hardware + SaaS + IA, marketplace + SaaS, etc.
         """
         structured_primary = clean_text(
             structured.get(
@@ -1383,129 +1398,677 @@ class ProjectContextExtractor:
             )
         )
 
-        key = comparison_key(
-            description
+        structured_secondary = unique_texts(
+            self._listify(
+                structured.get(
+                    "secondary_archetypes"
+                )
+            )
         )
 
-        scores = {
-            "hardware_iot": 0,
-            "b2b_workflow_saas": 0,
-            "two_sided_marketplace": 0,
-            "analytics_ai_tool": 0,
-            "ecommerce": 0,
-            "regulated_service": 0,
+        structured_sector_terms = unique_texts(
+            self._listify(
+                structured.get(
+                    "sector_tags"
+                )
+            )
+        )
+
+        structured_solution_terms = unique_texts(
+            [
+                clean_text(
+                    structured.get(
+                        "solution"
+                    )
+                ),
+                clean_text(
+                    structured.get(
+                        "solution_type"
+                    )
+                ),
+                clean_text(
+                    structured.get(
+                        "delivery_mode"
+                    )
+                ),
+            ]
+        )
+
+        searchable_text = clean_text(
+            " ".join(
+                [
+                    industry,
+                    description,
+                    *structured_sector_terms,
+                    *structured_solution_terms,
+                ]
+            )
+        )
+
+        key = comparison_key(
+            searchable_text
+        )
+
+        known_archetypes = (
+            "hardware_iot",
+            "b2b_workflow_saas",
+            "two_sided_marketplace",
+            "analytics_ai_tool",
+            "ecommerce",
+            "regulated_service",
+            "professional_service",
+            "content_community",
+        )
+
+        evidence_scores: Dict[
+            str,
+            float,
+        ] = {
+            archetype: 0.0
+            for archetype in known_archetypes
         }
 
-        for term in (
-            "robot",
-            "capteur",
-            "sensor",
-            "iot",
-            "hardware",
-            "device",
-        ):
-            if term in key:
-                scores[
-                    "hardware_iot"
-                ] += 3
+        final_scores: Dict[
+            str,
+            float,
+        ] = {
+            archetype: 0.0
+            for archetype in known_archetypes
+        }
 
-        for term in (
-            "abonnement",
-            "subscription",
-            "dashboard",
-            "saas",
-            "logiciel",
-        ):
-            if term in key:
-                scores[
-                    "b2b_workflow_saas"
-                ] += 2
+        matched_terms: Dict[
+            str,
+            List[str],
+        ] = {
+            archetype: []
+            for archetype in known_archetypes
+        }
 
-        for term in (
-            "marketplace",
-            "mise en relation",
-            "commission",
-            "deux cotes",
-        ):
-            if term in key:
-                scores[
-                    "two_sided_marketplace"
-                ] += 3
-
-        for term in (
-            "intelligence artificielle",
-            "machine learning",
-            "computer vision",
-            "analytics",
-            "classification",
-        ):
-            if term in key:
-                scores[
-                    "analytics_ai_tool"
-                ] += 2
-
-        for term in (
-            "boutique",
-            "e commerce",
-            "panier",
-            "produit en ligne",
-        ):
-            if term in key:
-                scores[
-                    "ecommerce"
-                ] += 3
-
-        for term in (
-            "patient",
-            "medical",
-            "medecin",
-            "banque",
-            "credit",
-            "assurance",
-            "juridique",
-        ):
-            if term in key:
-                scores[
-                    "regulated_service"
-                ] += 2
-
-        ranked = [
-            name
-            for name, score
-            in sorted(
-                scores.items(),
-                key=lambda item: (
-                    item[1]
-                ),
-                reverse=True,
+        def add_evidence(
+            archetype: str,
+            term: str,
+            weight: float,
+        ) -> None:
+            normalized_term = comparison_key(
+                term
             )
-            if score > 0
-        ]
+
+            if (
+                not normalized_term
+                or normalized_term not in key
+            ):
+                return
+
+            evidence_scores.setdefault(
+                archetype,
+                0.0,
+            )
+
+            final_scores.setdefault(
+                archetype,
+                0.0,
+            )
+
+            matched_terms.setdefault(
+                archetype,
+                [],
+            )
+
+            evidence_scores[
+                archetype
+            ] += weight
+
+            final_scores[
+                archetype
+            ] += weight
+
+            matched_terms[
+                archetype
+            ].append(
+                term
+            )
+
+        # ----------------------------------------------------------
+        # Hardware / IoT
+        # ----------------------------------------------------------
+
+        for term, weight in (
+            ("robot autonome", 5.0),
+            ("robot mobile", 4.0),
+            ("robot", 3.0),
+            ("hardware", 3.0),
+            ("iot", 3.0),
+            ("objet connecté", 3.0),
+            ("device", 2.5),
+            ("équipement", 2.0),
+            ("equipment", 2.0),
+            ("capteur", 2.0),
+            ("capteurs", 2.0),
+            ("sensor", 2.0),
+            ("sensors", 2.0),
+            ("caméra", 1.5),
+            ("camera", 1.5),
+            ("batterie", 1.5),
+            ("battery", 1.5),
+            ("maintenance matérielle", 1.5),
+            ("fabrication", 1.5),
+            ("manufacturing", 1.5),
+        ):
+            add_evidence(
+                "hardware_iot",
+                term,
+                weight,
+            )
+
+        # ----------------------------------------------------------
+        # SaaS B2B / outil de workflow
+        # ----------------------------------------------------------
+
+        for term, weight in (
+            ("saas b2b", 5.0),
+            ("logiciel saas", 4.0),
+            ("b2b saas", 4.0),
+            ("saas", 3.0),
+            ("logiciel", 2.0),
+            ("software", 2.0),
+            ("tableau de bord", 2.0),
+            ("dashboard", 2.0),
+            ("abonnement mensuel", 2.0),
+            ("subscription", 2.0),
+            ("gestion des équipes", 2.0),
+            ("gestion rh", 2.0),
+            ("workflow", 1.5),
+            ("par organisation", 1.5),
+            ("par entreprise", 1.5),
+            ("par site industriel", 1.5),
+        ):
+            add_evidence(
+                "b2b_workflow_saas",
+                term,
+                weight,
+            )
+
+        # ----------------------------------------------------------
+        # Marketplace à deux côtés
+        # ----------------------------------------------------------
+
+        for term, weight in (
+            ("marketplace", 5.0),
+            ("place de marché", 5.0),
+            ("mise en relation", 4.0),
+            ("mettre en relation", 4.0),
+            ("deux côtés", 3.0),
+            ("two sided", 3.0),
+            ("prestataires", 2.0),
+            ("providers", 2.0),
+            ("chauffeurs", 2.0),
+            ("vendeurs", 2.0),
+            ("acheteurs", 2.0),
+            ("commission par transaction", 3.0),
+            ("commission par course", 3.0),
+            ("commission par réservation", 3.0),
+            ("commission", 1.5),
+        ):
+            add_evidence(
+                "two_sided_marketplace",
+                term,
+                weight,
+            )
+
+        # ----------------------------------------------------------
+        # IA / analytics
+        # ----------------------------------------------------------
+
+        for term, weight in (
+            ("outil ia", 4.0),
+            ("ai tool", 4.0),
+            ("plateforme ia", 3.5),
+            ("intelligence artificielle", 2.0),
+            ("machine learning", 2.0),
+            ("computer vision", 2.0),
+            ("vision par ordinateur", 2.0),
+            ("analytics", 2.0),
+            ("analyse prédictive", 2.0),
+            ("predictive analytics", 2.0),
+            ("classification automatique", 1.5),
+            ("modèle d’intelligence artificielle", 1.5),
+            ("modele d intelligence artificielle", 1.5),
+        ):
+            add_evidence(
+                "analytics_ai_tool",
+                term,
+                weight,
+            )
+
+        # ----------------------------------------------------------
+        # E-commerce
+        # ----------------------------------------------------------
+
+        for term, weight in (
+            ("e commerce", 5.0),
+            ("commerce électronique", 5.0),
+            ("boutique en ligne", 4.0),
+            ("online store", 4.0),
+            ("panier", 2.0),
+            ("catalogue produits", 2.0),
+            ("catalogue de produits", 2.0),
+            ("commande en ligne", 2.0),
+            ("paiement en ligne", 2.0),
+            ("livraison", 1.5),
+        ):
+            add_evidence(
+                "ecommerce",
+                term,
+                weight,
+            )
+
+        # ----------------------------------------------------------
+        # Produit ou service réglementé
+        # ----------------------------------------------------------
+
+        for term, weight in (
+            ("télémédecine", 5.0),
+            ("telemedecine", 5.0),
+            ("diagnostic médical", 4.0),
+            ("medical diagnosis", 4.0),
+            ("patient", 2.0),
+            ("patients", 2.0),
+            ("médecin", 2.0),
+            ("medecin", 2.0),
+            ("clinique", 2.0),
+            ("banque", 2.5),
+            ("banking", 2.5),
+            ("crédit", 2.5),
+            ("credit", 2.5),
+            ("assurance", 2.5),
+            ("insurance", 2.5),
+            ("juridique", 2.0),
+            ("legal", 2.0),
+            ("réglementé", 2.0),
+            ("regulated", 2.0),
+        ):
+            add_evidence(
+                "regulated_service",
+                term,
+                weight,
+            )
+
+        # ----------------------------------------------------------
+        # Service professionnel
+        # ----------------------------------------------------------
+
+        for term, weight in (
+            ("service professionnel", 4.0),
+            ("professional service", 4.0),
+            ("cabinet", 2.0),
+            ("consultant", 2.0),
+            ("consulting", 2.0),
+            ("agence", 2.0),
+            ("prestation", 2.0),
+            ("accompagnement", 1.5),
+            ("audit", 1.5),
+        ):
+            add_evidence(
+                "professional_service",
+                term,
+                weight,
+            )
+
+        # ----------------------------------------------------------
+        # Communauté / contenu
+        # ----------------------------------------------------------
+
+        for term, weight in (
+            ("communauté", 4.0),
+            ("communaute", 4.0),
+            ("community", 4.0),
+            ("créateurs de contenu", 3.0),
+            ("createurs de contenu", 3.0),
+            ("social network", 3.0),
+            ("réseau social", 3.0),
+            ("publication de contenu", 2.0),
+            ("membres", 1.5),
+            ("abonnés", 1.5),
+        ):
+            add_evidence(
+                "content_community",
+                term,
+                weight,
+            )
+
+        # ----------------------------------------------------------
+        # Bonus de cohérence entre plusieurs signaux
+        # ----------------------------------------------------------
+
+        hardware_terms = {
+            comparison_key(
+                value
+            )
+            for value in matched_terms[
+                "hardware_iot"
+            ]
+        }
+
+        if (
+            comparison_key(
+                "robot"
+            )
+            in hardware_terms
+            and any(
+                comparison_key(
+                    term
+                )
+                in hardware_terms
+                for term in (
+                    "capteur",
+                    "capteurs",
+                    "sensor",
+                    "sensors",
+                    "caméra",
+                    "camera",
+                    "batterie",
+                    "battery",
+                )
+            )
+        ):
+            evidence_scores[
+                "hardware_iot"
+            ] += 3.0
+
+            final_scores[
+                "hardware_iot"
+            ] += 3.0
+
+        marketplace_terms = (
+            matched_terms[
+                "two_sided_marketplace"
+            ]
+        )
+
+        if (
+            len(
+                unique_texts(
+                    marketplace_terms
+                )
+            )
+            >= 2
+        ):
+            evidence_scores[
+                "two_sided_marketplace"
+            ] += 2.0
+
+            final_scores[
+                "two_sided_marketplace"
+            ] += 2.0
+
+        saas_terms = (
+            matched_terms[
+                "b2b_workflow_saas"
+            ]
+        )
+
+        if (
+            any(
+                comparison_key(
+                    term
+                )
+                in {
+                    comparison_key(
+                        "saas"
+                    ),
+                    comparison_key(
+                        "logiciel saas"
+                    ),
+                    comparison_key(
+                        "saas b2b"
+                    ),
+                }
+                for term in saas_terms
+            )
+            and any(
+                comparison_key(
+                    term
+                )
+                in {
+                    comparison_key(
+                        "abonnement mensuel"
+                    ),
+                    comparison_key(
+                        "subscription"
+                    ),
+                    comparison_key(
+                        "par organisation"
+                    ),
+                    comparison_key(
+                        "par entreprise"
+                    ),
+                    comparison_key(
+                        "par site industriel"
+                    ),
+                }
+                for term in saas_terms
+            )
+        ):
+            evidence_scores[
+                "b2b_workflow_saas"
+            ] += 2.0
+
+            final_scores[
+                "b2b_workflow_saas"
+            ] += 2.0
+
+        # ----------------------------------------------------------
+        # Ancienne inférence : simple prior, jamais autorité absolue
+        # ----------------------------------------------------------
+
+        generic_archetype_keys = {
+            comparison_key(
+                value
+            )
+            for value in (
+                "",
+                "generic",
+                "generic digital product",
+                "generic_digital_product",
+                "application",
+                "app",
+                "platform",
+                "plateforme",
+                "startup",
+                "business",
+            )
+        }
+
+        structured_primary_key = comparison_key(
+            structured_primary
+        )
 
         if (
             structured_primary
-            and structured_primary
-            != "generic_digital_product"
+            and structured_primary_key
+            not in generic_archetype_keys
         ):
-            return (
+            final_scores.setdefault(
                 structured_primary,
-                [
-                    item
-                    for item in ranked
-                    if item
-                    != structured_primary
-                ][:3],
+                0.0,
             )
 
-        if ranked:
-            return (
-                ranked[0],
-                ranked[1:4],
+            evidence_scores.setdefault(
+                structured_primary,
+                0.0,
             )
+
+            # Petit prior seulement.
+            final_scores[
+                structured_primary
+            ] += 1.0
+
+        for secondary in structured_secondary:
+            secondary_key = comparison_key(
+                secondary
+            )
+
+            if (
+                not secondary
+                or secondary_key
+                in generic_archetype_keys
+            ):
+                continue
+
+            final_scores.setdefault(
+                secondary,
+                0.0,
+            )
+
+            evidence_scores.setdefault(
+                secondary,
+                0.0,
+            )
+
+            final_scores[
+                secondary
+            ] += 0.40
+
+        # ----------------------------------------------------------
+        # Fallback si aucun signal explicite
+        # ----------------------------------------------------------
+
+        strongest_explicit_score = max(
+            evidence_scores.values(),
+            default=0.0,
+        )
+
+        if strongest_explicit_score <= 0:
+            if (
+                structured_primary
+                and structured_primary_key
+                not in generic_archetype_keys
+            ):
+                secondary_values = unique_texts(
+                    [
+                        *structured_secondary,
+                    ]
+                )
+
+                return (
+                    structured_primary,
+                    [
+                        value
+                        for value
+                        in secondary_values
+                        if comparison_key(
+                            value
+                        )
+                        != structured_primary_key
+                    ][:3],
+                )
+
+            return (
+                "generic_digital_product",
+                [],
+            )
+
+        # ----------------------------------------------------------
+        # Classement déterministe
+        # ----------------------------------------------------------
+
+        tie_break_priority = {
+            "hardware_iot": 0,
+            "two_sided_marketplace": 1,
+            "ecommerce": 2,
+            "regulated_service": 3,
+            "b2b_workflow_saas": 4,
+            "analytics_ai_tool": 5,
+            "professional_service": 6,
+            "content_community": 7,
+        }
+
+        eligible_archetypes = [
+            archetype
+            for archetype, score
+            in final_scores.items()
+            if (
+                score > 0
+                or evidence_scores.get(
+                    archetype,
+                    0.0,
+                ) > 0
+            )
+        ]
+
+        ranked = sorted(
+            eligible_archetypes,
+            key=lambda archetype: (
+                -final_scores.get(
+                    archetype,
+                    0.0,
+                ),
+                -evidence_scores.get(
+                    archetype,
+                    0.0,
+                ),
+                tie_break_priority.get(
+                    archetype,
+                    100,
+                ),
+                archetype,
+            ),
+        )
+
+        primary_archetype = (
+            ranked[0]
+            if ranked
+            else "generic_digital_product"
+        )
+
+        primary_score = final_scores.get(
+            primary_archetype,
+            0.0,
+        )
+
+        secondary_archetypes: List[str] = []
+
+        for candidate in ranked[1:]:
+            candidate_evidence = (
+                evidence_scores.get(
+                    candidate,
+                    0.0,
+                )
+            )
+
+            candidate_score = (
+                final_scores.get(
+                    candidate,
+                    0.0,
+                )
+            )
+
+            # Un secondaire doit disposer d'une vraie preuve
+            # ou représenter une part significative du projet.
+            if (
+                candidate_evidence < 1.5
+                and candidate_score
+                < primary_score * 0.30
+            ):
+                continue
+
+            secondary_archetypes.append(
+                candidate
+            )
+
+            if (
+                len(
+                    secondary_archetypes
+                )
+                >= 3
+            ):
+                break
 
         return (
-            "generic_digital_product",
-            [],
+            primary_archetype,
+            unique_texts(
+                secondary_archetypes
+            ),
         )
 
     def _actor_role(
@@ -2227,7 +2790,7 @@ class ProjectContextExtractor:
             all_models,
             explicit_models,
         )
-        
+
     def _constraints(
         self,
         *,
