@@ -79,7 +79,7 @@ class EvidenceLedger:
         "local_competition": {"competitor_product", "direct_competitor"},
         "pricing": {"pricing", "pricing_signal"},
         "regulation": {"regulation", "regulatory_evidence"},
-        "finance": {"finance", "pricing", "pricing_signal"},
+        "finance": {"finance"},
     }
 
     CORE_CONFIDENCE_CATEGORIES = (
@@ -146,6 +146,41 @@ class EvidenceLedger:
             "lorawan", "connectivite", "connectivité", "wifi", "4g", "5g",
             "telemetrie", "télémétrie",
         },
+    )
+
+    NON_CONFIRMATION_MARKERS = (
+        "non confirmé",
+        "non confirmée",
+        "non confirmés",
+        "non confirmées",
+        "pas confirmé",
+        "pas confirmée",
+        "ne sont pas présentes",
+        "n’est pas vérifiée",
+        "n'est pas vérifiée",
+        "ne sont pas vérifiées",
+        "insufficiently verified",
+        "not confirmed",
+        "not verified",
+        "no compatible evidence",
+        "insufficient evidence",
+        "aucune tendance de marché",
+        "no market trend",
+    )
+
+    CAUTIOUS_SIGNAL_PREFIXES = (
+        "signal à valider",
+        "signal local à valider",
+        "signal secondaire",
+        "signal to validate",
+        "local signal to validate",
+        "secondary market signal",
+    )
+
+    ANALYTICAL_PATH_PREFIXES = (
+        "market_study.market_overview",
+        "market_study.local_context",
+        "market_study.local_feasibility",
     )
 
     def build(self, analysis_data: dict[str, Any]) -> dict[str, Any]:
@@ -492,6 +527,18 @@ class EvidenceLedger:
             ]
 
         claim_text = self._text(spec.value)
+        normalized_claim = self._normalize_semantic_text(claim_text)
+        non_confirmation = any(
+            marker in normalized_claim
+            for marker in (
+                self._normalize_semantic_text(item)
+                for item in self.NON_CONFIRMATION_MARKERS
+            )
+        )
+        cautious_signal = any(
+            normalized_claim.startswith(self._normalize_semantic_text(prefix))
+            for prefix in self.CAUTIOUS_SIGNAL_PREFIXES
+        )
 
         if spec.category == "solution_hypothesis":
             compatible = self._filter_semantically_compatible_sources(
@@ -509,8 +556,47 @@ class EvidenceLedger:
                 strict=False,
             )
 
+        # Global claims require international market evidence with visible
+        # methodology. Local initiatives cannot prove a global trend.
+        if spec.path in {
+            "market_study.global_potential",
+            "market_study.global_market_assessment",
+        }:
+            compatible = [
+                source
+                for source in compatible
+                if str(source.get("region_match") or "").lower()
+                == "international"
+                and str(source.get("source_type") or "").lower()
+                in {"market_article", "official_source", "regulation"}
+                and (
+                    str(source.get("evidence_quality") or "").lower() == "high"
+                    or bool(source.get("methodology_visible"))
+                )
+            ]
+
+        # These are analytical or project-derived narratives, not facts proven
+        # by broad market pages.
+        if spec.path in {
+            "market_study.market_overview",
+            "market_study.local_context",
+        }:
+            compatible = []
+
+        if spec.path == "market_study.local_feasibility":
+            compatible = [
+                source
+                for source in compatible
+                if str(source.get("region_match") or "").lower() == "local"
+            ]
+
+        # Internal financial estimates must never inherit generic market or
+        # pricing sources. Only direct quotes/cost records should be added by a
+        # dedicated financial evidence workflow.
         precise = bool(self.PRECISE_NUMBER_RE.search(claim_text))
         internal_estimate = spec.path.startswith("financial_estimation.")
+        if internal_estimate:
+            compatible = []
 
         if precise and not internal_estimate:
             compatible = [
@@ -522,12 +608,21 @@ class EvidenceLedger:
         source_ids = [self._source_id(source) for source in compatible]
         quality = self._aggregate_evidence_quality(compatible)
 
-        if spec.category == "solution_hypothesis":
+        if non_confirmation:
+            status = "not_confirmed"
+            confidence = "low"
+        elif spec.category == "solution_hypothesis":
             status = "estimated"
             confidence = "low" if not source_ids else "medium"
         elif internal_estimate:
             status = "estimated"
             confidence = "low"
+        elif cautious_signal:
+            status = "estimated"
+            confidence = "low" if not source_ids else quality
+        elif spec.path in self.ANALYTICAL_PATH_PREFIXES:
+            status = "estimated"
+            confidence = "low" if not source_ids else quality
         elif source_ids:
             status = "sourced"
             confidence = quality
@@ -559,21 +654,44 @@ class EvidenceLedger:
                 claim.get("public_text") or claim.get("claim") or ""
             ).strip()
 
-        if (
-            claim
-            and allow_estimated
-            and claim.get("status") == "estimated"
-            and claim.get("source_ids")
-        ):
+        if claim and allow_estimated and claim.get("status") == "estimated":
             text = str(
                 claim.get("public_text") or claim.get("claim") or ""
             ).strip()
             if text and not self.PRECISE_NUMBER_RE.search(text):
-                prefix = (
-                    "Signal à valider : "
-                    if language != "en"
-                    else "Signal to validate: "
-                )
+                path = str(claim.get("path") or "")
+                normalized = self._normalize_semantic_text(text)
+                if any(
+                    normalized.startswith(
+                        self._normalize_semantic_text(prefix)
+                    )
+                    for prefix in self.CAUTIOUS_SIGNAL_PREFIXES
+                ):
+                    return text
+                if path == "market_study.local_context":
+                    prefix = (
+                        "Recommandation : "
+                        if language != "en"
+                        else "Recommendation: "
+                    )
+                elif path == "market_study.local_feasibility":
+                    prefix = (
+                        "Conclusion prudente : "
+                        if language != "en"
+                        else "Cautious conclusion: "
+                    )
+                elif path == "market_study.market_overview":
+                    prefix = (
+                        "Hypothèse à valider : "
+                        if language != "en"
+                        else "Hypothesis to validate: "
+                    )
+                else:
+                    prefix = (
+                        "Signal à valider : "
+                        if language != "en"
+                        else "Signal to validate: "
+                    )
                 return prefix + text
 
         return self._neutral_text(language, neutral_key)
@@ -595,15 +713,23 @@ class EvidenceLedger:
                 result.append(text)
             elif (
                 claim.get("status") == "estimated"
-                and claim.get("source_ids")
                 and not self.PRECISE_NUMBER_RE.search(text)
             ):
-                prefix = (
-                    "Signal à valider : "
-                    if language != "en"
-                    else "Signal to validate: "
-                )
-                result.append(prefix + text)
+                normalized = self._normalize_semantic_text(text)
+                if any(
+                    normalized.startswith(
+                        self._normalize_semantic_text(prefix)
+                    )
+                    for prefix in self.CAUTIOUS_SIGNAL_PREFIXES
+                ):
+                    result.append(text)
+                elif claim.get("source_ids"):
+                    prefix = (
+                        "Signal à valider : "
+                        if language != "en"
+                        else "Signal to validate: "
+                    )
+                    result.append(prefix + text)
         return self._unique(result)
 
     @staticmethod
@@ -739,6 +865,18 @@ class EvidenceLedger:
             or ""
         ).strip().lower()
 
+        if (
+            source_type == "market_article"
+            or source_role == "market_evidence"
+            or canonical == "market_evidence"
+        ):
+            categories = [
+                category
+                for category in categories
+                if str(category).strip().lower()
+                not in {"pricing", "pricing_signal", "finance"}
+            ]
+
         if source.get("is_direct_competitor") or canonical == "direct_competitor":
             categories.extend(["competitor_product", "direct_competitor"])
         if source_type == "adjacent_solution" or canonical == "adjacent_solution":
@@ -760,14 +898,34 @@ class EvidenceLedger:
             or source_role in {"market_evidence", "ecosystem_actor"}
         ):
             categories.extend(["regional_context", "local_market_signal"])
-        if source.get("pricing_found"):
+        if source.get("pricing_found") and source_type in {
+            "pricing_page",
+            "competitor",
+            "adjacent_solution",
+        }:
             categories.append("pricing")
 
         return self._unique(categories)
 
+    @staticmethod
+    def _repair_text_encoding(value: Any) -> str:
+        text = str(value or "")
+        if not any(marker in text for marker in ("├", "ΓÇ", "Ã", "â€")):
+            return text
+        try:
+            repaired = text.encode("cp437").decode("utf-8")
+            if repaired:
+                return repaired
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            pass
+        return text
+
     @classmethod
     def _normalize_semantic_text(cls, value: Any) -> str:
-        raw = unicodedata.normalize("NFKD", str(value or ""))
+        raw = unicodedata.normalize(
+            "NFKD",
+            cls._repair_text_encoding(value),
+        )
         without_accents = "".join(
             character
             for character in raw
@@ -1123,13 +1281,15 @@ class EvidenceLedger:
             return any(str(item or "").strip() for item in value)
         return bool(str(value or "").strip())
 
-    @staticmethod
-    def _text(value: Any) -> str:
+    @classmethod
+    def _text(cls, value: Any) -> str:
         if isinstance(value, (list, tuple, set)):
             return "; ".join(
-                str(item).strip() for item in value if str(item).strip()
+                cls._repair_text_encoding(item).strip()
+                for item in value
+                if str(item).strip()
             )
-        return str(value or "").strip()
+        return cls._repair_text_encoding(value).strip()
 
     @staticmethod
     def _as_list(value: Any) -> list[Any]:

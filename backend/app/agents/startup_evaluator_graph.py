@@ -1391,14 +1391,45 @@ class StartupEvaluatorGraph:
             market_study["local_context"] = local_signal
 
         existing_trends = market_study.get("market_trends") or market_study.get("trends")
-        if missing(existing_trends):
-            market_study["market_trends"] = trend_candidates or [
+
+        def cautious_signal(value: Any) -> bool:
+            normalized = " ".join(str(value or "").casefold().split())
+            prefixes = (
+                "signal à valider",
+                "signal local à valider",
+                "signal secondaire",
+                "signal to validate",
+                "local signal to validate",
+                "secondary market signal",
+            )
+            return any(normalized.startswith(prefix) for prefix in prefixes)
+
+        existing_items = (
+            [item for item in existing_trends if str(item or "").strip()]
+            if isinstance(existing_trends, list)
+            else [existing_trends] if str(existing_trends or "").strip() else []
+        )
+
+        # LLM-generated trends can sound definitive even when the evidence is
+        # weak. Replace them with deterministic, explicitly cautious signals.
+        if trend_candidates and (
+            missing(existing_trends)
+            or not all(cautious_signal(item) for item in existing_items)
+        ):
+            market_study["market_trends"] = trend_candidates
+        elif missing(existing_trends):
+            market_study["market_trends"] = [
                 (
                     "No market trend is sufficiently supported by the retained evidence."
                     if language == "en"
                     else "Aucune tendance de marché n’est suffisamment soutenue par les preuves retenues."
                 )
             ]
+
+        market_study["market_trend_signals"] = list(trend_candidates)
+        market_study["market_trends_status"] = (
+            "signals_to_validate" if trend_candidates else "unverified"
+        )
         market_study["trends"] = list(market_study.get("market_trends") or [])
         market_study["evidence_basis"] = [
             {

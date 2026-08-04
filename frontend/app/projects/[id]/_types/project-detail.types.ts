@@ -127,6 +127,8 @@ export interface MarketStudy {
   target_market?: string;
   target_customers?: TextList;
   market_trends?: string[];
+  market_trend_signals?: string[];
+  market_trends_status?: string;
   customer_segments?: TextList;
   opportunities?: string[];
   risks?: string[];
@@ -440,6 +442,7 @@ export interface PersonaBuilderData {
 }
 
 export interface FactCheckEvidence {
+  display_title?: string;
   title?: string;
   source_title?: string;
   name?: string;
@@ -467,6 +470,8 @@ export interface FactCheckClaim {
   confidence?: string;
   public_confidence?: string;
   evidence?: Array<FactCheckEvidence | string>;
+  consulted_sources?: Array<FactCheckEvidence | string>;
+  evidence_kind?: "supporting" | "consulted_insufficient" | string;
   correction?: string | null;
 }
 

@@ -88,8 +88,7 @@ class FactCheckerAgent:
         "market_demand",
         "market_demand_claim",
         "local_market_signal",
-        "regional_context",
-        "sector_context",
+        "adoption_signal",
     }
     PROBLEM_CATEGORIES = {"problem_context", "workflow_context", "current_alternatives"}
     SOLUTION_CATEGORIES = {
@@ -703,7 +702,15 @@ class FactCheckerAgent:
         language: str,
         fallback_sources: List[Dict[str, Any]] | None = None,
     ) -> List[Dict[str, Any]]:
-        """Convert the canonical claim registry into public fact-check cards."""
+        """Convert the canonical claim registry into public fact-check cards.
+
+        Publication policy:
+        - internal estimates never inherit broad market sources;
+        - non-confirmed claims show consulted sources separately;
+        - recommendations and audit conclusions are not presented as facts;
+        - project-derived market framing is labelled as project input;
+        - only supporting evidence remains under the Evidence heading.
+        """
         source_index = registry.get("source_index") or {}
         if not isinstance(source_index, dict):
             source_index = {}
@@ -718,14 +725,12 @@ class FactCheckerAgent:
         for item in registry.get("claims") or []:
             if not isinstance(item, dict):
                 continue
+
             claim_text = self._safe_text(item.get("claim"), "")
             if not claim_text:
                 continue
 
             path = self._safe_text(item.get("path"), "")
-            # The five broad claims are already represented by the base report.
-            # Generic demand-driver prose is useful in the market narrative but
-            # is not a fact-check claim unless the product explicitly measures it.
             if path in {"problem", "proposed_solution"}:
                 continue
             if path.startswith("market_study.demand_drivers["):
@@ -736,6 +741,9 @@ class FactCheckerAgent:
                 "sourced": "sourced",
                 "estimated": "estimated",
                 "hypothesis": "estimated",
+                "recommendation": "recommendation",
+                "audit_conclusion": "audit_conclusion",
+                "project_input": "project_input",
                 "not_confirmed": "not_confirmed",
                 "field_validation_required": "field_validation_required",
                 "rejected": "not_confirmed",
@@ -744,11 +752,12 @@ class FactCheckerAgent:
                 status=status,
                 claim_text=claim_text,
             )
+
             confidence = self._safe_text(item.get("confidence"), "low").lower()
             if confidence not in {"low", "medium", "high"}:
                 confidence = "low"
 
-            evidence: List[Dict[str, Any]] = []
+            source_rows: List[Dict[str, Any]] = []
             for source_id in item.get("source_ids") or []:
                 source = source_index.get(source_id)
                 if not isinstance(source, dict) or not source.get("url"):
@@ -762,22 +771,70 @@ class FactCheckerAgent:
                         canonical,
                         source_row,
                     )
-                evidence.append(source_row)
+                source_rows.append(source_row)
+
+            category = self._safe_text(item.get("category"), "general")
+            evidence = list(source_rows)
+            consulted_sources: List[Dict[str, Any]] = []
+
+            if path.startswith("financial_estimation."):
+                status = "estimated"
+                category = "finance"
+                confidence = "low"
+                evidence = []
+                consulted_sources = []
+            elif path == "market_study.local_context":
+                status = "recommendation"
+                category = "recommendation"
+                confidence = "low"
+                evidence = []
+                consulted_sources = []
+            elif path == "market_study.local_feasibility":
+                status = "audit_conclusion"
+                category = "evidence_audit"
+                confidence = "low"
+                evidence = []
+                consulted_sources = list(source_rows)
+            elif path == "market_study.market_overview":
+                status = "project_input"
+                category = "project_input"
+                confidence = "medium"
+                evidence = []
+                consulted_sources = []
+            elif path in {
+                "market_study.global_potential",
+                "market_study.global_market_assessment",
+            } and status != "sourced":
+                evidence = []
+                consulted_sources = list(source_rows)
+            elif status in {
+                "not_confirmed",
+                "field_validation_required",
+            }:
+                # Keep the legacy evidence array for API compatibility, but
+                # explicitly mark it as consulted and insufficient. The
+                # frontend renders these cards under a separate heading.
+                evidence = list(source_rows)
+                consulted_sources = list(source_rows)
+            elif status in {"recommendation", "audit_conclusion", "project_input"}:
+                evidence = []
+                consulted_sources = list(source_rows) if status == "audit_conclusion" else []
 
             correction = self._registry_correction(
                 path=path,
-                category=self._safe_text(item.get("category"), "general"),
+                category=category,
                 status=status,
                 language=language,
             )
             card = self._claim(
                 claim=claim_text,
-                category=self._safe_text(item.get("category"), "general"),
+                category=category,
                 status=status,
                 confidence=confidence,
                 correction=correction,
                 language=language,
                 evidence=evidence,
+                consulted_sources=consulted_sources,
             )
             card.update(
                 {
@@ -788,11 +845,18 @@ class FactCheckerAgent:
                         item.get("evidence_quality"),
                         "low",
                     ),
+                    "evidence_kind": (
+                        "consulted_insufficient"
+                        if status in {
+                            "not_confirmed",
+                            "field_validation_required",
+                        }
+                        else "supporting"
+                    ),
                 }
             )
             results.append(card)
 
-        # Keep enough detail for the report without flooding the UI.
         priority_prefixes = (
             "market_study.",
             "financial_estimation.",
@@ -821,6 +885,24 @@ class FactCheckerAgent:
                 "Vérifier la méthodologie, la date et la compatibilité géographique de la source."
                 if language != "en"
                 else "Check the source methodology, date and geographic compatibility."
+            )
+        if status == "recommendation":
+            return (
+                "Tester cette recommandation pendant un pilote limité avant de l’intégrer au plan définitif."
+                if language != "en"
+                else "Test this recommendation in a bounded pilot before adding it to the final plan."
+            )
+        if status == "audit_conclusion":
+            return (
+                "Cette conclusion décrit la limite des preuves disponibles ; elle ne constitue pas une preuve de demande."
+                if language != "en"
+                else "This conclusion describes the limits of the available evidence; it is not proof of demand."
+            )
+        if status == "project_input":
+            return (
+                "Cette formulation vient du contexte du projet et doit être confirmée par des observations terrain."
+                if language != "en"
+                else "This statement comes from the project context and must be confirmed through field observation."
             )
 
         normalized = f"{path} {category}".lower()
@@ -905,6 +987,7 @@ class FactCheckerAgent:
         correction: str,
         language: str,
         evidence: List[Dict[str, Any]] | None = None,
+        consulted_sources: List[Dict[str, Any]] | None = None,
     ) -> Dict[str, Any]:
         clean_claim = self._safe_text(claim, "")
         clean_correction = self._safe_text(correction, "")
@@ -923,6 +1006,16 @@ class FactCheckerAgent:
                 self._compact_evidence(source)
                 for source in self._deduplicate_source_list(
                     [item for item in (evidence or []) if isinstance(item, dict)]
+                )[:3]
+            ],
+            "consulted_sources": [
+                self._compact_evidence(source)
+                for source in self._deduplicate_source_list(
+                    [
+                        item
+                        for item in (consulted_sources or [])
+                        if isinstance(item, dict)
+                    ]
                 )[:3]
             ],
             "correction": clean_correction,
@@ -1799,8 +1892,16 @@ class FactCheckerAgent:
                 categories.add("local_market_signal")
             if "direct_competitor" in role_blob:
                 categories.add("competitor_product")
-            if source.get("pricing_found"):
+            if source.get("pricing_found") and source_type in {
+                "pricing_page",
+                "competitor",
+                "adjacent_solution",
+            }:
                 categories.add("pricing")
+
+            if source_type in {"market_article", "market_evidence"}:
+                categories.discard("pricing")
+                categories.discard("pricing_signal")
 
             if not categories:
                 title_reason = self._safe_text(
@@ -1930,6 +2031,7 @@ class FactCheckerAgent:
     ) -> Dict[str, Any]:
         best_title = self._evidence_title(source)
         return {
+            "display_title": best_title,
             "title": best_title,
             "source_title": best_title,
             "name": best_title,
@@ -1984,17 +2086,25 @@ class FactCheckerAgent:
             seen.add(key)
 
             evidence = item.get("evidence")
-            clean_evidence = []
+            consulted = item.get("consulted_sources")
+            clean_evidence: List[Dict[str, Any]] = []
+            clean_consulted: List[Dict[str, Any]] = []
 
             if isinstance(evidence, list):
                 for source in evidence:
                     if not isinstance(source, dict):
                         continue
-
                     compact = self._compact_evidence(source)
-
                     if compact.get("url"):
                         clean_evidence.append(compact)
+
+            if isinstance(consulted, list):
+                for source in consulted:
+                    if not isinstance(source, dict):
+                        continue
+                    compact = self._compact_evidence(source)
+                    if compact.get("url"):
+                        clean_consulted.append(compact)
 
             normalized_status = self._status_for_claim_text(
                 status=self._safe_text(
@@ -2003,6 +2113,17 @@ class FactCheckerAgent:
                 ),
                 claim_text=claim_text,
             )
+            path = self._safe_text(item.get("path"), "")
+
+            if normalized_status in {
+                "not_confirmed",
+                "field_validation_required",
+            }:
+                clean_consulted.extend(clean_evidence)
+
+            if path.startswith("financial_estimation."):
+                clean_evidence = []
+                clean_consulted = []
 
             cleaned.append(
                 {
@@ -2021,7 +2142,21 @@ class FactCheckerAgent:
                         item.get("correction"),
                         "",
                     ),
-                    "evidence": clean_evidence[:3],
+                    "evidence": self._deduplicate_source_list(clean_evidence)[:3],
+                    "consulted_sources": self._deduplicate_source_list(
+                        clean_consulted
+                    )[:3],
+                    "evidence_kind": (
+                        "consulted_insufficient"
+                        if normalized_status in {
+                            "not_confirmed",
+                            "field_validation_required",
+                        }
+                        else self._safe_text(
+                            item.get("evidence_kind"),
+                            "supporting",
+                        )
+                    ),
                 }
             )
 
@@ -2052,57 +2187,53 @@ class FactCheckerAgent:
             result.get("claims")
         )
 
-        fallback_by_category = {
-            self._safe_text(claim.get("category"), "general"): claim
-            for claim in fallback_claims
-        }
-        fallback_by_id = {
+        result_by_id = {
             self._safe_text(claim.get("claim_id"), ""): claim
-            for claim in fallback_claims
+            for claim in result_claims
             if self._safe_text(claim.get("claim_id"), "")
         }
-        fallback_by_path = {
+        result_by_path = {
             self._safe_text(claim.get("path"), ""): claim
-            for claim in fallback_claims
+            for claim in result_claims
             if self._safe_text(claim.get("path"), "")
         }
-        fallback_by_text = {
-            " ".join(self._safe_text(claim.get("claim"), "").casefold().split()): claim
-            for claim in fallback_claims
+        result_by_text = {
+            " ".join(
+                self._safe_text(claim.get("claim"), "").casefold().split()
+            ): claim
+            for claim in result_claims
             if self._safe_text(claim.get("claim"), "")
         }
 
         repaired_claims: List[Dict[str, Any]] = []
-        seen_categories = set()
 
-        for claim in result_claims:
-            category = self._safe_text(
-                claim.get("category"),
-                "general",
-            )
-            claim_id = self._safe_text(claim.get("claim_id"), "")
-            path = self._safe_text(claim.get("path"), "")
+        # The deterministic report is authoritative. A generic sanitizer may
+        # clean wording, but it must never inject unrelated claims or replace a
+        # claim merely because it shares the broad "general" category.
+        for fallback_claim in fallback_claims:
+            claim_id = self._safe_text(fallback_claim.get("claim_id"), "")
+            path = self._safe_text(fallback_claim.get("path"), "")
             text_key = " ".join(
-                self._safe_text(claim.get("claim"), "").casefold().split()
+                self._safe_text(
+                    fallback_claim.get("claim"),
+                    "",
+                ).casefold().split()
             )
-            fallback_match = (
-                fallback_by_id.get(claim_id)
-                or fallback_by_path.get(path)
-                or fallback_by_text.get(text_key)
-                or fallback_by_category.get(category)
+            sanitized_match = (
+                result_by_id.get(claim_id)
+                or result_by_path.get(path)
+                or result_by_text.get(text_key)
             )
 
-            if not claim.get("claim") and fallback_match:
-                claim = deepcopy(fallback_match)
-
-            if not claim.get("claim"):
-                continue
-
-            # Domain sanitization may preserve only a URL and discard the
-            # human-readable title. Evidence is deterministic and already
-            # validated upstream, so restore the complete fallback cards.
-            if fallback_match and fallback_match.get("evidence"):
-                claim["evidence"] = deepcopy(fallback_match["evidence"])
+            claim = deepcopy(fallback_claim)
+            if sanitized_match and self._safe_text(
+                sanitized_match.get("claim"),
+                "",
+            ):
+                claim["claim"] = self._safe_text(
+                    sanitized_match.get("claim"),
+                    claim.get("claim") or "",
+                )
 
             claim["public_status"] = self._public_status_label(
                 self._safe_text(
@@ -2118,21 +2249,7 @@ class FactCheckerAgent:
                 ),
                 language,
             )
-
             repaired_claims.append(claim)
-            seen_categories.add(category)
-
-        for fallback_claim in fallback_claims:
-            category = self._safe_text(
-                fallback_claim.get("category"),
-                "general",
-            )
-
-            if category in seen_categories:
-                continue
-
-            repaired_claims.append(deepcopy(fallback_claim))
-            seen_categories.add(category)
 
         repaired_claims = self._clean_claims(repaired_claims)
 
@@ -2161,6 +2278,10 @@ class FactCheckerAgent:
             "fact_check_summary",
             "confidence_level",
             "global_confidence",
+            "evidence_confidence",
+            "claim_registry_format",
+            "claim_registry_schema_version",
+            "claim_coverage",
             "supported_claims",
             "uncertain_claims",
             "warnings",
@@ -2347,57 +2468,121 @@ class FactCheckerAgent:
         evidence_groups: Dict[str, List[Dict[str, Any]]],
         profile: Dict[str, Any] | None = None,
     ) -> Dict[str, str]:
+        """Calibrate evidence confidence from quality, not source count alone."""
         profile = profile or {}
 
-        local_count = len(evidence_groups.get("local_competitors") or [])
-        solution_count = len(evidence_groups.get("solution_evidence") or [])
-        market_size_count = len(evidence_groups.get("market_size_evidence") or [])
-        demand_count = len(evidence_groups.get("market_demand_evidence") or [])
-        problem_count = len(evidence_groups.get("problem_evidence") or [])
-        pricing_count = len(evidence_groups.get("pricing_evidence") or [])
+        def source_quality(source: Dict[str, Any]) -> str:
+            explicit = self._safe_text(
+                source.get("evidence_quality"),
+                "",
+            ).lower()
+            if explicit in {"low", "medium", "high"}:
+                return explicit
 
-        discovery = "high" if relevant_source_count >= 6 else (
-            "medium" if relevant_source_count >= 2 else "low"
+            source_type = self._safe_text(
+                source.get("source_type"),
+                "",
+            ).lower()
+            if source_type in {
+                "competitor",
+                "direct_competitor",
+                "adjacent_solution",
+                "technology_benchmark",
+                "technology_provider",
+                "pricing_page",
+            }:
+                return "medium"
+            if source_type in {"regulation", "official_source"}:
+                return "high"
+            return "low"
+
+        def level(
+            sources: List[Dict[str, Any]],
+            *,
+            high_at: int = 2,
+            medium_at: int = 1,
+        ) -> str:
+            qualified = [
+                source
+                for source in sources
+                if source_quality(source) in {"medium", "high"}
+            ]
+            high_quality = [
+                source
+                for source in qualified
+                if source_quality(source) == "high"
+            ]
+            if len(qualified) >= high_at:
+                return "high"
+            if len(qualified) >= medium_at:
+                return "medium"
+            return "low"
+
+        local_sources = evidence_groups.get("local_competitors") or []
+        solution_sources = evidence_groups.get("solution_evidence") or []
+        market_size_sources = [
+            source
+            for source in (evidence_groups.get("market_size_evidence") or [])
+            if self._is_qualified_market_evidence(source)
+        ]
+        demand_sources = [
+            source
+            for source in (evidence_groups.get("market_demand_evidence") or [])
+            if self._is_qualified_market_evidence(source)
+        ]
+        problem_sources = evidence_groups.get("problem_evidence") or []
+        pricing_sources = [
+            source
+            for source in (evidence_groups.get("pricing_evidence") or [])
+            if self._safe_text(source.get("source_type"), "").lower()
+            in {"pricing_page", "competitor", "adjacent_solution"}
+        ]
+
+        discovery = (
+            "high"
+            if relevant_source_count >= 6
+            else "medium"
+            if relevant_source_count >= 2
+            else "low"
         )
-        solution = "high" if solution_count >= 3 else (
-            "medium" if solution_count >= 1 else "low"
-        )
-        local = "high" if local_count >= 2 else (
-            "medium" if local_count == 1 else "low"
-        )
-        market_size = "high" if market_size_count >= 2 else (
-            "medium" if market_size_count == 1 else "low"
-        )
-        market_demand = "high" if demand_count >= 2 else (
-            "medium" if demand_count == 1 else "low"
-        )
-        problem = "high" if problem_count >= 2 else (
-            "medium" if problem_count == 1 else "low"
-        )
-        pricing = "high" if pricing_count >= 2 else (
-            "medium" if pricing_count == 1 else "low"
+        solution = level(solution_sources, high_at=3, medium_at=1)
+        local = level(local_sources, high_at=2, medium_at=1)
+        market_size = level(market_size_sources, high_at=2, medium_at=1)
+        market_demand = level(demand_sources, high_at=2, medium_at=1)
+        problem = level(problem_sources, high_at=2, medium_at=1)
+        pricing = level(pricing_sources, high_at=2, medium_at=1)
+
+        direct_categories = [
+            problem,
+            market_size,
+            market_demand,
+            pricing,
+            local,
+        ]
+        direct_supported = sum(
+            value in {"medium", "high"} for value in direct_categories
         )
 
         if (
-            market_size in {"medium", "high"}
+            problem in {"medium", "high"}
+            and market_size in {"medium", "high"}
             and market_demand in {"medium", "high"}
-            and (local in {"medium", "high"} or solution == "high")
+            and solution in {"medium", "high"}
         ):
             overall = "high"
         elif (
-            relevant_source_count >= 2
+            direct_supported >= 2
             and solution in {"medium", "high"}
         ) or (
-            market_size in {"medium", "high"}
-            and market_demand in {"medium", "high"}
+            discovery == "high"
+            and solution == "high"
         ):
             overall = "medium"
         else:
             overall = "low"
 
-        # An upstream low data-confidence signal prevents an overall High.
-        if str(profile.get("data_confidence") or "").lower() == "low" and overall == "high":
-            overall = "medium"
+        if str(profile.get("data_confidence") or "").lower() == "low":
+            overall = "low"
 
         return {
             "discovery_confidence": discovery,
@@ -2432,12 +2617,18 @@ class FactCheckerAgent:
             "fr": {
                 "sourced": "Sourcé",
                 "estimated": "Estimé",
+                "recommendation": "Recommandation",
+                "audit_conclusion": "Conclusion d’audit",
+                "project_input": "Fourni par le projet",
                 "field_validation_required": "Validation terrain requise",
                 "not_confirmed": "Non confirmé",
             },
             "en": {
                 "sourced": "Sourced",
                 "estimated": "Estimated",
+                "recommendation": "Recommendation",
+                "audit_conclusion": "Audit conclusion",
+                "project_input": "Provided by the project",
                 "field_validation_required": "Field validation required",
                 "not_confirmed": "Not confirmed",
             },
