@@ -52,6 +52,9 @@ function statusText(
       return "Field validation required";
     }
     if (normalized.includes("not_confirmed")) return "Not confirmed";
+    if (normalized.includes("recommendation")) return "Recommendation";
+    if (normalized.includes("audit_conclusion")) return "Audit conclusion";
+    if (normalized.includes("project_input")) return "Provided by the project";
     if (normalized.includes("estimated")) return "Estimated";
     if (normalized.includes("sourced")) return "Sourced";
     if (normalized.includes("verified")) return "Verified";
@@ -62,6 +65,9 @@ function statusText(
     return "Validation terrain requise";
   }
   if (normalized.includes("not_confirmed")) return "Non confirmé";
+  if (normalized.includes("recommendation")) return "Recommandation";
+  if (normalized.includes("audit_conclusion")) return "Conclusion d’audit";
+  if (normalized.includes("project_input")) return "Fourni par le projet";
   if (normalized.includes("estimated")) return "Estimé";
   if (normalized.includes("sourced")) return "Sourcé";
   if (normalized.includes("verified")) return "Vérifié";
@@ -131,6 +137,9 @@ function claimCategoryText(value: string, language: ForgeLang): string {
     market_size: { fr: "Taille du marché", en: "Market size" },
     market_demand: { fr: "Demande du marché", en: "Market demand" },
     market_context: { fr: "Contexte de marché", en: "Market context" },
+    recommendation: { fr: "Recommandation stratégique", en: "Strategic recommendation" },
+    evidence_audit: { fr: "Audit des preuves", en: "Evidence audit" },
+    project_input: { fr: "Contexte fourni", en: "Provided context" },
     local_competition: { fr: "Concurrence locale", en: "Local competition" },
     general: { fr: "Général", en: "General" },
   };
@@ -371,7 +380,43 @@ function ClaimCard({
     claim.confidence ||
     (language === "en" ? "Medium" : "Moyenne");
 
-  const evidence = (claim.evidence || []).filter(Boolean);
+  const rawEvidence = (claim.evidence || []).filter(Boolean);
+  const normalizedStatus = String(claim.status || "").toLowerCase();
+  const consultedEvidence =
+    normalizedStatus === "not_confirmed" ||
+    normalizedStatus === "field_validation_required" ||
+    claim.evidence_kind === "consulted_insufficient";
+
+  const evidence = consultedEvidence ? [] : rawEvidence;
+  const consultedCandidates = [
+    ...(claim.consulted_sources || []),
+    ...(consultedEvidence ? rawEvidence : []),
+  ].filter(Boolean);
+
+  const consultedSources = consultedCandidates.filter((item, index, all) => {
+    const normalized = normalizeEvidence(item);
+    const key = `${
+      normalized.url || ""
+    }|${normalized.display_title || normalized.source_title || normalized.title || ""}`;
+    return (
+      all.findIndex((candidate) => {
+        const current = normalizeEvidence(candidate);
+        const currentKey = `${
+          current.url || ""
+        }|${current.display_title || current.source_title || current.title || ""}`;
+        return currentKey === key;
+      }) === index
+    );
+  });
+
+  const evidenceHeading =
+    normalizedStatus === "estimated"
+      ? language === "en"
+        ? "Context sources"
+        : "Sources de contexte"
+      : language === "en"
+        ? "Evidence"
+        : "Éléments de preuve";
 
   return (
     <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -402,12 +447,31 @@ function ClaimCard({
       {evidence.length > 0 && (
         <div className="mt-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
           <p className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">
-            {language === "en" ? "Evidence" : "Éléments de preuve"}
+            {evidenceHeading}
           </p>
           <div className="mt-3 space-y-3">
             {evidence.map((item, evidenceIndex) => (
               <EvidenceCard
                 key={`${claim.category || "claim"}-${evidenceIndex}`}
+                evidence={item}
+                language={language}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {consultedSources.length > 0 && (
+        <div className="mt-4 rounded-3xl border border-amber-200 bg-amber-50/60 p-5 shadow-sm">
+          <p className="text-xs font-black uppercase tracking-[0.2em] text-amber-700">
+            {language === "en"
+              ? "Sources consulted, but insufficient"
+              : "Sources consultées, mais insuffisantes"}
+          </p>
+          <div className="mt-3 space-y-3">
+            {consultedSources.map((item, evidenceIndex) => (
+              <EvidenceCard
+                key={`consulted-${claim.category || "claim"}-${evidenceIndex}`}
                 evidence={item}
                 language={language}
               />

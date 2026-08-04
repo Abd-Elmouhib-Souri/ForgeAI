@@ -331,6 +331,17 @@ class SourceRelevanceGate:
         "independent", "operator", "operators", "team", "teams",
     }
 
+    DOCUMENT_HOST_DOMAINS = {
+        "scribd.com",
+        "www.scribd.com",
+        "slideshare.net",
+        "www.slideshare.net",
+        "academia.edu",
+        "www.academia.edu",
+        "researchgate.net",
+        "www.researchgate.net",
+    }
+
     def evaluate_source(
         self,
         *,
@@ -516,6 +527,23 @@ class SourceRelevanceGate:
         if job_listing_mismatch:
             source_type = "irrelevant"
             is_product_page = False
+
+        # Document-host pages can provide context, but they are not products or
+        # adjacent solutions unless a separately verified product page exists.
+        source_domain = self._domain(source.get("url") or "")
+        document_host = any(
+            source_domain == domain
+            or source_domain.endswith(f".{domain}")
+            for domain in self.DOCUMENT_HOST_DOMAINS
+            if not domain.startswith("www.")
+        )
+        if document_host:
+            source_type = "market_article"
+            is_product_page = False
+            same_use_case = False
+            same_solution = False
+            same_target = False
+            target_match_level = "none"
 
         cross_sector_product = bool(
             source_type in {"competitor", "pricing_page", "adjacent_solution", "technology_benchmark"}

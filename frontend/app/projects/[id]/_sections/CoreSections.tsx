@@ -541,6 +541,34 @@ export function MarketOpportunitySection({
               : "Utiliser un pilote limité pour prouver l’usage répété, le temps gagné, la fiabilité et la volonté de payer.",
           ];
 
+  const neutralTrendMarkers =
+    lang === "en"
+      ? [
+          "no market trend is sufficiently supported",
+          "no confirmed market trend",
+        ]
+      : [
+          "aucune tendance de marché n’est suffisamment soutenue",
+          "aucune tendance de marché n'est suffisamment soutenue",
+          "aucune tendance confirmée",
+        ];
+
+  const rawTrendItems = toListItems(marketStudy?.market_trends, lang);
+  const meaningfulTrendItems = rawTrendItems.filter((item) => {
+    const normalized = item.toLowerCase();
+    return !neutralTrendMarkers.some((marker) => normalized.includes(marker));
+  });
+  const fallbackTrendSignals = toListItems(
+    marketStudy?.market_trend_signals,
+    lang
+  );
+  const marketTrendItems =
+    meaningfulTrendItems.length > 0
+      ? meaningfulTrendItems
+      : fallbackTrendSignals.length > 0
+        ? fallbackTrendSignals
+        : rawTrendItems;
+
   const marketRiskItems =
     toListItems(marketStudy?.risks, lang).length > 0
       ? marketStudy?.risks
@@ -588,7 +616,7 @@ export function MarketOpportunitySection({
       <div className="mt-5 grid gap-5 md:grid-cols-2">
         <ListBlock
           title={t.marketTrends}
-          items={marketStudy?.market_trends || []}
+          items={marketTrendItems}
           language={lang}
         />
         <ListBlock
