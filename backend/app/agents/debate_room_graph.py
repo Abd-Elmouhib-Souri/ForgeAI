@@ -1,28 +1,8 @@
-﻿# ============================================================
-# backend/app/agents/debate_room_graph.py
-# ============================================================
-#
-# DebateRoomGraph V7.0
-# Debate Room Pro+ — Project Review Committee
-#
-# Objectifs :
-# - supprimer les anciens agents Defender/Critic/Judge ;
-# - supprimer les appels LLM du Debate Room ;
-# - supprimer les faux positifs du domain_integrity_guard global ;
-# - produire un comité professionnel structuré ;
-# - respecter output_language fr/en ;
-# - rester compatible avec le frontend actuel :
-#   analysis_data.debate_room.rounds
-#   analysis_data.debate_room.judge
-#   analysis_data.debate_room.meta
-# - ne jamais casser l'analyse complète.
-# ============================================================
-
 from __future__ import annotations
 
 import logging
-import re
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from collections import Counter
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
 
 from app.services.domain_integrity_guard import normalize_output_language
 
@@ -32,34 +12,13 @@ StepCallback = Callable[[Dict[str, Any]], Awaitable[None]]
 
 
 class DebateRoomGraph:
-    DEMO_OFFTOPIC_TERMS = {
-        "pharmacy delivery",
-        "medicine delivery",
-        "medicine stock",
-        "stock medicine",
-        "stock medicines",
-        "stock médicaments",
-        "stock medicaments",
-        "pharmasoft",
-        "infopharma",
-        "medstock",
-        "super app",
-        "orange max it",
-        "crypto trading",
-        "stock trading",
-        "forex trading",
-        "tiktok growth",
-        "tiktok analytics",
-        "food delivery",
-        "restaurant delivery",
-        "agrobot",
-        "greenhouse robot",
-        "robot agricole",
-        "network cell info lite",
-        "opera web browser",
-        "free ai short video generator",
-        "chrome web store skillbridge",
-    }
+    """Deterministic Strategic Investment Committee.
+
+    The committee consumes the locked Project Intelligence and Evidence packets.
+    It never invents evidence. Every round exposes the questions, answers,
+    confidence, unresolved points and meeting-preparation material required to
+    defend the project in a real investor, jury or customer meeting.
+    """
 
     def __init__(self, step_callback: Optional[StepCallback] = None):
         self.step_callback = step_callback
@@ -77,1449 +36,1169 @@ class DebateRoomGraph:
         max_rounds: int = 5,
     ) -> Dict[str, Any]:
         language = normalize_output_language(output_language)
-        effective_max_rounds = self._normalize_max_rounds(max_rounds)
-        analysis_payload = analysis_data or {}
-
+        analysis = analysis_data or {}
         context = self._context(
             title=title,
             description=description,
             industry=industry,
             region=region,
-            output_language=language,
             project_context=project_context or {},
-            analysis_data=analysis_payload,
+            analysis=analysis,
         )
-
-        debate_plan = self._build_debate_plan(language)[:effective_max_rounds]
-
+        evidence = self._evidence_packet(analysis)
+        round_count = max(1, min(int(max_rounds or 5), 5))
+        committee = self._committee(language)
+        room_title = self._t(
+            language,
+            "Debate Room Pro — Strategic Investment Committee",
+            "Debate Room Pro — Comité stratégique d’investissement",
+        )
         state: Dict[str, Any] = {
             "project_id": project_id,
-            "title": context["title"],
-            "description": context["description"],
-            "industry": context["sector"],
-            "region": context["region"],
-            "output_language": language,
-            "project_context": context,
-            "analysis_data": analysis_payload,
-            "round": 1,
-            "max_rounds": effective_max_rounds,
-            "debate_plan": debate_plan,
+            "format": "debate_room_pro_v9_investment_committee",
+            "title": room_title,
+            "status": "running",
+            "committee": committee,
+            "meeting_preparation": {},
+            "current_step": "debate_room_started",
+            "progress": 0,
             "rounds": [],
-            "judge": {},
             "completed_steps": [],
             "failed_steps": [],
-            "current_step": "debate_room_pro_started",
-            "progress": 0,
             "completed": False,
-            "error": None,
-            "context_locked": True,
         }
 
         try:
+            if context.get("project_archetype") == "b2b_workflow_saas":
+                builders = [
+                    self._round_problem,
+                    self._round_market,
+                    self._round_mvp,
+                    self._round_finance,
+                    self._round_decision,
+                ][:round_count]
+            else:
+                builders = [
+                    self._round_adaptive_problem,
+                    self._round_adaptive_market,
+                    self._round_adaptive_product,
+                    self._round_adaptive_economics,
+                    self._round_adaptive_decision,
+                ][:round_count]
             rounds: List[Dict[str, Any]] = []
-
-            for round_context in debate_plan:
-                round_number = int(round_context["round"])
-
-                moderator = self._build_moderator_message(
-                    round_number=round_number,
-                    round_context=round_context,
-                    context=context,
-                    output_language=language,
-                )
-
-                defender = self._build_defender_position(
-                    round_context=round_context,
-                    context=context,
-                    analysis_data=analysis_payload,
-                    output_language=language,
-                )
-
-                state["round"] = round_number
-                state["pending_moderator"] = moderator
-                state["pending_defender"] = defender
-                state["current_step"] = f"debate_room_pro_round_{round_number}_defender"
-                state["completed_steps"] = list(state.get("completed_steps", [])) + [
-                    f"round_{round_number}_moderator",
-                    f"round_{round_number}_defender",
-                ]
-                state["progress"] = self._calculate_progress(
-                    completed_rounds=len(rounds),
-                    max_rounds=effective_max_rounds,
-                    defender_done=True,
-                    completed=False,
+            for index, builder in enumerate(builders, start=1):
+                item = builder(index, context, analysis, evidence, language)
+                rounds.append(item)
+                state.update(
+                    {
+                        "rounds": rounds,
+                        "completed_steps": [f"round_{number}" for number in range(1, index + 1)],
+                        "current_step": f"debate_room_round_{index}",
+                        "progress": int((index / max(round_count, 1)) * 85),
+                    }
                 )
                 await self._notify(state)
 
-                critic = self._build_critic_position(
-                    round_context=round_context,
-                    context=context,
-                    analysis_data=analysis_payload,
-                    output_language=language,
-                )
-
-                round_summary = self._build_round_summary(
-                    round_context=round_context,
-                    defender=defender,
-                    critic=critic,
-                    context=context,
-                    output_language=language,
-                )
-
-                round_item = {
-                    "round": round_number,
-                    "topic": round_context["topic"],
-                    "focus": round_context["focus"],
-                    "key_question": round_context["key_question"],
-                    "committee_roles": round_context["committee_roles"],
-                    "moderator": moderator,
-                    "defender": defender,
-                    "critic": critic,
-                    "round_summary": round_summary,
-                    "context_locked": True,
-                    "output_language": language,
+            judge = self._judge(rounds, context, analysis, evidence, language)
+            meeting_preparation = self._global_meeting_preparation(
+                rounds, context, language
+            )
+            state.update(
+                {
+                    "judge": judge,
+                    "meeting_preparation": meeting_preparation,
+                    "status": "completed",
+                    "current_step": "debate_room_judge",
+                    "progress": 100,
+                    "completed": True,
                 }
-
-                round_item = self._sanitize_object(
-                    value=round_item,
-                    allowed_context=self._allowed_context(context),
-                )
-
-                rounds.append(round_item)
-
-                state["rounds"] = rounds
-                state["pending_moderator"] = {}
-                state["pending_defender"] = {}
-                state["current_step"] = f"debate_room_pro_round_{round_number}_critic"
-                state["completed_steps"] = list(state.get("completed_steps", [])) + [
-                    f"round_{round_number}_critic"
-                ]
-                state["progress"] = self._calculate_progress(
-                    completed_rounds=len(rounds),
-                    max_rounds=effective_max_rounds,
-                    defender_done=False,
-                    completed=False,
-                )
-                await self._notify(state)
-
-            judge = self._build_judge(
-                rounds=rounds,
-                context=context,
-                analysis_data=analysis_payload,
-                output_language=language,
             )
-
-            judge = self._sanitize_object(
-                value=judge,
-                allowed_context=self._allowed_context(context),
-            )
-
-            state["judge"] = judge
-            state["completed"] = True
-            state["current_step"] = "debate_room_pro_judge"
-            state["completed_steps"] = list(state.get("completed_steps", [])) + ["judge"]
-            state["progress"] = 100
-            state["error"] = None
             await self._notify(state)
 
             return {
                 "debate_room": {
-                    "format": "debate_room_pro_v7_project_review_committee",
-                    "title": (
-                        "Debate Room Pro+ — Project Review Committee"
-                        if language == "en"
-                        else "Salle de débat stratégique — Comité de validation projet"
-                    ),
+                    "format": "debate_room_pro_v9_investment_committee",
+                    "title": room_title,
                     "status": "completed",
-                    "max_rounds": effective_max_rounds,
-                    "committee": self._committee(language),
+                    "max_rounds": round_count,
+                    "committee": committee,
                     "rounds": rounds,
                     "judge": judge,
+                    "meeting_preparation": meeting_preparation,
                     "meta": {
-                        "completed_steps": state.get("completed_steps", []),
-                        "failed_steps": state.get("failed_steps", []),
                         "progress": 100,
-                        "current_step": "debate_room_pro_judge",
                         "completed": True,
-                        "error": None,
                         "output_language": language,
                         "context_locked": True,
                         "llm_used": False,
+                        "evidence_aware": True,
+                        "questions_visible": True,
+                        "meeting_preparation_enabled": True,
                     },
                     "context_locked": True,
                     "output_language": language,
                     "project_context_used": context,
+                    "evidence_packet_used": evidence,
                 }
             }
-
         except Exception as exc:
-            logger.exception("[DebateRoomGraph] Deterministic Debate Room failed")
-
-            fallback = self._fallback_judge(
-                context=context,
-                output_language=language,
-                error=str(exc),
-            )
-
+            logger.exception("[DebateRoomGraph] Failed")
+            fallback = self._fallback(context, language, str(exc))
             return {
                 "debate_room": {
-                    "format": "debate_room_pro_v7_emergency_fallback",
-                    "status": "completed",
-                    "max_rounds": effective_max_rounds,
-                    "committee": self._committee(language),
+                    "format": "debate_room_pro_v9_fallback",
+                    "status": "completed_with_fallback",
                     "rounds": [],
                     "judge": fallback,
                     "meta": {
-                        "completed_steps": [],
-                        "failed_steps": ["debate_room_pro"],
                         "progress": 100,
-                        "current_step": "debate_room_pro_fallback_completed",
                         "completed": True,
                         "error": str(exc),
-                        "output_language": language,
-                        "context_locked": True,
-                        "llm_used": False,
+                        "fallback_used": True,
                     },
-                    "context_locked": True,
                     "output_language": language,
-                    "project_context_used": context,
+                    "context_locked": True,
                 }
             }
-
-    # ========================================================
-    # Debate plan
-    # ========================================================
-
-    def _build_debate_plan(self, output_language: str = "fr") -> List[Dict[str, Any]]:
-        language = normalize_output_language(output_language)
-
-        if language == "en":
-            return [
-                {
-                    "round": 1,
-                    "topic": "Problem, target and urgency",
-                    "focus": "Validate whether the project solves a clear and repeated pain for a precise first target.",
-                    "key_question": "Is the problem important enough for the first users to change behavior?",
-                    "committee_roles": ["Moderator", "Project Owner", "Customer Representative", "Product Manager"],
-                    "defender_role": "Project Owner",
-                    "critic_role": "Customer Representative",
-                },
-                {
-                    "round": 2,
-                    "topic": "Market, positioning and alternatives",
-                    "focus": "Assess the first market, current alternatives, competitive pressure and positioning.",
-                    "key_question": "Can the project win against the real alternatives already used by the target users?",
-                    "committee_roles": ["Moderator", "Market & Sales Manager", "Operations / Field Expert", "Customer Representative"],
-                    "defender_role": "Market & Sales Manager",
-                    "critic_role": "Operations / Field Expert",
-                },
-                {
-                    "round": 3,
-                    "topic": "MVP, product scope and technical feasibility",
-                    "focus": "Check whether the MVP can be built with a reduced scope and clear first workflow.",
-                    "key_question": "Is the MVP realistic without adding unnecessary complexity?",
-                    "committee_roles": ["Moderator", "CTO / Technical Lead", "Product Manager", "Operations / Field Expert"],
-                    "defender_role": "CTO / Technical Lead",
-                    "critic_role": "Product Manager",
-                },
-                {
-                    "round": 4,
-                    "topic": "Business model, pricing and financial risk",
-                    "focus": "Evaluate revenue logic, MVP budget, pricing and financial sustainability.",
-                    "key_question": "Can the project create enough value to justify payment?",
-                    "committee_roles": ["Moderator", "CFO / Finance Manager", "Market & Sales Manager", "Project Owner"],
-                    "defender_role": "CFO / Finance Manager",
-                    "critic_role": "Market & Sales Manager",
-                },
-                {
-                    "round": 5,
-                    "topic": "Final strategic decision and execution plan",
-                    "focus": "Turn the debate into a go/no-go decision, improved idea and concrete next actions.",
-                    "key_question": "Should the team continue, pivot or stop, and what must be done next?",
-                    "committee_roles": ["Moderator", "Executive Judge", "Project Owner", "Full Committee"],
-                    "defender_role": "Project Owner",
-                    "critic_role": "Executive Judge",
-                },
-            ]
-
-        return [
-            {
-                "round": 1,
-                "topic": "Problème, cible et urgence",
-                "focus": "Valider si le projet résout une douleur claire et répétée pour une première cible précise.",
-                "key_question": "Le problème est-il assez important pour pousser les premiers utilisateurs à changer leurs habitudes ?",
-                "committee_roles": ["Moderator", "Project Owner", "Customer Representative", "Product Manager"],
-                "defender_role": "Project Owner",
-                "critic_role": "Customer Representative",
-            },
-            {
-                "round": 2,
-                "topic": "Marché, positionnement et alternatives",
-                "focus": "Évaluer le premier marché, les alternatives actuelles, la pression concurrentielle et le positionnement.",
-                "key_question": "Le projet peut-il gagner face aux alternatives réellement utilisées par les utilisateurs ciblés ?",
-                "committee_roles": ["Moderator", "Market & Sales Manager", "Operations / Field Expert", "Customer Representative"],
-                "defender_role": "Market & Sales Manager",
-                "critic_role": "Operations / Field Expert",
-            },
-            {
-                "round": 3,
-                "topic": "MVP, périmètre produit et faisabilité technique",
-                "focus": "Vérifier si le MVP peut être construit avec un périmètre réduit et un premier flux clair.",
-                "key_question": "Le MVP est-il réaliste sans ajouter une complexité inutile ?",
-                "committee_roles": ["Moderator", "CTO / Technical Lead", "Product Manager", "Operations / Field Expert"],
-                "defender_role": "CTO / Technical Lead",
-                "critic_role": "Product Manager",
-            },
-            {
-                "round": 4,
-                "topic": "Business model, prix et risque financier",
-                "focus": "Évaluer la logique de revenu, le budget MVP, la tarification et la durabilité financière.",
-                "key_question": "Le projet crée-t-il assez de valeur pour justifier un paiement ?",
-                "committee_roles": ["Moderator", "CFO / Finance Manager", "Market & Sales Manager", "Project Owner"],
-                "defender_role": "CFO / Finance Manager",
-                "critic_role": "Market & Sales Manager",
-            },
-            {
-                "round": 5,
-                "topic": "Décision stratégique finale et plan d’exécution",
-                "focus": "Transformer le débat en décision go/no-go, version améliorée et actions concrètes.",
-                "key_question": "Faut-il poursuivre, pivoter ou arrêter, et que faut-il faire ensuite ?",
-                "committee_roles": ["Moderator", "Executive Judge", "Project Owner", "Full Committee"],
-                "defender_role": "Project Owner",
-                "critic_role": "Executive Judge",
-            },
-        ]
-
-    # ========================================================
-    # Round builders
-    # ========================================================
-
-    def _build_moderator_message(
-        self,
-        *,
-        round_number: int,
-        round_context: Dict[str, Any],
-        context: Dict[str, str],
-        output_language: str,
-    ) -> Dict[str, Any]:
-        if output_language == "en":
-            instruction = (
-                f"Round {round_number} examines {context['title']} through the lens of: {round_context['focus']}"
-            )
-        else:
-            instruction = (
-                f"Le tour {round_number} examine {context['title']} selon l’angle suivant : {round_context['focus']}"
-            )
-
-        return {
-            "role": "Moderator",
-            "round": round_number,
-            "topic": round_context["topic"],
-            "focus": round_context["focus"],
-            "key_question": round_context["key_question"],
-            "instruction": instruction,
-            "context_locked": True,
-        }
-
-    def _build_defender_position(
-        self,
-        *,
-        round_context: Dict[str, Any],
-        context: Dict[str, str],
-        analysis_data: Dict[str, Any],
-        output_language: str,
-    ) -> Dict[str, Any]:
-        title = context["title"]
-        target_users = context["target_users"]
-        region = context["region"]
-        problem = context["problem"]
-        mvp_scope = context["mvp_scope"]
-        business_model = context["business_model"]
-
-        round_number = int(round_context["round"])
-
-        if output_language == "en":
-            base_points = {
-                1: [
-                    f"{title} focuses on a concrete pain for {target_users}: {problem}.",
-                    f"The first validation can happen in {region} with interviews and a narrow pilot.",
-                    "The project has enough clarity to test demand before building a large platform.",
-                ],
-                2: [
-                    f"The positioning can be defensible if {title} stays specialized for {target_users}.",
-                    "The product should compete first against manual workflows and generic tools, not against every global platform.",
-                    "A local and workflow-specific approach can create early differentiation.",
-                ],
-                3: [
-                    f"The MVP can be reduced to: {mvp_scope}.",
-                    "A narrow MVP lowers cost, delivery risk and onboarding complexity.",
-                    "The first version should prove usage before adding advanced automation.",
-                ],
-                4: [
-                    f"The business model can start with {business_model}.",
-                    "Revenue should be validated through pilots before assuming scalable subscriptions.",
-                    "The financial plan is acceptable if acquisition and support costs stay controlled.",
-                ],
-                5: [
-                    f"The committee should continue {title} as a focused MVP, not as a broad platform.",
-                    "The best path is field validation, pilot usage and pricing tests.",
-                    "The idea should be improved by narrowing the first target and proving measurable value.",
-                ],
-            }
-
-            return {
-                "role": round_context["defender_role"],
-                "position": "CONTINUE_WITH_FOCUSED_MVP",
-                "thesis": f"{title} deserves continued validation if execution stays narrow and evidence-based.",
-                "supporting_points": base_points.get(round_number, base_points[5]),
-                "opportunities": self._opportunities(context, output_language),
-                "assumptions_to_validate": self._assumptions(context, output_language),
-                "recommended_action": "Continue with a narrow MVP and validate adoption before scaling.",
-                "evidence_used": self._evidence_used(analysis_data, output_language),
-                "context_locked": True,
-            }
-
-        base_points = {
-            1: [
-                f"{title} se concentre sur une douleur concrète pour {target_users} : {problem}.",
-                f"La première validation peut se faire en {region} avec des entretiens et un pilote réduit.",
-                "Le projet est assez clair pour tester la demande avant de construire une grande plateforme.",
-            ],
-            2: [
-                f"Le positionnement peut être défendable si {title} reste spécialisé pour {target_users}.",
-                "Le produit doit d’abord concurrencer les flux manuels et les outils génériques, pas toutes les plateformes mondiales.",
-                "Une approche locale et spécifique au flux métier peut créer une différenciation initiale.",
-            ],
-            3: [
-                f"Le MVP peut être réduit à : {mvp_scope}.",
-                "Un MVP réduit diminue le coût, le risque de livraison et la complexité d’onboarding.",
-                "La première version doit prouver l’usage avant d’ajouter une automatisation avancée.",
-            ],
-            4: [
-                f"Le modèle économique peut démarrer avec {business_model}.",
-                "Le revenu doit être validé par des pilotes avant de supposer des abonnements scalables.",
-                "Le plan financier est acceptable si les coûts d’acquisition et de support restent maîtrisés.",
-            ],
-            5: [
-                f"Le comité doit poursuivre {title} comme MVP ciblé, pas comme plateforme trop large.",
-                "La meilleure trajectoire est validation terrain, usage pilote et test du prix.",
-                "L’idée doit être améliorée en réduisant la première cible et en prouvant une valeur mesurable.",
-            ],
-        }
-
-        return {
-            "role": round_context["defender_role"],
-            "position": "POURSUIVRE_AVEC_MVP_CIBLÉ",
-            "thesis": f"{title} mérite une validation continue si l’exécution reste ciblée et basée sur des preuves.",
-            "supporting_points": base_points.get(round_number, base_points[5]),
-            "opportunities": self._opportunities(context, output_language),
-            "assumptions_to_validate": self._assumptions(context, output_language),
-            "recommended_action": "Continuer avec un MVP réduit et valider l’adoption avant le passage à l’échelle.",
-            "evidence_used": self._evidence_used(analysis_data, output_language),
-            "context_locked": True,
-        }
-
-    def _build_critic_position(
-        self,
-        *,
-        round_context: Dict[str, Any],
-        context: Dict[str, str],
-        analysis_data: Dict[str, Any],
-        output_language: str,
-    ) -> Dict[str, Any]:
-        title = context["title"]
-        target_users = context["target_users"]
-        problem = context["problem"]
-        mvp_scope = context["mvp_scope"]
-
-        round_number = int(round_context["round"])
-
-        if output_language == "en":
-            risks_by_round = {
-                1: [
-                    f"The pain may exist but may not be urgent enough for {target_users} to pay or change behavior.",
-                    "The first target segment may still be too wide.",
-                    "The team still needs direct evidence from user interviews.",
-                ],
-                2: [
-                    "The real competitor may be the current manual workflow, not another SaaS product.",
-                    "Generic tools may be good enough for some users.",
-                    "Positioning must be more specific than simply being a digital platform.",
-                ],
-                3: [
-                    f"The MVP scope can still become too large if {mvp_scope} is not reduced to the first workflow.",
-                    "Technical execution is less risky than adoption and onboarding.",
-                    "The first version must avoid advanced features before repeated use is proven.",
-                ],
-                4: [
-                    "Subscription revenue is not proven until users accept a real price.",
-                    "Customer acquisition and support costs can be underestimated.",
-                    "The project needs pilot data before financial assumptions are trusted.",
-                ],
-                5: [
-                    "The project should not scale before proving repeated weekly usage.",
-                    "The improved idea must be narrower than the original broad version.",
-                    "The go/no-go conditions must be strict and measurable.",
-                ],
-            }
-
-            return {
-                "role": round_context["critic_role"],
-                "position": "PIVOT_BEFORE_SCALING",
-                "critical_risks": risks_by_round.get(round_number, risks_by_round[5]),
-                "missing_evidence": self._missing_evidence(context, output_language),
-                "objections": [
-                    f"{title} may be useful, but usefulness is not enough without adoption and willingness to pay.",
-                    f"The first MVP must prove that solving '{problem}' creates measurable value.",
-                ],
-                "risk_score": self._round_risk_score(round_number),
-                "mitigation_requests": self._mitigation_requests(context, output_language),
-                "context_locked": True,
-            }
-
-        risks_by_round = {
-            1: [
-                f"La douleur peut exister mais ne pas être assez urgente pour pousser {target_users} à payer ou changer d’habitude.",
-                "Le premier segment cible peut encore être trop large.",
-                "L’équipe doit encore obtenir des preuves directes par entretiens utilisateurs.",
-            ],
-            2: [
-                "Le vrai concurrent peut être le flux manuel actuel, pas forcément un autre SaaS.",
-                "Des outils génériques peuvent suffire à une partie des utilisateurs.",
-                "Le positionnement doit être plus spécifique qu’une simple plateforme numérique.",
-            ],
-            3: [
-                f"Le périmètre MVP peut encore devenir trop large si {mvp_scope} n’est pas réduit au premier flux.",
-                "Le risque principal n’est pas seulement technique, mais aussi l’adoption et l’onboarding.",
-                "La première version doit éviter les fonctionnalités avancées avant de prouver l’usage répété.",
-            ],
-            4: [
-                "Le revenu par abonnement n’est pas prouvé tant que les utilisateurs n’acceptent pas un vrai prix.",
-                "Les coûts d’acquisition et de support peuvent être sous-estimés.",
-                "Le projet a besoin de données de pilote avant de fiabiliser les hypothèses financières.",
-            ],
-            5: [
-                "Le projet ne doit pas passer à l’échelle avant de prouver un usage hebdomadaire répété.",
-                "La version améliorée doit être plus étroite que l’idée initiale trop large.",
-                "Les conditions go/no-go doivent être strictes et mesurables.",
-            ],
-        }
-
-        return {
-            "role": round_context["critic_role"],
-            "position": "PIVOTER_AVANT_SCALE",
-            "critical_risks": risks_by_round.get(round_number, risks_by_round[5]),
-            "missing_evidence": self._missing_evidence(context, output_language),
-            "objections": [
-                f"{title} peut être utile, mais l’utilité ne suffit pas sans adoption et volonté de payer.",
-                f"Le premier MVP doit prouver que résoudre « {problem} » crée une valeur mesurable.",
-            ],
-            "risk_score": self._round_risk_score(round_number),
-            "mitigation_requests": self._mitigation_requests(context, output_language),
-            "context_locked": True,
-        }
-
-    def _build_round_summary(
-        self,
-        *,
-        round_context: Dict[str, Any],
-        defender: Dict[str, Any],
-        critic: Dict[str, Any],
-        context: Dict[str, str],
-        output_language: str,
-    ) -> Dict[str, Any]:
-        validated_points = self._unique_strings(
-            self._safe_list(defender.get("supporting_points"))[:2]
-            + self._safe_list(defender.get("opportunities"))[:1]
-        )
-
-        remaining_risks = self._unique_strings(
-            self._safe_list(critic.get("critical_risks"))[:3]
-            + self._safe_list(critic.get("missing_evidence"))[:2]
-        )
-
-        decision = self._round_decision(
-            critic_risk_score=critic.get("risk_score"),
-            output_language=output_language,
-        )
-
-        if output_language == "en":
-            synthesis = (
-                f"The committee accepts that {context['title']} has validation potential, "
-                f"but requires evidence before scale. Temporary decision: {decision}."
-            )
-            next_instruction = "Transform the remaining risks into validation tasks for the next execution step."
-        else:
-            synthesis = (
-                f"Le comité accepte que {context['title']} possède un potentiel de validation, "
-                f"mais exige des preuves avant le passage à l’échelle. Décision provisoire : {decision}."
-            )
-            next_instruction = "Transformer les risques restants en tâches de validation pour la prochaine étape d’exécution."
-
-        return {
-            "validated_points": validated_points,
-            "remaining_risks": remaining_risks,
-            "decision": decision,
-            "synthesis": synthesis,
-            "next_committee_instruction": next_instruction,
-            "context_locked": True,
-        }
-
-    # ========================================================
-    # Judge
-    # ========================================================
-
-    def _build_judge(
-        self,
-        *,
-        rounds: List[Dict[str, Any]],
-        context: Dict[str, str],
-        analysis_data: Dict[str, Any],
-        output_language: str,
-    ) -> Dict[str, Any]:
-        score = self._score_from_analysis(analysis_data)
-        decision = self._final_decision(score, output_language)
-
-        sellable_features = self._sellable_features(context, output_language)
-        critical_risks = self._critical_risks(context, analysis_data, output_language)
-        next_actions = self._next_actions(context, output_language)
-        go_no_go_conditions = self._go_no_go_conditions(context, output_language)
-
-        if output_language == "en":
-            final_verdict = (
-                f"{context['title']} should continue as a focused MVP validation project. "
-                "The committee does not recommend full-scale development yet."
-            )
-
-            improved_idea_version = (
-                f"Build {context['title']} as a focused solution for {context['target_users']} in {context['region']}, "
-                f"centered on solving: {context['problem']}. The first version should cover {context['mvp_scope']} "
-                "and prove weekly usage before adding advanced modules."
-            )
-
-            mvp_recommendation = (
-                f"Launch a narrow MVP around {context['mvp_scope']}. Avoid broad platform features until user adoption is proven."
-            )
-
-            prototype_estimate = (
-                f"Use the current financial estimation as the first budget reference: {context['budget_reference']}. "
-                "Keep the prototype lightweight and prioritize reusable components."
-            )
-
-            cost_reduction_strategy = [
-                "Reduce the MVP to one workflow and one target segment.",
-                "Use existing hosting and open-source components where possible.",
-                "Avoid custom integrations until a pilot confirms demand.",
-                "Use manual onboarding during the first pilot instead of building automation too early.",
-            ]
-
-            business_model = (
-                f"Start with pilot validation, then test {context['business_model']} only after users confirm value and willingness to pay."
-            )
-
-            committee_summary = (
-                "The committee agrees on a conditional GO: continue validation, narrow the MVP, collect field evidence, then decide whether to scale."
-            )
-
-        else:
-            final_verdict = (
-                f"{context['title']} doit continuer comme projet de validation MVP ciblé. "
-                "Le comité ne recommande pas encore un développement complet à grande échelle."
-            )
-
-            improved_idea_version = (
-                f"Construire {context['title']} comme une solution ciblée pour {context['target_users']} en {context['region']}, "
-                f"centrée sur le problème suivant : {context['problem']}. La première version doit couvrir {context['mvp_scope']} "
-                "et prouver un usage hebdomadaire avant d’ajouter des modules avancés."
-            )
-
-            mvp_recommendation = (
-                f"Lancer un MVP réduit autour de {context['mvp_scope']}. Éviter les fonctionnalités de plateforme large avant de prouver l’adoption."
-            )
-
-            prototype_estimate = (
-                f"Utiliser l’estimation financière actuelle comme première référence budgétaire : {context['budget_reference']}. "
-                "Garder le prototype léger et prioriser les composants réutilisables."
-            )
-
-            cost_reduction_strategy = [
-                "Réduire le MVP à un seul flux et un seul segment cible.",
-                "Utiliser l’hébergement existant et des composants open-source lorsque c’est possible.",
-                "Éviter les intégrations personnalisées avant confirmation de la demande par pilote.",
-                "Faire un onboarding manuel au premier pilote au lieu de construire trop tôt de l’automatisation.",
-            ]
-
-            business_model = (
-                f"Commencer par une validation pilote, puis tester {context['business_model']} seulement après confirmation de la valeur et de la volonté de payer."
-            )
-
-            committee_summary = (
-                "Le comité valide un GO conditionnel : continuer la validation, réduire le MVP, collecter des preuves terrain, puis décider du passage à l’échelle."
-            )
-
-        return {
-            "format": "debate_room_judge_v7_project_review_committee",
-            "role": "Executive Judge",
-            "decision": decision,
-            "final_verdict": final_verdict,
-            "committee_decision_summary": committee_summary,
-            "improved_idea_version": improved_idea_version,
-            "mvp_recommendation": mvp_recommendation,
-            "prototype_or_material_estimate": prototype_estimate,
-            "cost_reduction_strategy": cost_reduction_strategy,
-            "target_people": self._target_people(context, output_language),
-            "target_zones": self._target_zones(context, output_language),
-            "sellable_features": sellable_features,
-            "business_model": business_model,
-            "critical_risks": critical_risks,
-            "go_no_go_conditions": go_no_go_conditions,
-            "next_actions": next_actions,
-            "score_reference": score,
-            "confidence_level": "high" if score >= 7 else "medium",
-            "manual_review_required": True,
-            "context_locked": True,
-            "output_language": output_language,
-            "rounds_reviewed": len(rounds),
-        }
-
-    # ========================================================
-    # Context
-    # ========================================================
-
-    def _context(
-        self,
-        *,
-        title: str,
-        description: str,
-        industry: str,
-        region: str,
-        output_language: str,
-        project_context: Dict[str, Any],
-        analysis_data: Dict[str, Any],
-    ) -> Dict[str, str]:
-        structured = (
-            project_context.get("structured_project_context")
-            or analysis_data.get("structured_project_context")
-            or analysis_data.get("project_intelligence", {}).get("structured_project_context")
-            or {}
-        )
-
-        bmc = self._section(analysis_data, "business_model_canvas")
-        financial = self._section(analysis_data, "financial_estimation")
-        market = self._section(analysis_data, "market_study")
-        personas = self._section(analysis_data, "persona_builder")
-
-        clean_title = self._safe_text(
-            structured.get("project_name")
-            or structured.get("title")
-            or project_context.get("title")
-            or title,
-            "Project",
-        )
-
-        clean_description = self._safe_text(
-            structured.get("description")
-            or project_context.get("description")
-            or description,
-            "",
-        )
-
-        clean_sector = self._safe_text(
-            structured.get("sector")
-            or structured.get("industry")
-            or project_context.get("industry")
-            or industry,
-            "target sector",
-        )
-
-        clean_region = self._safe_text(
-            structured.get("target_region")
-            or structured.get("market_region")
-            or project_context.get("market_region")
-            or region,
-            "target region",
-        )
-
-        target_users = self._first_text(
-            structured.get("target_users"),
-            project_context.get("target_users"),
-            personas.get("target_segments"),
-            market.get("target_customers"),
-            market.get("customer_segments"),
-            bmc.get("customer_segments"),
-            "target users",
-        )
-
-        problem = self._safe_text(
-            structured.get("problem")
-            or structured.get("core_problem")
-            or structured.get("main_problem")
-            or structured.get("pain_point")
-            or project_context.get("problem")
-            or market.get("market_problem"),
-            "",
-        )
-
-        if not problem:
-            problem = self._extract_problem_from_description(clean_description)
-
-        solution = self._first_text(
-            structured.get("solution"),
-            structured.get("solution_type"),
-            structured.get("value_proposition"),
-            project_context.get("solution"),
-            bmc.get("value_propositions"),
-            bmc.get("value_proposition"),
-            clean_description,
-            "the proposed solution",
-        )
-
-        mvp_scope = self._first_text(
-            structured.get("mvp_scope"),
-            project_context.get("mvp_scope"),
-            financial.get("project_context_used", {}).get("mvp_scope") if isinstance(financial.get("project_context_used"), dict) else None,
-            analysis_data.get("mvp_scope"),
-            "a reduced MVP focused on the core workflow",
-        )
-
-        business_model = self._first_text(
-            structured.get("business_model"),
-            project_context.get("business_model"),
-            bmc.get("business_model_note"),
-            bmc.get("revenue_streams"),
-            financial.get("pricing_model"),
-            "pilot then subscription model",
-        )
-
-        budget_reference = self._first_text(
-            financial.get("mvp_budget_estimate"),
-            financial.get("initial_costs"),
-            financial.get("funding_needs"),
-            "lean MVP budget to validate during planning",
-        )
-
-        context = {
-            "title": clean_title,
-            "description": clean_description,
-            "sector": clean_sector,
-            "region": clean_region,
-            "target_users": target_users,
-            "problem": problem,
-            "solution": solution,
-            "mvp_scope": mvp_scope,
-            "business_model": business_model,
-            "budget_reference": budget_reference,
-            "output_language": output_language,
-        }
-
-        allowed_context = self._allowed_context(context)
-
-        return {
-            key: self._sanitize_text(value, allowed_context=allowed_context)
-            for key, value in context.items()
-        }
-
-    # ========================================================
-    # Business content helpers
-    # ========================================================
-
-    def _committee(self, output_language: str) -> List[str]:
-        return [
-            "Moderator",
-            "Project Owner",
-            "CTO / Technical Lead",
-            "Product Manager",
-            "Market & Sales Manager",
-            "CFO / Finance Manager",
-            "Operations / Field Expert",
-            "Customer Representative",
-            "Executive Judge",
-        ]
-
-    def _opportunities(self, context: Dict[str, str], output_language: str) -> List[str]:
-        if output_language == "en":
-            return [
-                f"Validate demand with {context['target_users']} in {context['region']}.",
-                f"Position {context['title']} as a focused solution for {context['sector']}.",
-                "Use pilot evidence to refine pricing and onboarding.",
-            ]
-
-        return [
-            f"Valider la demande avec {context['target_users']} en {context['region']}.",
-            f"Positionner {context['title']} comme solution ciblée pour {context['sector']}.",
-            "Utiliser les preuves du pilote pour améliorer le prix et l’onboarding.",
-        ]
-
-    def _assumptions(self, context: Dict[str, str], output_language: str) -> List[str]:
-        if output_language == "en":
-            return [
-                f"{context['target_users']} face the problem often enough.",
-                "The MVP creates visible value within the first week of use.",
-                "The buyer accepts a paid pilot or subscription after validation.",
-            ]
-
-        return [
-            f"{context['target_users']} rencontrent le problème assez souvent.",
-            "Le MVP crée une valeur visible dès la première semaine d’usage.",
-            "L’acheteur accepte un pilote payant ou un abonnement après validation.",
-        ]
-
-    def _missing_evidence(self, context: Dict[str, str], output_language: str) -> List[str]:
-        if output_language == "en":
-            return [
-                "Interview evidence from the first target users.",
-                "Pilot usage data.",
-                "Real pricing feedback.",
-                "Comparison with current alternatives.",
-            ]
-
-        return [
-            "Preuves d’entretiens avec les premiers utilisateurs ciblés.",
-            "Données d’usage pilote.",
-            "Retour réel sur le prix.",
-            "Comparaison avec les alternatives actuelles.",
-        ]
-
-    def _mitigation_requests(self, context: Dict[str, str], output_language: str) -> List[str]:
-        if output_language == "en":
-            return [
-                "Reduce the MVP to the smallest useful workflow.",
-                "Define measurable success metrics before building.",
-                "Test adoption with real users before scaling.",
-            ]
-
-        return [
-            "Réduire le MVP au plus petit flux utile.",
-            "Définir des métriques de succès mesurables avant développement.",
-            "Tester l’adoption avec de vrais utilisateurs avant le passage à l’échelle.",
-        ]
-
-    def _sellable_features(self, context: Dict[str, str], output_language: str) -> List[str]:
-        if output_language == "en":
-            return [
-                f"Core workflow linked to {context['mvp_scope']}.",
-                "Simple dashboard for daily tracking.",
-                "User or record management adapted to the first target segment.",
-                "Progress, status or activity visibility.",
-                "Basic export or certificate/report generation if validated by users.",
-            ]
-
-        return [
-            f"Flux principal lié à {context['mvp_scope']}.",
-            "Tableau de bord simple pour le suivi quotidien.",
-            "Gestion des utilisateurs ou dossiers adaptée au premier segment cible.",
-            "Visibilité sur le progrès, le statut ou l’activité.",
-            "Export basique ou génération de certificat/rapport si validé par les utilisateurs.",
-        ]
-
-    def _critical_risks(
-        self,
-        context: Dict[str, str],
-        analysis_data: Dict[str, Any],
-        output_language: str,
-    ) -> List[str]:
-        swot = self._section(analysis_data, "swot")
-        startup_score = self._section(analysis_data, "startup_score")
-        persona_builder = self._section(analysis_data, "persona_builder")
-
-        extracted = []
-        extracted.extend(self._safe_list(swot.get("threats"))[:2])
-        extracted.extend(self._safe_list(startup_score.get("weaknesses"))[:2])
-        extracted.extend(self._safe_list(persona_builder.get("persona_risks"))[:2])
-
-        if output_language == "en":
-            defaults = [
-                "Users may keep current manual or generic alternatives.",
-                "Willingness to pay may remain unproven.",
-                "The MVP may become too broad before validation.",
-                "Onboarding friction may slow adoption.",
-            ]
-        else:
-            defaults = [
-                "Les utilisateurs peuvent garder les alternatives manuelles ou génériques actuelles.",
-                "La volonté de payer peut rester non prouvée.",
-                "Le MVP peut devenir trop large avant validation.",
-                "La friction d’onboarding peut ralentir l’adoption.",
-            ]
-
-        return self._unique_strings(extracted + defaults)[:6]
-
-    def _target_people(self, context: Dict[str, str], output_language: str) -> List[str]:
-        if output_language == "en":
-            return [
-                context["target_users"],
-                "Daily operational users",
-                "Economic decision-makers",
-                "Skeptical users who currently use manual alternatives",
-            ]
-
-        return [
-            context["target_users"],
-            "Utilisateurs opérationnels quotidiens",
-            "Décideurs économiques",
-            "Utilisateurs sceptiques qui utilisent actuellement des alternatives manuelles",
-        ]
-
-    def _target_zones(self, context: Dict[str, str], output_language: str) -> List[str]:
-        if output_language == "en":
-            return [
-                context["region"],
-                "First pilot locations where interviews are easiest",
-                "Expansion zones only after proof of adoption",
-            ]
-
-        return [
-            context["region"],
-            "Premières zones pilotes où les entretiens sont les plus faciles",
-            "Zones d’expansion seulement après preuve d’adoption",
-        ]
-
-    def _go_no_go_conditions(self, context: Dict[str, str], output_language: str) -> List[str]:
-        if output_language == "en":
-            return [
-                "GO if at least 10 interviews confirm repeated pain.",
-                "GO if pilot users complete the core workflow weekly.",
-                "GO if at least one buyer accepts a real price discussion.",
-                "NO-GO for scaling if users do not return after the first test.",
-                "NO-GO for advanced features before the core MVP is used repeatedly.",
-            ]
-
-        return [
-            "GO si au moins 10 entretiens confirment une douleur répétée.",
-            "GO si les utilisateurs pilotes complètent le flux principal chaque semaine.",
-            "GO si au moins un acheteur accepte une vraie discussion de prix.",
-            "NO-GO passage à l’échelle si les utilisateurs ne reviennent pas après le premier test.",
-            "NO-GO fonctionnalités avancées avant usage répété du MVP principal.",
-        ]
-
-    def _next_actions(self, context: Dict[str, str], output_language: str) -> List[str]:
-        if output_language == "en":
-            return [
-                "Write a one-page MVP scope focused on the core workflow.",
-                "Prepare an interview script for daily users and buyers.",
-                "Recruit 10 to 20 target users for validation.",
-                "Build a clickable prototype or minimal working MVP.",
-                "Measure activation, weekly usage and willingness to pay.",
-                "Update the report after pilot evidence is collected.",
-            ]
-
-        return [
-            "Rédiger une page de périmètre MVP centrée sur le flux principal.",
-            "Préparer un script d’entretien pour utilisateurs quotidiens et acheteurs.",
-            "Recruter 10 à 20 utilisateurs ciblés pour validation.",
-            "Construire un prototype cliquable ou un MVP minimal fonctionnel.",
-            "Mesurer l’activation, l’usage hebdomadaire et la volonté de payer.",
-            "Mettre à jour le rapport après collecte de preuves pilote.",
-        ]
-
-    def _evidence_used(self, analysis_data: Dict[str, Any], output_language: str) -> List[str]:
-        available = []
-
-        for key in [
-            "market_study",
-            "business_model_canvas",
-            "financial_estimation",
-            "swot",
-            "startup_score",
-            "persona_builder",
-            "competitive_analysis",
-            "fact_checker",
-        ]:
-            section = analysis_data.get(key)
-            if isinstance(section, dict) and section:
-                available.append(key)
-
-        if available:
-            return available
-
-        if output_language == "en":
-            return ["Project description", "Structured project context"]
-
-        return ["Description du projet", "Contexte structuré du projet"]
-
-    # ========================================================
-    # Decisions and scoring
-    # ========================================================
-
-    def _round_decision(self, *, critic_risk_score: Any, output_language: str) -> str:
-        try:
-            risk = int(float(critic_risk_score))
-        except Exception:
-            risk = 7
-
-        if output_language == "en":
-            if risk >= 8:
-                return "PIVOT_REQUIRED"
-            if risk >= 6:
-                return "CONDITIONAL_GO"
-            return "GO"
-
-        if risk >= 8:
-            return "PIVOT_NÉCESSAIRE"
-        if risk >= 6:
-            return "GO_CONDITIONNEL"
-        return "GO"
-
-    def _final_decision(self, score: float, output_language: str) -> str:
-        if output_language == "en":
-            if score >= 7:
-                return "CONDITIONAL_GO_FOR_MVP"
-            if score >= 6:
-                return "PIVOT_BEFORE_MVP"
-            return "NO_GO_BEFORE_REPOSITIONING"
-
-        if score >= 7:
-            return "GO_CONDITIONNEL_POUR_MVP"
-        if score >= 6:
-            return "PIVOTER_AVANT_MVP"
-        return "NO_GO_AVANT_REPOSITIONNEMENT"
-
-    def _round_risk_score(self, round_number: int) -> int:
-        risk_by_round = {
-            1: 6,
-            2: 7,
-            3: 6,
-            4: 7,
-            5: 7,
-        }
-
-        return risk_by_round.get(round_number, 7)
-
-    def _score_from_analysis(self, analysis_data: Dict[str, Any]) -> float:
-        startup_score = self._section(analysis_data, "startup_score")
-
-        for key in ["score", "startup_score", "overall_score", "final_score", "score_out_of_10"]:
-            value = startup_score.get(key)
-            try:
-                if value is not None:
-                    return round(float(value), 1)
-            except Exception:
-                continue
-
-        try:
-            return round(float(analysis_data.get("startup_score") or 7.0), 1)
-        except Exception:
-            return 7.0
-
-    # ========================================================
-    # Sanitization
-    # ========================================================
-
-    def _sanitize_object(self, *, value: Any, allowed_context: str) -> Any:
-        if isinstance(value, dict):
-            cleaned: Dict[str, Any] = {}
-
-            for key, item in value.items():
-                clean_key = str(key or "").strip()
-
-                if not clean_key:
-                    continue
-
-                if clean_key in {
-                    "debug",
-                    "raw_data",
-                    "raw_response",
-                    "raw_data_backup",
-                    "raw_data_backup_hidden",
-                    "internal_error",
-                }:
-                    continue
-
-                cleaned_item = self._sanitize_object(
-                    value=item,
-                    allowed_context=allowed_context,
-                )
-
-                if self._is_empty(cleaned_item):
-                    continue
-
-                cleaned[clean_key] = cleaned_item
-
-            return cleaned
-
-        if isinstance(value, list):
-            cleaned_list: List[Any] = []
-
-            for item in value:
-                cleaned_item = self._sanitize_object(
-                    value=item,
-                    allowed_context=allowed_context,
-                )
-
-                if self._is_empty(cleaned_item):
-                    continue
-
-                cleaned_list.append(cleaned_item)
-
-            return cleaned_list
-
-        if value is None:
-            return None
-
-        if isinstance(value, bool):
-            return value
-
-        if isinstance(value, (int, float)):
-            return value
-
-        return self._sanitize_text(value, allowed_context=allowed_context)
-
-    def _sanitize_text(self, value: Any, *, allowed_context: str) -> str:
-        text = str(value or "").strip()
-        text = re.sub(r"\s+", " ", text)
-
-        normalized_allowed_context = self._normalize(allowed_context)
-
-        for forbidden in self.DEMO_OFFTOPIC_TERMS:
-            normalized_forbidden = self._normalize(forbidden)
-
-            if normalized_forbidden and normalized_forbidden in normalized_allowed_context:
-                continue
-
-            text = re.sub(
-                re.escape(forbidden),
-                "",
-                text,
-                flags=re.IGNORECASE,
-            )
-
-        return text[:2200].strip()
-
-    def _allowed_context(self, context: Dict[str, str]) -> str:
-        return self._normalize(" ".join(str(value or "") for value in context.values()))
-
-    # ========================================================
-    # Fallback
-    # ========================================================
-
-    def _fallback_judge(
-        self,
-        *,
-        context: Dict[str, str],
-        output_language: str,
-        error: str,
-    ) -> Dict[str, Any]:
-        if output_language == "en":
-            return {
-                "format": "debate_room_judge_v7_emergency_fallback",
-                "role": "Executive Judge",
-                "decision": "CONDITIONAL_GO_FOR_MVP",
-                "final_verdict": "Continue only with a reduced MVP and field validation.",
-                "committee_decision_summary": "Safe fallback used. Manual review recommended.",
-                "improved_idea_version": f"Validate {context['title']} with a narrow MVP for {context['target_users']}.",
-                "mvp_recommendation": "Build only the core workflow first.",
-                "prototype_or_material_estimate": "Use a lean prototype budget and validate exact cost manually.",
-                "cost_reduction_strategy": ["Reduce scope", "Use existing tools", "Avoid custom integrations early"],
-                "target_people": [context["target_users"]],
-                "target_zones": [context["region"]],
-                "sellable_features": ["Core workflow", "Simple dashboard", "Basic reporting"],
-                "business_model": "Pilot first, subscription only after validation.",
-                "critical_risks": ["Adoption risk", "Pricing risk", "Scope creep"],
-                "go_no_go_conditions": ["GO only after interviews and pilot usage."],
-                "next_actions": ["Interview users", "Build a small MVP", "Test willingness to pay"],
-                "error_handled": True,
-                "error": error,
-                "context_locked": True,
-                "output_language": output_language,
-            }
-
-        return {
-            "format": "debate_room_judge_v7_emergency_fallback",
-            "role": "Executive Judge",
-            "decision": "GO_CONDITIONNEL_POUR_MVP",
-            "final_verdict": "Continuer seulement avec un MVP réduit et une validation terrain.",
-            "committee_decision_summary": "Fallback sécurisé utilisé. Revue manuelle recommandée.",
-            "improved_idea_version": f"Valider {context['title']} avec un MVP réduit pour {context['target_users']}.",
-            "mvp_recommendation": "Construire seulement le flux principal en premier.",
-            "prototype_or_material_estimate": "Utiliser un budget prototype léger et valider le coût exact manuellement.",
-            "cost_reduction_strategy": ["Réduire le périmètre", "Utiliser des outils existants", "Éviter les intégrations personnalisées au début"],
-            "target_people": [context["target_users"]],
-            "target_zones": [context["region"]],
-            "sellable_features": ["Flux principal", "Tableau de bord simple", "Reporting basique"],
-            "business_model": "Pilote d’abord, abonnement seulement après validation.",
-            "critical_risks": ["Risque d’adoption", "Risque de prix", "Élargissement excessif du périmètre"],
-            "go_no_go_conditions": ["GO seulement après entretiens et usage pilote."],
-            "next_actions": ["Interroger les utilisateurs", "Construire un petit MVP", "Tester la volonté de payer"],
-            "error_handled": True,
-            "error": error,
-            "context_locked": True,
-            "output_language": output_language,
-        }
-
-    # ========================================================
-    # Generic helpers
-    # ========================================================
-
-    def _calculate_progress(
-        self,
-        *,
-        completed_rounds: int,
-        max_rounds: int,
-        defender_done: bool,
-        completed: bool,
-    ) -> int:
-        if completed:
-            return 100
-
-        base = int((completed_rounds / max_rounds) * 85)
-
-        if defender_done:
-            base += 5
-
-        return max(0, min(95, base))
-
-    def _normalize_max_rounds(self, max_rounds: int) -> int:
-        try:
-            requested = int(max_rounds)
-        except Exception:
-            requested = 5
-
-        if requested < 5:
-            return 5
-
-        return min(5, requested)
-
-    def _section(self, analysis_data: Dict[str, Any], key: str) -> Dict[str, Any]:
-        value = analysis_data.get(key)
-        return value if isinstance(value, dict) else {}
-
-    def _first_text(self, *values: Any) -> str:
-        for value in values:
-            items = self._safe_list(value)
-
-            if items:
-                return items[0]
-
-        return ""
-
-    def _safe_text(self, value: Any, fallback: str = "") -> str:
-        if value is None:
-            return fallback
-
-        if isinstance(value, list):
-            items = self._safe_list(value)
-            return items[0] if items else fallback
-
-        if isinstance(value, dict):
-            items = self._safe_list(value)
-            return items[0] if items else fallback
-
-        clean = re.sub(r"\s+", " ", str(value or "").strip())
-
-        return clean or fallback
-
-    def _safe_list(self, value: Any) -> List[str]:
-        if value is None:
-            return []
-
-        if isinstance(value, list):
-            result: List[str] = []
-
-            for item in value:
-                result.extend(self._safe_list(item))
-
-            return self._unique_strings(result)
-
-        if isinstance(value, dict):
-            result: List[str] = []
-
-            priority_keys = [
-                "segment",
-                "name",
-                "title",
-                "description",
-                "summary",
-                "value",
-                "label",
-                "text",
-                "role",
-                "main_pain",
-                "expected_value",
-            ]
-
-            for key in priority_keys:
-                if key in value:
-                    result.extend(self._safe_list(value.get(key)))
-
-            if not result:
-                for item in value.values():
-                    result.extend(self._safe_list(item))
-
-            return self._unique_strings(result)
-
-        clean = re.sub(r"\s+", " ", str(value or "").strip())
-
-        if not clean:
-            return []
-
-        return [clean[:1200]]
-
-    def _extract_problem_from_description(self, description: str) -> str:
-        clean = self._safe_text(description)
-
-        if not clean:
-            return "the main operational problem described by the project"
-
-        sentences = re.split(r"(?<=[.!?])\s+", clean)
-
-        if sentences:
-            return sentences[0][:320]
-
-        return clean[:320]
-
-    def _normalize(self, value: Any) -> str:
-        text = str(value or "").lower()
-        text = text.replace("’", "'")
-        text = text.replace("é", "e")
-        text = text.replace("è", "e")
-        text = text.replace("ê", "e")
-        text = text.replace("à", "a")
-        text = text.replace("ù", "u")
-        text = text.replace("ç", "c")
-        text = re.sub(r"\s+", " ", text).strip()
-
-        return text
-
-    def _is_empty(self, value: Any) -> bool:
-        if value is None:
-            return True
-
-        if isinstance(value, str):
-            return value.strip() == ""
-
-        if isinstance(value, list):
-            return len(value) == 0
-
-        if isinstance(value, dict):
-            return len(value) == 0
-
-        return False
-
-    def _unique_strings(self, items: List[str]) -> List[str]:
-        result: List[str] = []
-        seen = set()
-
-        for item in items:
-            clean = re.sub(r"\s+", " ", str(item or "").strip())
-
-            if not clean:
-                continue
-
-            key = clean.lower()
-
-            if key in seen:
-                continue
-
-            seen.add(key)
-            result.append(clean)
-
-        return result
 
     async def _notify(self, state: Dict[str, Any]) -> None:
         if not self.step_callback:
             return
-
         try:
             await self.step_callback(dict(state))
         except Exception:
-            logger.exception("[DebateRoomGraph] Step callback failed")
+            logger.exception("[DebateRoomGraph] step_callback failed")
+
+    # ------------------------------------------------------------------
+    # Round builders
+    # ------------------------------------------------------------------
+
+    def _adaptive_questions(
+        self,
+        *,
+        number: int,
+        language: str,
+        specifications: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        questions: List[Dict[str, Any]] = []
+        for index, spec in enumerate(specifications[:4], start=1):
+            questions.append(
+                self._question(
+                    round_number=number,
+                    index=index,
+                    asked_by=spec.get("asked_by", "evidence_auditor"),
+                    addressed_to=spec.get("addressed_to", "project_defender"),
+                    question=spec["question"],
+                    direct_answer=spec["answer"],
+                    reasoning=spec["reasoning"],
+                    confidence=float(spec.get("confidence", 0.4)),
+                    evidence_status=spec.get("status", "field_validation_required"),
+                    unresolved=spec["unresolved"],
+                    follow_up=spec["follow_up"],
+                    likely_real_question=spec["likely"],
+                    recommended_answer=spec["recommended"],
+                    proofs=spec.get("proofs", []),
+                    avoid=spec["avoid"],
+                )
+            )
+        return questions
+
+    def _round_adaptive_problem(self, number: int, context: Dict[str, Any], analysis: Dict[str, Any], evidence: Dict[str, Any], language: str) -> Dict[str, Any]:
+        actor = context["primary_target"]
+        action = context["priority_workflow"]
+        validation_unit = context.get("validation_unit") or self._t(language, "core user action", "action utilisateur principale")
+        specs = [
+            {
+                "asked_by": "customer_problem_analyst",
+                "question": self._frequency_question(context, language),
+                "answer": self._t(language, "The project description defines the intended action, but real frequency and failure rate have not yet been measured.", "La description définit l’action visée, mais la fréquence réelle et le taux d’échec ne sont pas encore mesurés."),
+                "reasoning": self._t(language, f"The first action to validate is: {action}.", f"La première action à valider est : {action}."),
+                "unresolved": self._t(language, "Measure attempts, failures, delay and current alternatives with real users.", "Mesurer les tentatives, échecs, délais et alternatives actuelles avec de vrais utilisateurs."),
+                "follow_up": self._t(language, "Which event will be counted as one real attempt?", "Quel événement sera compté comme une tentative réelle ?"),
+                "likely": self._t(language, "What proves that the problem is frequent enough?", "Qu’est-ce qui prouve que le problème est assez fréquent ?"),
+                "recommended": self._t(language, "We treat frequency as a hypothesis and will measure attempts and failed outcomes during a bounded field test.", "Nous traitons la fréquence comme une hypothèse et mesurerons les tentatives et résultats échoués pendant un test terrain limité."),
+                "proofs": self._t_list(language, ["Observation log", "Attempt and failure baseline"], ["Journal d’observation", "Base des tentatives et échecs"]),
+                "avoid": self._t(language, "Everyone needs this.", "Tout le monde en a besoin."),
+            },
+            {
+                "asked_by": "customer_problem_analyst",
+                "question": self._t(language, "Who initiates the action, who fulfils it and who can block it?", "Qui initie l’action, qui la réalise et qui peut la bloquer ?"),
+                "answer": self._actor_map_answer(context, language),
+                "reasoning": self._t(language, "Different actors may own usage, fulfilment, payment, trust or approval.", "Des acteurs différents peuvent porter l’usage, la réalisation, le paiement, la confiance ou l’approbation."),
+                "unresolved": self._t(language, "Confirm the actor map and decision rights through interviews.", "Confirmer la carte des acteurs et les droits de décision par entretiens."),
+                "follow_up": self._t(language, "Which actor has the strongest reason not to participate?", "Quel acteur a la raison la plus forte de ne pas participer ?"),
+                "likely": self._t(language, "Who is the real customer?", "Qui est le vrai client ?"),
+                "recommended": self._t(language, "We separate the primary user, the fulfilment partner, the payer and the operational gatekeeper before setting the offer.", "Nous séparons l’utilisateur principal, le partenaire de réalisation, le payeur et le gardien opérationnel avant de définir l’offre."),
+                "proofs": self._t_list(language, ["Actor map", "Interview records"], ["Carte des acteurs", "Comptes rendus d’entretiens"]),
+                "avoid": self._t(language, "The same person is obviously user and buyer.", "La même personne est évidemment utilisateur et acheteur."),
+            },
+            {
+                "asked_by": "risk_execution_officer",
+                "question": self._t(language, "Why would the target switch from the current alternative?", "Pourquoi la cible quitterait-elle l’alternative actuelle ?"),
+                "answer": self._t(language, "Switching is credible only if the project improves a measurable outcome without adding unacceptable friction or risk.", "Le changement est crédible seulement si le projet améliore un résultat mesurable sans ajouter une friction ou un risque inacceptable."),
+                "reasoning": context["problem"],
+                "unresolved": self._t(language, "Identify the strongest existing alternative and switching cost.", "Identifier l’alternative actuelle la plus forte et le coût de changement."),
+                "follow_up": self._t(language, "Which measurable result must improve in the first session?", "Quel résultat mesurable doit s’améliorer dès la première session ?"),
+                "likely": self._t(language, "Why is the current method not good enough?", "Pourquoi la méthode actuelle n’est-elle pas suffisante ?"),
+                "recommended": self._t(language, "The pilot will compare completion, delay, failure, trust and repeat use against the current alternative.", "Le pilote comparera réalisation, délai, échec, confiance et réutilisation face à l’alternative actuelle."),
+                "proofs": self._t_list(language, ["Before/after comparison", "Switching-cost interviews"], ["Comparaison avant/après", "Entretiens sur le coût de changement"]),
+                "avoid": self._t(language, "Digital is automatically better.", "Le numérique est automatiquement meilleur."),
+            },
+            {
+                "asked_by": "evidence_auditor",
+                "question": self._t(language, "What result would falsify the problem hypothesis?", "Quel résultat réfuterait l’hypothèse du problème ?"),
+                "answer": self._t(language, "The hypothesis fails if the action is rare, existing alternatives are satisfactory or the target refuses the proposed change.", "L’hypothèse échoue si l’action est rare, les alternatives satisfaisantes ou la cible refuse le changement proposé."),
+                "reasoning": self._t(language, "A decision-ready analysis must define failure conditions before the pilot.", "Une analyse décisionnelle doit définir les conditions d’échec avant le pilote."),
+                "unresolved": self._t(language, "Set explicit problem-frequency and switching thresholds.", "Définir des seuils explicites de fréquence et de changement."),
+                "follow_up": self._t(language, "Who approves the stop or pivot decision?", "Qui approuve la décision d’arrêt ou pivot ?"),
+                "likely": self._t(language, "What would make you stop?", "Qu’est-ce qui vous ferait arrêter ?"),
+                "recommended": self._t(language, "We will stop or pivot when the predefined frequency, outcome or adoption thresholds are not met.", "Nous arrêterons ou pivoterons lorsque les seuils prédéfinis de fréquence, résultat ou adoption ne sont pas atteints."),
+                "proofs": self._t_list(language, ["Pre-registered thresholds"], ["Seuils préenregistrés"]),
+                "avoid": self._t(language, "The problem cannot be disproved.", "Le problème ne peut pas être réfuté."),
+            },
+        ]
+        questions = self._adaptive_questions(number=number, language=language, specifications=specs)
+        return self._round(number, language,
+            self._t(language, "Problem, actors and behaviour", "Problème, acteurs et comportement"),
+            self._t(language, "Validate frequency, actor roles and behaviour change before building the full product.", "Valider fréquence, rôles et changement de comportement avant de construire le produit complet."),
+            self._t(language, "Is the problem frequent and important enough for the required actors to change behaviour?", "Le problème est-il assez fréquent et important pour que les acteurs nécessaires changent de comportement ?"),
+            ["project_intelligence", "customer_observation", "actor_map"],
+            [self._t(language, f"The project defines a measurable action: {action}.", f"Le projet définit une action mesurable : {action}."), self._t(language, "The actor map can be tested before full development.", "La carte des acteurs peut être testée avant le développement complet.")],
+            [self._t(language, "Hypothesis: the primary actor experiences repeated pain and the required partners will participate.", "Hypothèse : l’acteur principal rencontre une douleur répétée et les partenaires nécessaires participeront.")],
+            context.get("risk_dimensions")[:2] or [self._t(language, "The action may be too rare or existing alternatives may be sufficient.", "L’action peut être trop rare ou les alternatives actuelles suffisantes.")],
+            context.get("evidence_needs")[:2] or [self._t(language, "Observed attempts and actor interviews.", "Tentatives observées et entretiens acteurs.")],
+            [], questions, "CONDITIONAL_GO",
+            self._t(language, "The project is defined enough for a behavioural validation, but frequency and actor participation remain unproven.", "Le projet est assez défini pour une validation comportementale, mais la fréquence et la participation des acteurs restent non prouvées."),
+            self._t(language, "Observe the core action and validate every required actor.", "Observer l’action principale et valider chaque acteur nécessaire."),
+            [self._t(language, "The core action occurs repeatedly and produces measurable current loss.", "L’action principale se produit de manière répétée et crée une perte actuelle mesurable."), self._t(language, "Every required actor accepts the proposed role in a pilot.", "Chaque acteur nécessaire accepte son rôle dans un pilote.")],
+            [self._t(language, "The problem is rare or the required actors refuse to participate.", "Le problème est rare ou les acteurs nécessaires refusent de participer.")])
+
+    def _round_adaptive_market(self, number: int, context: Dict[str, Any], analysis: Dict[str, Any], evidence: Dict[str, Any], language: str) -> Dict[str, Any]:
+        sources = evidence.get("sources") or []
+        source_count = len(sources)
+        competitors = self._section(analysis, "competitive_analysis")
+        direct_count = int(self._number(competitors.get("local_competitors_count"), 0))
+        specs = [
+            {"asked_by":"market_competition_analyst", "question":self._t(language,"Which verified products or services solve the same validation unit for the same actors?","Quels produits ou services vérifiés résolvent la même unité de validation pour les mêmes acteurs ?"), "answer":self._t(language,f"The retained evidence currently contains {source_count} unique source(s) and {direct_count} verified local direct competitor(s).",f"Les preuves retenues contiennent actuellement {source_count} source(s) unique(s) et {direct_count} concurrent(s) direct(s) local(aux) vérifié(s)."), "reasoning":self._t(language,"Articles, directories and adjacent products must not be presented as direct competitors.","Les articles, annuaires et produits adjacents ne doivent pas être présentés comme concurrents directs."), "confidence":0.7 if source_count else 0.3, "status":"supported" if source_count else "not_confirmed", "unresolved":self._t(language,"Manually verify product function, active geography, target actors and current activity.","Vérifier manuellement la fonction, la géographie active, les acteurs ciblés et l’activité actuelle."), "follow_up":self._t(language,"Which source was manually verified most recently?","Quelle source a été vérifiée manuellement le plus récemment ?"), "likely":self._t(language,"Who are the closest alternatives?","Quelles sont les alternatives les plus proches ?"), "recommended":self._t(language,"We separate direct products, adjacent solutions, evidence pages and offline alternatives; only verified product evidence enters the direct list.","Nous séparons produits directs, solutions adjacentes, pages de preuve et alternatives hors ligne ; seules les preuves produit vérifiées entrent dans la liste directe."), "proofs":self._t_list(language,["Verified product pages","Feature and actor comparison"],["Pages produit vérifiées","Comparaison fonctionnalités et acteurs"]), "avoid":self._t(language,"There is no competition.","Il n’existe aucune concurrence.")},
+            {"asked_by":"customer_problem_analyst", "question":self._t(language,"What do the target actors use today instead of the project?","Qu’utilisent aujourd’hui les acteurs ciblés à la place du projet ?"), "answer":self._t(language,"The strongest alternative may be an offline process, direct contact, an incumbent platform or simply abandoning the action.","L’alternative la plus forte peut être un processus hors ligne, un contact direct, une plateforme établie ou l’abandon de l’action."), "reasoning":self._t(language,"Replacement behaviour matters more than a feature-only competitor list.","Le comportement de remplacement compte davantage qu’une liste de fonctionnalités."), "unresolved":self._t(language,"Observe the actual current journey and switching cost.","Observer le parcours actuel réel et le coût de changement."), "follow_up":self._t(language,"Which alternative is hardest to replace and why?","Quelle alternative est la plus difficile à remplacer et pourquoi ?"), "likely":self._t(language,"Why will users switch?","Pourquoi les utilisateurs changeront-ils ?"), "recommended":self._t(language,"We will prove a measurable advantage against the current behaviour, not assume that a new app is enough.","Nous prouverons un avantage mesurable face au comportement actuel, sans supposer qu’une nouvelle application suffit."), "proofs":self._t_list(language,["Current-journey map","Switching-cost evidence"],["Carte du parcours actuel","Preuves du coût de changement"]), "avoid":self._t(language,"Our features are better, so users will switch.","Nos fonctionnalités sont meilleures, donc les utilisateurs changeront.")},
+            {"asked_by":"evidence_auditor", "question":self._t(language,"Do the retained sources prove local demand or only feasibility and context?","Les sources retenues prouvent-elles la demande locale ou seulement la faisabilité et le contexte ?"), "answer":self._t(language,"International or adjacent evidence can show feasibility, but local demand and willingness to pay require compatible local evidence and field tests.","Les preuves internationales ou adjacentes peuvent montrer la faisabilité, mais la demande locale et la volonté de payer exigent des preuves locales compatibles et des tests terrain."), "reasoning":self._t(language,f"The current evidence level is {evidence.get('level','low')}.",f"Le niveau de preuve actuel est {evidence.get('level','low')}."), "unresolved":self._t(language,"Find category-compatible local data and run interviews or transactions.","Trouver des données locales compatibles et réaliser entretiens ou transactions."), "follow_up":self._t(language,"Which local source has visible methodology?","Quelle source locale possède une méthodologie visible ?"), "likely":self._t(language,"What proves demand in the launch market?","Qu’est-ce qui prouve la demande sur le marché de lancement ?"), "recommended":self._t(language,"We currently treat local demand as a hypothesis and will validate it with compatible data and a bounded pilot.","Nous traitons actuellement la demande locale comme une hypothèse et la validerons avec des données compatibles et un pilote limité."), "proofs":self._t_list(language,["Official or independent local data","Pilot evidence"],["Données locales officielles ou indépendantes","Preuves du pilote"]), "avoid":self._t(language,"A search result proves demand.","Un résultat de recherche prouve la demande.")},
+            {"asked_by":"red_team_challenger", "question":self._t(language,"Could an apparent market gap mean weak demand rather than opportunity?","Un espace de marché apparent peut-il signifier une faible demande plutôt qu’une opportunité ?"), "answer":self._t(language,"Yes. Absence of a verified direct competitor is ambiguous and never proves an attractive empty market.","Oui. L’absence de concurrent direct vérifié est ambiguë et ne prouve jamais un marché vide attractif."), "reasoning":self._t(language,"Opportunity requires both demand evidence and a credible advantage against alternatives.","L’opportunité exige des preuves de demande et un avantage crédible face aux alternatives."), "unresolved":self._t(language,"Define what evidence would change the positioning.","Définir quelle preuve modifierait le positionnement."), "follow_up":self._t(language,"What finding would trigger a pivot?","Quel résultat déclencherait un pivot ?"), "likely":self._t(language,"Why has nobody won this market already?","Pourquoi personne n’a déjà gagné ce marché ?"), "recommended":self._t(language,"We do not call absence a gap; the pilot will determine whether it reflects unmet demand, weak urgency or structural constraints.","Nous n’appelons pas l’absence un gap ; le pilote déterminera si elle reflète une demande non satisfaite, une faible urgence ou des contraintes structurelles."), "proofs":self._t_list(language,["Alternative map","Demand evidence"],["Carte des alternatives","Preuves de demande"]), "avoid":self._t(language,"No competitor means guaranteed opportunity.","Aucun concurrent signifie une opportunité garantie.")},
+        ]
+        questions=self._adaptive_questions(number=number,language=language,specifications=specs)
+        return self._round(number,language,self._t(language,"Market, alternatives and evidence","Marché, alternatives et preuves"),self._t(language,"Separate direct competitors, adjacent solutions, evidence pages and current alternatives.","Séparer concurrents directs, solutions adjacentes, pages de preuve et alternatives actuelles."),self._t(language,"Is there compatible evidence that the project can win in the launch market?","Existe-t-il des preuves compatibles que le projet peut gagner sur le marché de lancement ?"),["competitive_analysis","forgecrawler","fact_check_report"],[self._t(language,f"The source pipeline retained {source_count} unique source(s) for review.",f"Le pipeline de sources a retenu {source_count} source(s) unique(s) à examiner.")],[self._t(language,"Hypothesis: the project offers a meaningful advantage against the strongest current alternative.","Hypothèse : le projet offre un avantage significatif face à l’alternative actuelle la plus forte.")],[self._t(language,"Search evidence may be incomplete or category-incompatible.","Les preuves de recherche peuvent être incomplètes ou incompatibles avec la catégorie.")],self._global_missing_evidence(analysis,language)[:3],[],questions,"CONDITIONAL_GO",self._t(language,"The market can be tested, but source compatibility, local demand and switching behaviour remain bounded evidence questions.","Le marché peut être testé, mais la compatibilité des sources, la demande locale et le changement restent des questions de preuve."),self._t(language,"Verify the closest alternatives and collect local behavioural evidence.","Vérifier les alternatives les plus proches et collecter des preuves comportementales locales."),[self._t(language,"A measurable advantage is demonstrated against the strongest alternative.","Un avantage mesurable est démontré face à l’alternative la plus forte."),self._t(language,"At least one compatible local demand signal is observed.","Au moins un signal local de demande compatible est observé.")],[self._t(language,"No advantage is observed or structural constraints make the market inaccessible.","Aucun avantage n’est observé ou des contraintes structurelles rendent le marché inaccessible.")])
+
+    def _round_adaptive_product(self, number: int, context: Dict[str, Any], analysis: Dict[str, Any], evidence: Dict[str, Any], language: str) -> Dict[str, Any]:
+        action=context["priority_workflow"]; metrics=context.get("success_metrics") or []
+        metric_text=", ".join(metrics[:3]) if metrics else self._t(language,"completion, repeat use and reliability","réalisation, réutilisation et fiabilité")
+        specs=[
+            {"asked_by":"product_technology_architect","question":self._t(language,"What is the smallest complete experience that proves value?","Quelle est la plus petite expérience complète qui prouve la valeur ?"),"answer":self._t(language,f"The first test should cover one end-to-end action: {action}.",f"Le premier test doit couvrir une action de bout en bout : {action}."),"reasoning":self._t(language,"A partial screen or feature does not prove that the user reaches the intended outcome.","Un écran ou une fonctionnalité partielle ne prouve pas que l’utilisateur atteint le résultat visé."),"confidence":0.7,"status":"estimated","unresolved":self._t(language,"Define start, success, failure and recovery events.","Définir les événements de départ, succès, échec et reprise."),"follow_up":self._t(language,"Which features can be removed without breaking the end-to-end test?","Quelles fonctionnalités peuvent être retirées sans casser le test de bout en bout ?"),"likely":self._t(language,"What exactly is in the MVP?","Que contient exactement le MVP ?"),"recommended":self._t(language,"The MVP includes only the data and steps required to complete and measure the core action; secondary features are excluded.","Le MVP contient seulement les données et étapes nécessaires pour réaliser et mesurer l’action principale ; les fonctions secondaires sont exclues."),"proofs":self._t_list(language,["Clickable or operational flow","Explicit exclusions"],["Parcours cliquable ou opérationnel","Exclusions explicites"]),"avoid":self._t(language,"The MVP includes every requested feature.","Le MVP contient toutes les fonctionnalités demandées.")},
+            {"asked_by":"product_technology_architect","question":self._t(language,"Can the experience work in the real user environment?","L’expérience peut-elle fonctionner dans l’environnement réel ?"),"answer":self._t(language,"Technical plausibility is not enough; the pilot must test the real device, network, data, partner and operating conditions.","La plausibilité technique ne suffit pas ; le pilote doit tester l’appareil, le réseau, les données, partenaires et conditions réelles."),"reasoning":self._t(language,f"Acceptance should be measured through {metric_text}.",f"L’acceptation doit être mesurée par {metric_text}."),"unresolved":self._t(language,"Define environment-specific acceptance and recovery criteria.","Définir des critères d’acceptation et de reprise propres à l’environnement."),"follow_up":self._t(language,"What happens after a failed or interrupted action?","Que se passe-t-il après une action échouée ou interrompue ?"),"likely":self._t(language,"How reliable is the solution in real conditions?","Quelle est la fiabilité de la solution en conditions réelles ?"),"recommended":self._t(language,"We will test the complete journey, failure states, recovery and operational ownership before scaling.","Nous testerons le parcours complet, les états d’échec, la reprise et la responsabilité opérationnelle avant expansion."),"proofs":self._t_list(language,["Environment test results","Failure and recovery log"],["Résultats des tests d’environnement","Journal d’échec et reprise"]),"avoid":self._t(language,"It worked once in development.","Cela a fonctionné une fois en développement.")},
+            {"asked_by":"risk_execution_officer","question":self._t(language,"Which technical or operational failure can destroy repeated use?","Quel échec technique ou opérationnel peut détruire l’usage répété ?"),"answer":self._t(language,"The blocking failure depends on the archetype and must be selected from the project risk dimensions, not a generic SaaS template.","L’échec bloquant dépend de l’archétype et doit venir des risques du projet, pas d’un template SaaS générique."),"reasoning":"; ".join(context.get("risk_dimensions")[:3]),"confidence":0.65,"status":"supported","unresolved":self._t(language,"Assign an owner, threshold and mitigation to each blocking risk.","Attribuer un responsable, un seuil et une réduction à chaque risque bloquant."),"follow_up":self._t(language,"What is the rollback or safe fallback?","Quel est le retour arrière ou mode sûr ?"),"likely":self._t(language,"What can make users abandon after the first attempt?","Qu’est-ce qui peut faire abandonner après la première tentative ?"),"recommended":self._t(language,"We will measure the archetype-specific failure modes and stop when reliability, trust or operational thresholds are missed.","Nous mesurerons les modes d’échec propres à l’archétype et arrêterons lorsque les seuils de fiabilité, confiance ou opérations ne sont pas atteints."),"proofs":self._t_list(language,["Risk register","Rollback test"],["Registre des risques","Test de retour arrière"]),"avoid":self._t(language,"There are no critical technical risks.","Il n’existe aucun risque technique critique.")},
+            {"asked_by":"red_team_challenger","question":self._t(language,"Could the team deliver the product while proving no user value?","L’équipe peut-elle livrer le produit sans prouver de valeur utilisateur ?"),"answer":self._t(language,"Yes. Delivery and validation are separate; success requires a completed outcome, repeated use and an improvement against the baseline.","Oui. Livraison et validation sont distinctes ; le succès exige un résultat réalisé, un usage répété et une amélioration face à la base."),"reasoning":self._t(language,"Feature completion is not a customer or business outcome.","La livraison de fonctionnalités n’est pas un résultat client ou business."),"unresolved":self._t(language,"Put outcome metrics in the MVP Definition of Done.","Mettre les métriques de résultat dans la Definition of Done du MVP."),"follow_up":self._t(language,"Which metric can fail even if the application works?","Quelle métrique peut échouer même si l’application fonctionne ?"),"likely":self._t(language,"How do you know the MVP creates value?","Comment savez-vous que le MVP crée de la valeur ?"),"recommended":self._t(language,"We judge the MVP by successful outcomes, repeat behaviour and measurable improvement, not by deployed features.","Nous jugeons le MVP par les résultats réussis, le comportement répété et l’amélioration mesurable, pas par les fonctionnalités déployées."),"proofs":self._t_list(language,["Outcome dashboard","Baseline comparison"],["Tableau des résultats","Comparaison à la base"]),"avoid":self._t(language,"The product works, therefore the idea is validated.","Le produit fonctionne, donc l’idée est validée.")},
+        ]
+        questions=self._adaptive_questions(number=number,language=language,specifications=specs)
+        return self._round(number,language,self._t(language,"Product, delivery and real-world feasibility","Produit, réalisation et faisabilité réelle"),self._t(language,"Reduce the first release to one complete, measurable validation unit.","Réduire la première version à une unité de validation complète et mesurable."),self._t(language,"Can the smallest complete experience prove value and reliability in real conditions?","La plus petite expérience complète peut-elle prouver valeur et fiabilité en conditions réelles ?"),["project_intelligence","solution_analysis","risk_dimensions"],[self._t(language,f"A focused pilot can begin with: {action}.",f"Un pilote ciblé peut commencer par : {action}."),self._t(language,f"The key metrics are: {metric_text}.",f"Les métriques clés sont : {metric_text}.")],[self._t(language,"Hypothesis: the smallest complete experience produces a measurable first outcome.","Hypothèse : la plus petite expérience complète produit un premier résultat mesurable.")],context.get("risk_dimensions")[:3],context.get("evidence_needs")[:3],[],questions,"CONDITIONAL_GO",self._t(language,"The product is testable when the MVP is defined by an end-to-end outcome and archetype-specific acceptance criteria.","Le produit est testable lorsque le MVP est défini par un résultat de bout en bout et des critères propres à l’archétype."),self._t(language,"Prototype the complete core action and test outcome, failure and recovery.","Prototyper l’action principale complète et tester résultat, échec et reprise."),[self._t(language,"Target users complete the core action and repeat it under real conditions.","Les utilisateurs ciblés réalisent l’action principale et la répètent en conditions réelles."),self._t(language,"Reliability and recovery meet the predefined thresholds.","La fiabilité et la reprise respectent les seuils prédéfinis.")],[self._t(language,"The experience fails, creates unacceptable risk or users do not repeat it.","L’expérience échoue, crée un risque inacceptable ou les utilisateurs ne la répètent pas.")])
+
+    def _round_adaptive_economics(self, number: int, context: Dict[str, Any], analysis: Dict[str, Any], evidence: Dict[str, Any], language: str) -> Dict[str, Any]:
+        model=context["business_model"]; unit=context.get("validation_unit") or self._t(language,"successful unit","unité réussie")
+        specs=[
+            {"asked_by":"business_financial_analyst","question":self._t(language,"Who pays, for which outcome and at what decision point?","Qui paie, pour quel résultat et à quel moment de décision ?"),"answer":self._payer_answer(context, language),"reasoning":self._t(language,"A monetization hypothesis is not payment evidence.","Une hypothèse de monétisation n’est pas une preuve de paiement."),"confidence":0.4,"status":"field_validation_required","unresolved":self._t(language,"Test concrete offers with the real payer.","Tester des offres concrètes avec le vrai payeur."),"follow_up":self._t(language,"What budget, transaction or value event triggers payment?","Quel budget, transaction ou événement de valeur déclenche le paiement ?"),"likely":self._t(language,"Who is the paying customer?","Qui est le client payeur ?"),"recommended":self._t(language,"The payer remains a hypothesis until a real decision-maker accepts or rejects a concrete offer tied to a measurable outcome.","Le payeur reste une hypothèse jusqu’à ce qu’un vrai décideur accepte ou refuse une offre concrète liée à un résultat mesurable."),"proofs":self._t_list(language,["Offer tests","Decision rationale"],["Tests d’offres","Justification de décision"]),"avoid":self._t(language,"Users like it, so they will pay.","Les utilisateurs l’aiment, donc ils paieront.")},
+            {"asked_by":"business_financial_analyst","question":self._t(language,f"What is the contribution margin per successful {unit}?",f"Quelle est la marge contributive par {unit} réussie ?"),"answer":self._t(language,"The margin is unknown until direct delivery, partner, support, infrastructure, incentive and payment costs are measured.","La marge est inconnue avant mesure des coûts directs de réalisation, partenaires, support, infrastructure, incitations et paiement."),"reasoning":self._t(language,"Revenue without variable delivery cost is not unit economics.","Un revenu sans coût variable de réalisation n’est pas une économie unitaire."),"unresolved":self._t(language,"Build a bottom-up unit-cost model from the pilot.","Construire un modèle bottom-up des coûts unitaires à partir du pilote."),"follow_up":self._t(language,"Which cost grows directly with each successful unit?","Quel coût augmente directement avec chaque unité réussie ?"),"likely":self._t(language,"What are your unit economics?","Quelle est votre économie unitaire ?"),"recommended":self._t(language,"We will calculate contribution from observed revenue minus every variable delivery and support cost, then include acquisition and retention.","Nous calculerons la contribution avec le revenu observé moins chaque coût variable de réalisation et support, puis intégrerons acquisition et rétention."),"proofs":self._t_list(language,["Bottom-up cost model","Pilot operations log"],["Modèle de coût bottom-up","Journal d’opérations du pilote"]),"avoid":self._t(language,"Cloud hosting is cheap, so margins are high.","Le cloud est bon marché, donc les marges sont élevées.")},
+            {"asked_by":"risk_execution_officer","question":self._t(language,"Can acquisition, incentives, operations or support structurally exceed revenue?","L’acquisition, les incitations, les opérations ou le support peuvent-ils dépasser structurellement le revenu ?"),"answer":self._t(language,"Yes. The dominant cost depends on the archetype and must be measured during the first complete pilot.","Oui. Le coût dominant dépend de l’archétype et doit être mesuré pendant le premier pilote complet."),"reasoning":"; ".join(context.get("risk_dimensions")[:3]),"unresolved":self._t(language,"Set a maximum acceptable cost and support burden before launch.","Définir un coût et une charge de support maximum acceptables avant lancement."),"follow_up":self._t(language,"Which cost has the highest uncertainty?","Quel coût possède la plus forte incertitude ?"),"likely":self._t(language,"Can this model scale profitably?","Ce modèle peut-il passer à l’échelle de manière rentable ?"),"recommended":self._t(language,"We will not claim scalability until the pilot measures acquisition, fulfilment, support, repeat use and contribution margin.","Nous ne prétendrons pas pouvoir passer à l’échelle avant mesure de l’acquisition, réalisation, support, réutilisation et marge contributive."),"proofs":self._t_list(language,["Cost sensitivity analysis","Support log"],["Analyse de sensibilité des coûts","Journal de support"]),"avoid":self._t(language,"Scale will automatically solve the economics.","L’échelle résoudra automatiquement l’économie.")},
+            {"asked_by":"evidence_auditor","question":self._t(language,"Which financial numbers are quotes, observations, estimates or hypotheses?","Quels chiffres financiers sont des devis, observations, estimations ou hypothèses ?"),"answer":self._t(language,"Current figures remain planning estimates unless tied to a quote, observed transaction, paid offer or pilot cost.","Les chiffres actuels restent des estimations de planification sauf s’ils sont liés à un devis, une transaction observée, une offre payée ou un coût pilote."),"reasoning":self._t(language,"Financial confidence cannot exceed the quality of the underlying evidence.","La confiance financière ne peut dépasser la qualité des preuves sous-jacentes."),"unresolved":self._t(language,"Label every figure and replace assumptions with direct evidence.","Étiqueter chaque chiffre et remplacer les hypothèses par des preuves directes."),"follow_up":self._t(language,"Which estimate can become a quote this week?","Quelle estimation peut devenir un devis cette semaine ?"),"likely":self._t(language,"How reliable is the financial model?","Quelle est la fiabilité du modèle financier ?"),"recommended":self._t(language,"The model is preliminary; the next version will use provider quotes and observed pilot revenue, cost, retention and support data.","Le modèle est préliminaire ; la prochaine version utilisera des devis et les données observées de revenu, coût, rétention et support."),"proofs":self._t_list(language,["Provider quotes","Observed pilot ledger"],["Devis fournisseurs","Registre observé du pilote"]),"avoid":self._t(language,"The forecast is accurate because AI calculated it.","La prévision est exacte parce que l’IA l’a calculée.")},
+        ]
+        questions=self._adaptive_questions(number=number,language=language,specifications=specs)
+        return self._round(number,language,self._t(language,"Business model and unit economics","Modèle économique et économie unitaire"),self._t(language,"Separate a plausible monetization model from payment and contribution evidence.","Séparer un modèle plausible des preuves de paiement et contribution."),self._t(language,"Can the project earn viable contribution from a successful validation unit?","Le projet peut-il obtenir une contribution viable par unité de validation réussie ?"),["business_model_canvas","financial_estimation","pilot_economics"],[self._t(language,f"The current monetization hypothesis is: {model}.",f"L’hypothèse actuelle de monétisation est : {model}."),self._t(language,"A bounded offer and cost test can be run before scaling.","Un test limité d’offre et de coûts peut être réalisé avant expansion.")],[self._t(language,"Hypothesis: the payer accepts a concrete offer and contribution remains positive.","Hypothèse : le payeur accepte une offre concrète et la contribution reste positive.")],context.get("risk_dimensions")[:3],context.get("evidence_needs")[:3],[],questions,"CONDITIONAL_GO",self._t(language,"The model deserves a real offer and unit-cost test, not a scale commitment.","Le modèle mérite un vrai test d’offre et de coût unitaire, pas un engagement de croissance."),self._t(language,"Test concrete offers and measure every variable cost around the successful unit.","Tester des offres concrètes et mesurer chaque coût variable autour de l’unité réussie."),[self._t(language,"At least one real payer accepts a concrete offer.","Au moins un vrai payeur accepte une offre concrète."),self._t(language,"Observed contribution margin is positive at the pilot level.","La marge contributive observée est positive au niveau pilote.")],[self._t(language,"Payers reject the value-price relationship or variable cost structurally exceeds revenue.","Les payeurs rejettent le rapport valeur-prix ou le coût variable dépasse structurellement le revenu.")])
+
+    def _round_adaptive_decision(self, number: int, context: Dict[str, Any], analysis: Dict[str, Any], evidence: Dict[str, Any], language: str) -> Dict[str, Any]:
+        metrics=context.get("success_metrics") or []
+        metric_text=", ".join(metrics[:4]) if metrics else self._t(language,"successful outcome, repeat use, reliability and contribution","résultat réussi, usage répété, fiabilité et contribution")
+        specs=[
+            {"asked_by":"committee_chair","addressed_to":"all_committee_members","question":self._t(language,"Should the project proceed to a bounded pilot, pivot or stop?","Le projet doit-il passer à un pilote limité, pivoter ou s’arrêter ?"),"answer":self._t(language,"Proceed only to a bounded pilot while blocking evidence is collected.","Passer uniquement à un pilote limité pendant la collecte des preuves bloquantes."),"reasoning":self._t(language,f"The decision must be based on {metric_text} and the current evidence level {evidence.get('level','low')}.",f"La décision doit reposer sur {metric_text} et le niveau de preuve actuel {evidence.get('level','low')}."),"confidence":0.75,"status":"committee_synthesis","unresolved":self._t(language,"Name the pilot owner, cohort, dates, metrics and stop conditions.","Nommer le responsable, la cohorte, les dates, métriques et conditions d’arrêt."),"follow_up":self._t(language,"Which condition blocks the next investment decision?","Quelle condition bloque la prochaine décision d’investissement ?"),"likely":self._t(language,"What is the decision today?","Quelle est la décision aujourd’hui ?"),"recommended":self._t(language,"The decision is Conditional Go for a bounded pilot, not approval for full rollout or scaling.","La décision est un GO conditionnel pour un pilote limité, pas une approbation du déploiement complet ou de l’expansion."),"proofs":self._t_list(language,["Pilot charter","Decision scorecard"],["Charte du pilote","Tableau de décision"]),"avoid":self._t(language,"The score means we should build everything.","Le score signifie qu’il faut tout construire.")},
+            {"asked_by":"red_team_challenger","question":self._t(language,"Which single assumption can destroy the project?","Quelle hypothèse unique peut détruire le projet ?"),"answer":self._t(language,"The project fails if the required actors do not complete and repeat the validation unit at viable risk and contribution.","Le projet échoue si les acteurs nécessaires ne réalisent et ne répètent pas l’unité de validation avec un risque et une contribution viables."),"reasoning":self._t(language,"Adoption, delivery and economics are jointly falsifiable.","Adoption, réalisation et économie sont falsifiables ensemble."),"unresolved":self._t(language,"Pre-register the decisive failure threshold.","Préenregistrer le seuil d’échec décisif."),"follow_up":self._t(language,"What exact result triggers a pivot?","Quel résultat exact déclenche un pivot ?"),"likely":self._t(language,"What would make you stop?","Qu’est-ce qui vous ferait arrêter ?"),"recommended":self._t(language,"We will stop or pivot when the core outcome, repeat behaviour, risk or contribution threshold is missed.","Nous arrêterons ou pivoterons lorsque le résultat principal, la répétition, le risque ou la contribution manque le seuil."),"proofs":self._t_list(language,["Predefined no-go thresholds"],["Seuils NO-GO prédéfinis"]),"avoid":self._t(language,"We will keep improving until it works.","Nous continuerons à améliorer jusqu’à ce que cela fonctionne.")},
+            {"asked_by":"evidence_auditor","question":self._t(language,"Which claims are supported and which remain hypotheses?","Quelles affirmations sont soutenues et lesquelles restent des hypothèses ?"),"answer":self._t(language,"Project structure and testability may be clear; demand, repeat use, payment, local constraints and economics remain hypotheses unless directly evidenced.","La structure et la testabilité peuvent être claires ; demande, usage répété, paiement, contraintes locales et économie restent des hypothèses sans preuve directe."),"reasoning":self._t(language,"The evidence label must remain visible in the final decision.","Le statut de preuve doit rester visible dans la décision finale."),"unresolved":self._t(language,"Downgrade every unsupported claim before presentation.","Rétrograder chaque affirmation non soutenue avant présentation."),"follow_up":self._t(language,"Which claim has the greatest decision impact?","Quelle affirmation a le plus grand impact sur la décision ?"),"likely":self._t(language,"What can you confidently claim today?","Que pouvez-vous affirmer avec confiance aujourd’hui ?"),"recommended":self._t(language,"We can claim the project is structured and testable; we cannot yet claim product-market fit or scalable economics.","Nous pouvons affirmer que le projet est structuré et testable ; pas encore qu’il possède un product-market fit ou une économie scalable."),"proofs":self._t_list(language,["Claim-to-evidence matrix"],["Matrice affirmation-preuve"]),"avoid":self._t(language,"The analysis validated the market.","L’analyse a validé le marché.")},
+            {"asked_by":"risk_execution_officer","question":self._t(language,"What is the least risky next action?","Quelle est la prochaine action la moins risquée ?"),"answer":self._t(language,f"Run a bounded pilot around {context['priority_workflow']} and measure {metric_text}.",f"Lancer un pilote limité autour de {context['priority_workflow']} et mesurer {metric_text}."),"reasoning":self._t(language,"A bounded experiment buys evidence before irreversible investment.","Une expérience limitée achète des preuves avant un investissement irréversible."),"confidence":0.85,"status":"supported","unresolved":self._t(language,"Set ownership, schedule, instrumentation and rollback.","Définir responsabilité, calendrier, instrumentation et retour arrière."),"follow_up":self._t(language,"Who owns the next decision and on what date?","Qui possède la prochaine décision et à quelle date ?"),"likely":self._t(language,"What will you do next week?","Que ferez-vous la semaine prochaine ?"),"recommended":self._t(language,"We will recruit the bounded cohort, instrument the complete validation unit and review predefined GO, PIVOT and NO-GO thresholds.","Nous recruterons la cohorte limitée, instrumenterons l’unité complète et examinerons les seuils GO, PIVOT et NO-GO prédéfinis."),"proofs":self._t_list(language,["Pilot plan","Instrumentation plan","Review date"],["Plan pilote","Plan d’instrumentation","Date de revue"]),"avoid":self._t(language,"We will continue building the platform.","Nous continuerons à développer la plateforme.")},
+        ]
+        questions=self._adaptive_questions(number=number,language=language,specifications=specs)
+        return self._round(number,language,self._t(language,"Investment committee decision","Décision du comité d’investissement"),self._t(language,"Convert the evidence into one bounded decision and experiment plan.","Transformer les preuves en une décision limitée et un plan d’expérience."),self._t(language,"Should the project continue, pivot or stop at this evidence level?","Le projet doit-il continuer, pivoter ou s’arrêter à ce niveau de preuve ?"),["startup_score","evidence_confidence","rounds_1_4"],[self._t(language,"The project is structured enough for a bounded test.","Le projet est assez structuré pour un test limité."),self._t(language,"The next decision can use archetype-specific metrics.","La prochaine décision peut utiliser des métriques propres à l’archétype.")],[self._t(language,"Hypothesis: the bounded pilot demonstrates repeat value and viable delivery economics.","Hypothèse : le pilote limité démontre une valeur répétée et une économie de réalisation viable.")],context.get("risk_dimensions")[:3],self._global_missing_evidence(analysis,language),[],questions,"CONDITIONAL_GO",self._t(language,"The committee authorizes a bounded pilot, not full rollout, under explicit evidence, behaviour, risk and economics conditions.","Le comité autorise un pilote limité, pas un déploiement complet, sous conditions explicites de preuve, comportement, risque et économie."),self._t(language,"Run the pilot and decide GO, PIVOT or NO-GO without expanding scope first.","Lancer le pilote et décider GO, PIVOT ou NO-GO sans élargir le périmètre."),[self._t(language,"The core outcome is completed and repeated by the required actors.","Le résultat principal est réalisé et répété par les acteurs nécessaires."),self._t(language,"Archetype-specific reliability and risk thresholds are met.","Les seuils de fiabilité et risque propres à l’archétype sont atteints."),self._t(language,"At least one real payer accepts the offer and contribution remains viable.","Au moins un vrai payeur accepte l’offre et la contribution reste viable.")],[self._t(language,"Actors do not repeat the outcome, risk is unacceptable or the economics are structurally negative.","Les acteurs ne répètent pas le résultat, le risque est inacceptable ou l’économie est structurellement négative.")])
+
+    def _round_problem(self, number: int, context: Dict[str, Any], analysis: Dict[str, Any], evidence: Dict[str, Any], language: str) -> Dict[str, Any]:
+        problem_status = self._claim_status(analysis, "problem")
+        supported = problem_status == "supported"
+        validated = [
+            self._t(language, "The retained evidence supports the existence of the stated workflow problem.", "Les preuves retenues soutiennent l’existence du problème de workflow décrit.")
+        ] if supported else []
+        hypotheses = [] if supported else [
+            self._t(language, f"Hypothesis: {context['primary_target']} experiences the problem frequently and urgently.", f"Hypothèse : {context['primary_target']} rencontre le problème fréquemment et avec urgence.")
+        ]
+        questions = [
+            self._question(
+                round_number=number,
+                index=1,
+                asked_by="customer_problem_analyst",
+                addressed_to="project_defender",
+                question=self._t(language, "How frequently does the problem occur in the target user's real workflow?", "À quelle fréquence le problème apparaît-il dans le workflow réel de l’utilisateur cible ?"),
+                direct_answer=self._t(language, "The project description identifies a recurring operational problem, but its frequency has not yet been measured with users.", "La description identifie un problème opérationnel récurrent, mais sa fréquence n’a pas encore été mesurée auprès des utilisateurs."),
+                reasoning=self._t(language, f"The current problem statement is: {context['problem']}", f"Le problème actuel est : {context['problem']}"),
+                confidence=0.75 if supported else 0.35,
+                evidence_status="supported" if supported else "field_validation_required",
+                unresolved=self._t(language, "Measure occurrences, time loss and consequences with at least five target users.", "Mesurer les occurrences, le temps perdu et les conséquences auprès d’au moins cinq utilisateurs cibles."),
+                follow_up=self._t(language, "Which observation method and time period will be used?", "Quelle méthode d’observation et quelle période seront utilisées ?"),
+                likely_real_question=self._t(language, "How do you know this problem is urgent rather than merely inconvenient?", "Comment savez-vous que ce problème est urgent et pas seulement gênant ?"),
+                recommended_answer=self._t(language, "We do not claim urgency is validated yet. We will measure frequency, time loss and failed tasks during field interviews and workflow observation.", "Nous ne prétendons pas encore que l’urgence est validée. Nous mesurerons la fréquence, le temps perdu et les tâches échouées pendant les entretiens et observations terrain."),
+                proofs=[self._t(language, "Interview notes", "Notes d’entretien"), self._t(language, "Observed workflow timings", "Mesures de temps du workflow"), self._t(language, "Examples of missing or duplicated records", "Exemples de dossiers manquants ou dupliqués")],
+                avoid=self._t(language, "Everyone has this problem.", "Tout le monde rencontre ce problème."),
+            ),
+            self._question(
+                round_number=number,
+                index=2,
+                asked_by="risk_execution_officer",
+                addressed_to="customer_problem_analyst",
+                question=self._t(language, "Why would the user change the current method?", "Pourquoi l’utilisateur changerait-il sa méthode actuelle ?"),
+                direct_answer=self._t(language, f"Change is plausible only if {context['priority_workflow']} becomes faster, safer or easier to retrieve than the current alternative.", f"Le changement est plausible uniquement si {context['priority_workflow']} devient plus rapide, plus sûr ou plus facile à retrouver que l’alternative actuelle."),
+                reasoning=self._t(language, "Usefulness alone does not prove repeated adoption.", "L’utilité seule ne prouve pas l’adoption répétée."),
+                confidence=0.5,
+                evidence_status="hypothesis",
+                unresolved=self._t(language, "Define a measurable first-session benefit and a weekly reuse threshold.", "Définir un bénéfice mesurable dès la première session et un seuil de réutilisation hebdomadaire."),
+                follow_up=self._t(language, "What result must be visible during the first week?", "Quel résultat doit être visible pendant la première semaine ?"),
+                likely_real_question=self._t(language, "Why is the current manual method not good enough?", "Pourquoi la méthode manuelle actuelle n’est-elle pas suffisante ?"),
+                recommended_answer=self._t(language, "The product must prove a concrete gain against the current method; the pilot will compare task time, missing information and reuse.", "Le produit doit prouver un gain concret face à la méthode actuelle ; le pilote comparera le temps, les informations manquantes et la réutilisation."),
+                proofs=[self._t(language, "Before/after workflow comparison", "Comparaison du workflow avant/après"), self._t(language, "Weekly reuse data", "Données de réutilisation hebdomadaire")],
+                avoid=self._t(language, "Digital is automatically better than paper.", "Le numérique est automatiquement meilleur que le papier."),
+            ),
+            self._question(
+                round_number=number,
+                index=3,
+                asked_by="evidence_auditor",
+                addressed_to="project_defender",
+                question=self._t(language, "Which part of this argument is evidence and which part is assumption?", "Quelle partie de cet argument est une preuve et quelle partie est une hypothèse ?"),
+                direct_answer=self._t(language, "The project definition is known; frequency, severity, urgency and willingness to change remain assumptions unless field evidence exists.", "La définition du projet est connue ; la fréquence, la gravité, l’urgence et la volonté de changer restent des hypothèses sans preuve terrain."),
+                reasoning=self._t(language, f"Overall evidence confidence is {evidence['level']}.", f"La confiance globale des preuves est {evidence['level']}."),
+                confidence=evidence["score"] / 10,
+                evidence_status="supported" if supported else "not_confirmed",
+                unresolved=self._t(language, "Separate founder statements from observed customer evidence in the report.", "Séparer les déclarations du fondateur des preuves client observées dans le rapport."),
+                follow_up=self._t(language, "What result would falsify the problem hypothesis?", "Quel résultat réfuterait l’hypothèse du problème ?"),
+                likely_real_question=self._t(language, "What evidence would make you stop pursuing this problem?", "Quelle preuve vous ferait abandonner ce problème ?"),
+                recommended_answer=self._t(language, "We would stop or pivot if users rarely experience the problem, do not value the proposed gain, or refuse to change their workflow.", "Nous arrêterions ou pivoterions si les utilisateurs rencontrent rarement le problème, ne valorisent pas le gain ou refusent de changer leur workflow."),
+                proofs=[self._t(language, "Explicit falsification thresholds", "Seuils explicites de réfutation")],
+                avoid=self._t(language, "The problem cannot be disproved.", "Le problème ne peut pas être réfuté."),
+            ),
+            self._question(
+                round_number=number,
+                index=4,
+                asked_by="customer_problem_analyst",
+                addressed_to="business_financial_analyst",
+                question=self._t(language, "Are the user and economic buyer the same person?", "L’utilisateur et l’acheteur économique sont-ils la même personne ?"),
+                direct_answer=(
+                    self._t(
+                        language,
+                        f"The operational target is {context['primary_target']}; the economic buyer is explicitly identified as {context['economic_buyer_value']}.",
+                        f"La cible opérationnelle est {context['primary_target']} ; l’acheteur économique est explicitement identifié comme {context['economic_buyer_value']}.",
+                    )
+                    if context.get("economic_buyer_status") == "explicit"
+                    else self._t(
+                        language,
+                        f"The operational target is {context['primary_target']}; the economic buyer is not yet identified.",
+                        f"La cible opérationnelle est {context['primary_target']} ; l’acheteur économique n’est pas encore identifié.",
+                    )
+                ),
+                reasoning=self._t(language, "Adoption and payment decisions may belong to different roles.", "Les décisions d’adoption et de paiement peuvent appartenir à des rôles différents."),
+                confidence=0.45,
+                evidence_status="field_validation_required",
+                unresolved=self._t(language, "Map the user, sponsor, budget owner and adoption blocker.", "Cartographier l’utilisateur, le sponsor, le détenteur du budget et le bloqueur d’adoption."),
+                follow_up=self._t(language, "Who can approve, block or renew the purchase?", "Qui peut approuver, bloquer ou renouveler l’achat ?"),
+                likely_real_question=self._t(language, "Who signs the contract and who uses the product every day?", "Qui signe le contrat et qui utilise le produit chaque jour ?"),
+                recommended_answer=self._t(language, "We separate daily users from budget owners and will interview both before setting the pricing model.", "Nous séparons les utilisateurs quotidiens des détenteurs du budget et interrogerons les deux avant de fixer le modèle tarifaire."),
+                proofs=[self._t(language, "Decision-making map", "Carte de décision")],
+                avoid=self._t(language, "The user will obviously pay.", "L’utilisateur paiera évidemment."),
+            ),
+        ]
+        return self._round(
+            number=number,
+            language=language,
+            topic=self._t(language, "Problem, customer and urgency", "Problème, client et urgence"),
+            objective=self._t(language, "Determine whether the pain justifies behaviour change.", "Déterminer si la douleur justifie un changement de comportement."),
+            question=self._t(language, "Is the problem frequent, severe and urgent enough to trigger adoption?", "Le problème est-il assez fréquent, grave et urgent pour déclencher l’adoption ?"),
+            data_sources=["project_intelligence.problem", "project_intelligence.primary_target", "fact_check_report.problem"],
+            supporting=[self._t(language, f"The project identifies a concrete workflow: {context['priority_workflow']}.", f"Le projet identifie un workflow concret : {context['priority_workflow']}."), self._t(language, f"The first operational target is {context['primary_target']}.", f"La première cible opérationnelle est {context['primary_target']}.")],
+            hypotheses=hypotheses,
+            risks=[self._t(language, "The pain may be real but not urgent enough to change behaviour.", "La douleur peut être réelle sans être assez urgente pour changer les habitudes."), self._t(language, "The user and buyer may be different people.", "L’utilisateur et l’acheteur peuvent être différents.")],
+            missing=[self._t(language, "Observed workflows from at least five users.", "Workflows observés auprès d’au moins cinq utilisateurs."), self._t(language, "Measured frequency, severity and current cost.", "Fréquence, gravité et coût actuel mesurés.")],
+            validated=validated,
+            questions=questions,
+            decision="SUPPORTED" if supported else "CONDITIONAL_GO",
+            synthesis=self._t(language, "The problem is specific enough for field validation, but urgency and behaviour change are not yet proven.", "Le problème est assez précis pour une validation terrain, mais l’urgence et le changement de comportement ne sont pas encore prouvés."),
+            next_action=self._t(language, "Observe five target users and quantify the current workflow.", "Observer cinq utilisateurs cibles et quantifier le workflow actuel."),
+            go_conditions=[self._t(language, "Users report a recurring problem and measurable operational loss.", "Les utilisateurs signalent un problème récurrent et une perte opérationnelle mesurable.")],
+            no_go_conditions=[self._t(language, "The problem is rare, low-impact or users refuse to change the workflow.", "Le problème est rare, peu impactant ou les utilisateurs refusent de changer le workflow.")],
+        )
+
+    def _round_market(self, number: int, context: Dict[str, Any], analysis: Dict[str, Any], evidence: Dict[str, Any], language: str) -> Dict[str, Any]:
+        sources = self._sources(analysis)
+        direct = [s for s in sources if bool(s.get("is_direct_competitor"))]
+        adjacent = [s for s in sources if str(s.get("source_type") or "") == "adjacent_solution"]
+        local = [s for s in sources if str(s.get("region_match") or "") == "local"]
+        manual = self._t(language, "paper, spreadsheets, messaging tools and informal coordination", "papier, tableurs, messagerie et coordination informelle")
+        questions = [
+            self._question(number, 1, "market_competition_analyst", "project_defender", self._t(language, "Which verified products solve the same workflow for the same target?", "Quels produits vérifiés résolvent le même workflow pour la même cible ?"), self._t(language, f"{len(direct)} verified direct product(s) and {len(adjacent)} adjacent solution(s) are currently retained.", f"{len(direct)} produit(s) direct(s) vérifié(s) et {len(adjacent)} solution(s) adjacente(s) sont actuellement retenus."), self._t(language, "A shared keyword or article is not treated as a competitor.", "Un mot-clé commun ou un article n’est pas traité comme concurrent."), 0.7 if direct or adjacent else 0.35, "supported" if direct or adjacent else "not_confirmed", self._t(language, "Manually verify product functionality, target, geography and current activity.", "Vérifier manuellement les fonctionnalités, la cible, la géographie et l’activité actuelle."), self._t(language, "Which product was manually checked most recently?", "Quel produit a été vérifié manuellement le plus récemment ?"), self._t(language, "Who are your three closest competitors and why?", "Quels sont vos trois concurrents les plus proches et pourquoi ?"), self._t(language, "We separate direct products, adjacent solutions, articles and manual alternatives; only verified product pages enter the competitor list.", "Nous séparons produits directs, solutions adjacentes, articles et alternatives manuelles ; seules les pages produit vérifiées entrent dans la liste des concurrents."), [self._t(language, "Product pages", "Pages produit"), self._t(language, "Feature comparison", "Comparaison fonctionnelle")], self._t(language, "There is no competition.", "Il n’existe aucune concurrence.")),
+            self._question(number, 2, "customer_problem_analyst", "market_competition_analyst", self._t(language, "What do users actually use instead of this product?", "Qu’utilisent réellement les utilisateurs à la place de ce produit ?"), self._t(language, f"The strongest alternatives may be {manual}, not another specialist SaaS.", f"Les alternatives les plus fortes peuvent être {manual}, et non un autre SaaS spécialisé."), self._t(language, "The replacement behaviour must be compared with the current workflow.", "Le comportement de remplacement doit être comparé au workflow actuel."), 0.55, "hypothesis", self._t(language, "Observe the current tool stack and switching cost.", "Observer les outils actuels et le coût de changement."), self._t(language, "Which current tool is hardest to replace?", "Quel outil actuel est le plus difficile à remplacer ?"), self._t(language, "Why will users switch from a free method?", "Pourquoi les utilisateurs quitteront-ils une méthode gratuite ?"), self._t(language, "The pilot must prove a measurable gain over the current method, not only feature superiority over software competitors.", "Le pilote doit prouver un gain mesurable face à la méthode actuelle, pas seulement une supériorité fonctionnelle sur des logiciels."), [self._t(language, "Current workflow inventory", "Inventaire du workflow actuel"), self._t(language, "Switching-cost interview", "Entretien sur le coût de changement")], self._t(language, "Our features are better, so users will switch.", "Nos fonctionnalités sont meilleures, donc les utilisateurs changeront.")),
+            self._question(number, 3, "evidence_auditor", "market_competition_analyst", self._t(language, "Do the retained sources prove local demand or only international feasibility?", "Les sources retenues prouvent-elles la demande locale ou seulement la faisabilité internationale ?"), self._t(language, f"The current evidence level is {evidence['level']}. International benchmarks can show feasibility but do not prove local demand or willingness to pay.", f"Le niveau de preuve actuel est {evidence['level']}. Les benchmarks internationaux montrent une faisabilité, mais ne prouvent pas la demande locale ni la volonté de payer."), self._t(language, f"{len(local)} retained source(s) have a local marker, but each claim still requires category-compatible evidence.", f"{len(local)} source(s) retenue(s) possèdent un marqueur local, mais chaque affirmation exige une preuve compatible avec sa catégorie."), evidence["score"] / 10, "not_confirmed" if evidence["level"] == "low" else "supported", self._t(language, "Find official local data and conduct field interviews.", "Trouver des données locales officielles et mener des entretiens terrain."), self._t(language, "Which local source has visible methodology and category-compatible data?", "Quelle source locale possède une méthodologie visible et des données compatibles ?"), self._t(language, "What proves demand in the first market?", "Qu’est-ce qui prouve la demande sur le premier marché ?"), self._t(language, "We currently treat demand as a hypothesis and will validate it with official data, interviews and a pilot.", "Nous traitons actuellement la demande comme une hypothèse et la validerons par des données officielles, des entretiens et un pilote."), [self._t(language, "Official sector data", "Données sectorielles officielles"), self._t(language, "Local interview results", "Résultats d’entretiens locaux")], self._t(language, "A market report headline proves demand.", "Le titre d’un rapport de marché prouve la demande.")),
+            self._question(number, 4, "red_team_challenger", "project_defender", self._t(language, "Could the absence of a verified local competitor indicate weak demand instead of a market gap?", "L’absence de concurrent local vérifié peut-elle indiquer une faible demande plutôt qu’un espace de marché ?"), self._t(language, "Yes. The absence of a retained competitor is ambiguous and must never be presented as proof of an empty market.", "Oui. L’absence de concurrent retenu est ambiguë et ne doit jamais être présentée comme preuve d’un marché vide."), self._t(language, "A market gap becomes credible only after customer demand and alternative mapping are validated.", "Un espace de marché devient crédible uniquement après validation de la demande client et des alternatives."), 0.85, "supported", self._t(language, "Verify local actors manually and test demand before positioning the gap.", "Vérifier manuellement les acteurs locaux et tester la demande avant de positionner l’espace."), self._t(language, "What finding would change the positioning?", "Quel résultat modifierait le positionnement ?"), self._t(language, "Why has nobody built this locally?", "Pourquoi personne ne l’a construit localement ?"), self._t(language, "We do not assume the gap is attractive; the pilot will determine whether it reflects unmet demand or low urgency.", "Nous ne supposons pas que l’espace est attractif ; le pilote déterminera s’il reflète une demande non satisfaite ou une faible urgence."), [self._t(language, "Local actor map", "Cartographie des acteurs locaux"), self._t(language, "Demand interviews", "Entretiens de demande")], self._t(language, "No competitor means a guaranteed opportunity.", "Aucun concurrent signifie une opportunité garantie.")),
+        ]
+        return self._round(number, language, self._t(language, "Market, alternatives and positioning", "Marché, alternatives et positionnement"), self._t(language, "Separate comparable products, adjacent solutions, evidence pages and current alternatives.", "Séparer produits comparables, solutions adjacentes, pages de preuve et alternatives actuelles."), self._t(language, "Can the project win against the alternatives already used by the target users?", "Le projet peut-il gagner face aux alternatives déjà utilisées par les utilisateurs cibles ?"), ["forgecrawler.sources", "competitive_analysis", "evidence_ledger.competition"], [self._t(language, f"The source gate retains {len(direct)} direct and {len(adjacent)} adjacent solution(s).", f"Le filtre retient {len(direct)} solution(s) directe(s) et {len(adjacent)} solution(s) adjacente(s).")], [self._t(language, "Hypothesis: a specialized local workflow can outperform generic tools.", "Hypothèse : un workflow local spécialisé peut dépasser les outils génériques.")], [self._t(language, "Manual alternatives may be stronger than specialist software.", "Les alternatives manuelles peuvent être plus fortes que les logiciels spécialisés."), self._t(language, "International benchmarks do not prove local demand.", "Les benchmarks internationaux ne prouvent pas la demande locale.")], [self._t(language, "Manual verification of local products and alternatives.", "Vérification manuelle des produits et alternatives locales."), self._t(language, "Official or independent local demand evidence.", "Preuves locales officielles ou indépendantes de demande.")], [], questions, "CONDITIONAL_GO", self._t(language, "The positioning is plausible for a pilot, but the local market gap and switching behaviour remain unverified.", "Le positionnement est plausible pour un pilote, mais l’espace local et le comportement de changement restent non vérifiés."), self._t(language, "Map current alternatives and manually verify the closest local and international products.", "Cartographier les alternatives actuelles et vérifier manuellement les produits locaux et internationaux les plus proches."), [self._t(language, "A distinct workflow advantage is demonstrated against current alternatives.", "Un avantage de workflow distinct est démontré face aux alternatives actuelles.")], [self._t(language, "Users see no advantage over free current methods or a close competitor already dominates the segment.", "Les utilisateurs ne voient aucun avantage face aux méthodes gratuites ou un concurrent proche domine déjà le segment.")])
+
+    def _round_mvp(self, number: int, context: Dict[str, Any], analysis: Dict[str, Any], evidence: Dict[str, Any], language: str) -> Dict[str, Any]:
+        workflows = context["priority_workflows"]
+        first = workflows[0]
+        questions = [
+            self._question(number, 1, "product_technology_architect", "project_defender", self._t(language, "What is the smallest workflow that can prove value?", "Quel est le plus petit workflow capable de prouver la valeur ?"), self._t(language, f"The pilot should begin with one measurable workflow: {first}.", f"Le pilote doit commencer par un workflow mesurable : {first}."), self._t(language, "Secondary features must not be required to demonstrate the first benefit.", "Les fonctionnalités secondaires ne doivent pas être nécessaires pour démontrer le premier bénéfice."), 0.75, "estimated", self._t(language, "Define the exact screen flow, completion time and success event.", "Définir le parcours écran exact, le temps de réalisation et l’événement de succès."), self._t(language, "Which features can be removed from the first pilot?", "Quelles fonctionnalités peuvent être retirées du premier pilote ?"), self._t(language, "What exactly is in the MVP?", "Que contient exactement le MVP ?"), self._t(language, f"The first pilot is limited to {first}, the minimum data required and one reusable result. Other workflows are deferred.", f"Le premier pilote est limité à {first}, aux données minimales et à un résultat réutilisable. Les autres workflows sont reportés."), [self._t(language, "Clickable flow", "Parcours cliquable"), self._t(language, "Explicit excluded-feature list", "Liste explicite des fonctionnalités exclues")], self._t(language, "The MVP contains every requested feature.", "Le MVP contient toutes les fonctionnalités demandées.")),
+            self._question(number, 2, "customer_problem_analyst", "product_technology_architect", self._t(language, "Can the first task be completed in the user's real environment?", "La première tâche peut-elle être réalisée dans l’environnement réel de l’utilisateur ?"), self._t(language, "Technical feasibility is plausible, but connectivity, mobile usability and onboarding must be tested in the actual context.", "La faisabilité technique est plausible, mais la connexion, l’usage mobile et l’onboarding doivent être testés dans le contexte réel."), self._t(language, f"The target region is {context['region']} and the workflow is {first}.", f"La région cible est {context['region']} et le workflow est {first}."), 0.55, "estimated", self._t(language, "Run the prototype on the real device, network and field conditions.", "Tester le prototype sur le vrai appareil, le vrai réseau et les conditions terrain."), self._t(language, "What happens offline or after synchronization failure?", "Que se passe-t-il hors ligne ou après un échec de synchronisation ?"), self._t(language, "How will the product work with poor connectivity?", "Comment le produit fonctionnera-t-il avec une mauvaise connexion ?"), self._t(language, "The pilot will test offline capture, synchronization recovery and a clear saved-state indicator before wider rollout.", "Le pilote testera la saisie hors ligne, la reprise de synchronisation et un indicateur clair d’enregistrement avant tout déploiement plus large."), [self._t(language, "Offline test results", "Résultats des tests hors ligne"), self._t(language, "Synchronization recovery test", "Test de reprise de synchronisation")], self._t(language, "Connectivity will not be a problem.", "La connexion ne sera pas un problème.")),
+            self._question(number, 3, "risk_execution_officer", "product_technology_architect", self._t(language, "What technical risk can block repeated use?", "Quel risque technique peut bloquer l’usage répété ?"), self._t(language, "Duplicate entry, data loss, slow mobile input and unclear onboarding are the principal adoption risks.", "La double saisie, la perte de données, la saisie mobile lente et un onboarding peu clair sont les principaux risques d’adoption."), self._t(language, "The MVP must prove reliability and workflow speed, not only successful deployment.", "Le MVP doit prouver la fiabilité et la vitesse du workflow, pas seulement un déploiement réussi."), 0.7, "supported", self._t(language, "Set performance, recovery and onboarding acceptance criteria.", "Définir des critères d’acceptation de performance, de reprise et d’onboarding."), self._t(language, "What is the rollback path if the pilot fails?", "Quel est le chemin de retour si le pilote échoue ?"), self._t(language, "What prevents the MVP from becoming extra work?", "Qu’est-ce qui empêche le MVP de devenir un travail supplémentaire ?"), self._t(language, "The product must replace one task, import or preserve existing data and avoid parallel mandatory entry.", "Le produit doit remplacer une tâche, reprendre ou préserver les données existantes et éviter une saisie parallèle obligatoire."), [self._t(language, "Task-time benchmark", "Benchmark du temps de tâche"), self._t(language, "Data recovery test", "Test de récupération des données")], self._t(language, "Users can keep both systems indefinitely.", "Les utilisateurs peuvent garder les deux systèmes indéfiniment.")),
+            self._question(number, 4, "red_team_challenger", "project_defender", self._t(language, "Could the team build a technically complete product that proves no customer value?", "L’équipe peut-elle construire un produit techniquement complet qui ne prouve aucune valeur client ?"), self._t(language, "Yes. Delivery is not validation; success requires repeated completion of the target workflow and measurable improvement.", "Oui. La livraison n’est pas une validation ; le succès exige la répétition du workflow cible et une amélioration mesurable."), self._t(language, "Technical completion and product-market evidence are separate dimensions.", "La réalisation technique et la preuve produit-marché sont deux dimensions séparées."), 0.9, "supported", self._t(language, "Make activation, reuse and task improvement part of the MVP Definition of Done.", "Intégrer activation, réutilisation et amélioration de tâche dans la Definition of Done du MVP."), self._t(language, "Which metric can fail even if the application works?", "Quelle métrique peut échouer même si l’application fonctionne ?"), self._t(language, "How do you know the MVP creates value?", "Comment savez-vous que le MVP crée de la valeur ?"), self._t(language, "We define value through task completion, time saved, weekly reuse and user willingness to continue—not through feature delivery alone.", "Nous définissons la valeur par la tâche terminée, le temps gagné, la réutilisation et la volonté de continuer—notamment pas par la seule livraison de fonctionnalités."), [self._t(language, "Activation and reuse dashboard", "Tableau d’activation et de réutilisation")], self._t(language, "The product works, therefore the idea is validated.", "Le produit fonctionne, donc l’idée est validée.")),
+        ]
+        return self._round(number, language, self._t(language, "Product, MVP and technical feasibility", "Produit, MVP et faisabilité technique"), self._t(language, "Reduce the first release to one measurable operational workflow.", "Réduire la première version à un workflow opérationnel mesurable."), self._t(language, "Can the MVP prove value without building the full platform?", "Le MVP peut-il prouver la valeur sans construire toute la plateforme ?"), ["project_intelligence.priority_workflows", "project_intelligence.mvp_scope", "startup_score.execution_readiness"], [self._t(language, f"A focused pilot can begin with: {first}.", f"Un pilote ciblé peut commencer par : {first}."), self._t(language, "The technical path is plausible with a reduced scope.", "La voie technique est plausible avec un périmètre réduit.")], [self._t(language, "Hypothesis: the first workflow creates measurable value in the first week.", "Hypothèse : le premier workflow crée une valeur mesurable pendant la première semaine.")], [self._t(language, "The MVP may still include too many workflows.", "Le MVP peut encore contenir trop de workflows."), self._t(language, "Connectivity, onboarding and duplicate entry can prevent reuse.", "La connexion, l’onboarding et la double saisie peuvent empêcher la réutilisation.")], [self._t(language, "Clickable workflow test with target users.", "Test du workflow cliquable avec les utilisateurs cibles."), self._t(language, "Offline, recovery and task-time tests.", "Tests hors ligne, de reprise et de temps de tâche.")], [], questions, "CONDITIONAL_GO", self._t(language, "Technical feasibility is plausible, but the pilot must prove one workflow rather than deliver the whole product.", "La faisabilité technique est plausible, mais le pilote doit prouver un workflow plutôt que livrer tout le produit."), self._t(language, f"Prototype {first} and test completion, reuse and recovery.", f"Prototyper {first} et tester la réalisation, la réutilisation et la reprise."), [self._t(language, "Five users complete the workflow and at least three reuse it the following week.", "Cinq utilisateurs terminent le workflow et au moins trois le réutilisent la semaine suivante.")], [self._t(language, "The workflow is slower than the current method, creates duplicate entry or users do not return.", "Le workflow est plus lent que la méthode actuelle, crée une double saisie ou les utilisateurs ne reviennent pas.")])
+
+    def _round_finance(self, number: int, context: Dict[str, Any], analysis: Dict[str, Any], evidence: Dict[str, Any], language: str) -> Dict[str, Any]:
+        financial = self._section(analysis, "financial_estimation")
+        model = context["business_model"]
+        questions = [
+            self._question(number, 1, "business_financial_analyst", "project_defender", self._t(language, "Who pays, for what measurable value and at what decision point?", "Qui paie, pour quelle valeur mesurable et à quel moment de décision ?"), self._payer_answer(context, language), self._t(language, "A plausible revenue model is not evidence of payment.", "Un modèle de revenus plausible n’est pas une preuve de paiement."), 0.4, "field_validation_required", self._t(language, "Test three real prices with economic buyers and record the decision rationale.", "Tester trois vrais prix avec des acheteurs économiques et enregistrer la justification de décision."), self._t(language, "What budget line and approval process will fund the purchase?", "Quelle ligne budgétaire et quel processus d’approbation financeront l’achat ?"), self._t(language, "Who is the paying customer?", "Qui est le client payeur ?"), self._t(
+                language,
+                "The payer is not treated as known until a real budget owner accepts or rejects a concrete offer.",
+                "Le payeur n’est pas considéré comme connu avant qu’un vrai détenteur du budget accepte ou refuse une offre concrète.",
+            ), [self._t(language, "Price-test records", "Comptes rendus des tests de prix"), self._t(language, "Buyer approval map", "Carte d’approbation de l’acheteur")], self._t(language, "Users said they liked it, so they will pay.", "Les utilisateurs l’aiment, donc ils paieront.")),
+            self._question(number, 2, "risk_execution_officer", "business_financial_analyst", self._t(language, "Could acquisition, onboarding and support cost exceed subscription revenue?", "Les coûts d’acquisition, d’onboarding et de support peuvent-ils dépasser les revenus d’abonnement ?"), self._t(language, "Yes. Early customers may require high-touch onboarding, training and field support.", "Oui. Les premiers clients peuvent exiger un onboarding, une formation et un support terrain importants."), str(financial.get("roi_outlook") or self._t(language, "Unit economics are not yet verified.", "L’économie unitaire n’est pas encore vérifiée.")), 0.6, "estimated", self._t(language, "Measure onboarding hours, support requests, acquisition effort and gross margin during the pilot.", "Mesurer les heures d’onboarding, les demandes de support, l’effort d’acquisition et la marge pendant le pilote."), self._t(language, "What support model remains viable at the tested price?", "Quel modèle de support reste viable au prix testé ?"), self._t(language, "What are your unit economics?", "Quelle est votre économie unitaire ?"), self._t(language, "We will calculate unit economics from pilot data: price, acquisition effort, onboarding hours, support cost, infrastructure and retention.", "Nous calculerons l’économie unitaire à partir du pilote : prix, effort d’acquisition, heures d’onboarding, support, infrastructure et rétention."), [self._t(language, "Bottom-up cost model", "Modèle de coût bottom-up"), self._t(language, "Pilot support log", "Journal de support du pilote")], self._t(language, "Cloud hosting is cheap, so margins will be high.", "L’hébergement cloud est bon marché, donc les marges seront élevées.")),
+            self._question(number, 3, "customer_problem_analyst", "business_financial_analyst", self._t(language, "Which result makes the price acceptable to the buyer?", "Quel résultat rend le prix acceptable pour l’acheteur ?"), self._t(language, "The price must be connected to time saved, fewer errors, better reporting or revenue/risk impact—not to the number of features.", "Le prix doit être relié au temps gagné, aux erreurs évitées, au meilleur reporting ou à l’impact revenu/risque, et non au nombre de fonctionnalités."), self._t(language, "Value-based pricing requires a measurable baseline.", "Une tarification fondée sur la valeur exige une base mesurable."), 0.55, "hypothesis", self._t(language, "Measure the buyer's current cost and acceptable payback period.", "Mesurer le coût actuel de l’acheteur et la période de retour acceptable."), self._t(language, "Would the buyer prefer per-user, per-record or organization pricing?", "L’acheteur préfère-t-il un prix par utilisateur, dossier ou organisation ?"), self._t(language, "Why is this price justified?", "Pourquoi ce prix est-il justifié ?"), self._t(language, "The price will be justified by a measured operational outcome and tested against alternative packages with real buyers.", "Le prix sera justifié par un résultat opérationnel mesuré et testé face à plusieurs offres auprès de vrais acheteurs."), [self._t(language, "Current-cost baseline", "Base de coût actuelle"), self._t(language, "Package preference test", "Test de préférence d’offre")], self._t(language, "This price is standard for SaaS.", "Ce prix est standard pour un SaaS.")),
+            self._question(number, 4, "evidence_auditor", "project_defender", self._t(language, "Which financial figures are sourced, estimated or still unknown?", "Quels chiffres financiers sont sourcés, estimés ou encore inconnus ?"), self._t(language, "Current financial figures are planning estimates until quotes, pilot costs, price acceptance and retention are recorded.", "Les chiffres financiers actuels sont des estimations de planification jusqu’à l’obtention de devis, coûts pilote, acceptation de prix et rétention."), self._t(language, f"Evidence confidence is {evidence['level']} and finance requires direct validation.", f"La confiance des preuves est {evidence['level']} et les finances exigent une validation directe."), evidence["score"] / 10, "estimated", self._t(language, "Label every figure as quote, observed cost, estimate or hypothesis.", "Étiqueter chaque chiffre comme devis, coût observé, estimation ou hypothèse."), self._t(language, "Which number can be replaced by a real quote this week?", "Quel chiffre peut être remplacé par un vrai devis cette semaine ?"), self._t(language, "How reliable are your financial projections?", "Quelle est la fiabilité de vos projections financières ?"), self._t(language, "They are preliminary estimates; the next version will replace assumptions with provider quotes and pilot conversion, support and retention data.", "Ce sont des estimations préliminaires ; la prochaine version remplacera les hypothèses par des devis et des données de conversion, support et rétention du pilote."), [self._t(language, "Provider quotes", "Devis fournisseurs"), self._t(language, "Observed pilot costs", "Coûts pilote observés")], self._t(language, "The forecast is accurate because the model calculated it.", "La prévision est exacte parce que le modèle l’a calculée.")),
+        ]
+        return self._round(number, language, self._t(language, "Business model, pricing and financial viability", "Modèle économique, prix et viabilité financière"), self._t(language, "Distinguish a plausible model from payment evidence and viable unit economics.", "Distinguer un modèle plausible d’une preuve de paiement et d’une économie unitaire viable."), self._t(language, "Who will pay, how much and for which measurable outcome?", "Qui paiera, combien et pour quel résultat mesurable ?"), ["project_intelligence.business_model", "financial_estimation", "evidence_ledger.pricing"], [self._t(language, f"The initial model is: {model}.", f"Le modèle initial est : {model}."), self._t(language, "A limited paid pilot can test the economic decision before scaling.", "Un pilote payant limité peut tester la décision économique avant le passage à l’échelle.")], [self._t(language, "Hypothesis: a real budget owner will pay for a measurable workflow gain.", "Hypothèse : un vrai détenteur du budget paiera pour un gain de workflow mesurable.")], [self._t(language, "Willingness to pay is not validated.", "La volonté de payer n’est pas validée."), self._t(language, "Acquisition, onboarding and support may exceed early revenue.", "L’acquisition, l’onboarding et le support peuvent dépasser les premiers revenus.")], [self._t(language, "Three real price tests with economic buyers.", "Trois vrais tests de prix avec des acheteurs économiques."), self._t(language, "Bottom-up MVP and support cost model.", "Modèle bottom-up des coûts MVP et support."), self._t(language, "Pilot retention and conversion data.", "Données de rétention et conversion du pilote.")], [], questions, "CONDITIONAL_GO", self._t(language, "The model deserves a payment test, not a full financial commitment.", "Le modèle mérite un test de paiement, pas un engagement financier complet."), self._t(language, "Test three concrete offers and measure acquisition, onboarding, support and retention.", "Tester trois offres concrètes et mesurer acquisition, onboarding, support et rétention."), [self._t(language, "At least one economic buyer accepts a concrete pilot offer and the measured support cost remains viable.", "Au moins un acheteur économique accepte une offre pilote concrète et le coût de support mesuré reste viable.")], [self._t(language, "All buyers reject the tested value/price relationship or support cost makes the offer structurally unviable.", "Tous les acheteurs rejettent le rapport valeur/prix ou le support rend l’offre structurellement non viable.")])
+
+    def _round_decision(self, number: int, context: Dict[str, Any], analysis: Dict[str, Any], evidence: Dict[str, Any], language: str) -> Dict[str, Any]:
+        score = self._section(analysis, "startup_score")
+        potential = self._number(score.get("potential_score") or score.get("score"), 6.0)
+        readiness = self._number(score.get("execution_readiness_score"), 5.0)
+        questions = [
+            self._question(number, 1, "committee_chair", "all_members", self._t(language, "Should the project proceed to a pilot, pivot or stop?", "Le projet doit-il passer à un pilote, pivoter ou s’arrêter ?"), self._t(language, "Proceed only to a narrow validation pilot while the blocking evidence is collected.", "Passer uniquement à un pilote de validation réduit pendant la collecte des preuves bloquantes."), self._t(language, f"Potential is {potential:.1f}/10, evidence confidence is {evidence['score']:.1f}/10 and execution readiness is {readiness:.1f}/10.", f"Le potentiel est {potential:.1f}/10, la confiance des preuves {evidence['score']:.1f}/10 et la préparation à l’exécution {readiness:.1f}/10."), 0.8, "committee_synthesis", self._t(language, "Complete the pilot conditions before investing in full development or scaling.", "Remplir les conditions du pilote avant d’investir dans le développement complet ou le passage à l’échelle."), self._t(language, "Which condition blocks the next investment decision?", "Quelle condition bloque la prochaine décision d’investissement ?"), self._t(language, "What is your decision today?", "Quelle est votre décision aujourd’hui ?"), self._t(language, "The decision is Conditional Go for a limited pilot, not approval for full rollout. The next investment decision depends on workflow reuse, price acceptance and local evidence.", "La décision est un GO conditionnel pour un pilote limité, et non une approbation du déploiement complet. La prochaine décision dépend de la réutilisation, de l’acceptation du prix et des preuves locales."), [self._t(language, "Committee vote", "Vote du comité"), self._t(language, "Explicit pilot scorecard", "Tableau de bord explicite du pilote")], self._t(language, "The project received 7/10, so we should build everything.", "Le projet a reçu 7/10, donc il faut tout construire.")),
+            self._question(number, 2, "red_team_challenger", "committee_chair", self._t(language, "Which single assumption can destroy the project?", "Quelle hypothèse unique peut détruire le projet ?"), self._t(language, "The project fails if target users do not repeatedly use the priority workflow or no economic buyer accepts the tested value/price relationship.", "Le projet échoue si les utilisateurs ne réutilisent pas le workflow prioritaire ou si aucun acheteur économique n’accepte le rapport valeur/prix testé."), self._t(language, "Adoption and payment are the two principal falsifiable assumptions.", "L’adoption et le paiement sont les deux hypothèses falsifiables principales."), 0.85, "supported", self._t(language, "Pre-register reuse and payment failure thresholds.", "Préenregistrer les seuils d’échec de réutilisation et de paiement."), self._t(language, "What exact result triggers a pivot?", "Quel résultat exact déclenche un pivot ?"), self._t(language, "What would make you stop?", "Qu’est-ce qui vous ferait arrêter ?"), self._t(language, "We will stop or pivot if users do not return, the workflow is slower than the current method, or buyers reject the tested value at viable prices.", "Nous arrêterons ou pivoterons si les utilisateurs ne reviennent pas, si le workflow est plus lent ou si les acheteurs rejettent la valeur aux prix viables."), [self._t(language, "Predefined no-go thresholds", "Seuils NO-GO prédéfinis")], self._t(language, "We will keep improving until users accept it.", "Nous continuerons à améliorer jusqu’à ce que les utilisateurs acceptent.")),
+            self._question(number, 3, "evidence_auditor", "committee_chair", self._t(language, "Which findings are validated and which remain hypotheses?", "Quels résultats sont validés et lesquels restent des hypothèses ?"), self._t(language, "The project structure and technical plausibility are clearer; customer urgency, local demand, payment and unit economics remain hypotheses unless supported by direct evidence.", "La structure du projet et la plausibilité technique sont plus claires ; l’urgence client, la demande locale, le paiement et l’économie unitaire restent des hypothèses sans preuve directe."), self._t(language, "Validated opportunities remain empty when compatible evidence is absent.", "Les opportunités validées restent vides en l’absence de preuves compatibles."), evidence["score"] / 10, "evidence_audit", self._t(language, "Keep evidence statuses visible in the final memo and meeting preparation.", "Garder les statuts de preuve visibles dans le mémo final et la préparation de réunion."), self._t(language, "Which claim should be downgraded before the meeting?", "Quelle affirmation doit être rétrogradée avant la réunion ?"), self._t(language, "What can you confidently claim today?", "Que pouvez-vous affirmer avec confiance aujourd’hui ?"), self._t(language, "We can claim the project is defined and testable; we cannot yet claim local demand, product-market fit or financial viability.", "Nous pouvons affirmer que le projet est défini et testable ; nous ne pouvons pas encore affirmer la demande locale, le product-market fit ou la viabilité financière."), [self._t(language, "Claim-to-evidence matrix", "Matrice affirmation-preuve")], self._t(language, "The analysis validated the market.", "L’analyse a validé le marché.")),
+            self._question(number, 4, "risk_execution_officer", "committee_chair", self._t(language, "What is the least risky next action?", "Quelle est la prochaine action la moins risquée ?"), self._t(language, f"Run a two-to-four-week pilot focused on {context['priority_workflow']} with explicit reuse, task-time, price and support metrics.", f"Lancer un pilote de deux à quatre semaines centré sur {context['priority_workflow']} avec des métriques explicites de réutilisation, temps, prix et support."), self._t(language, "A narrow experiment buys evidence before major product investment.", "Une expérience réduite achète des preuves avant un investissement produit important."), 0.9, "supported", self._t(language, "Name the pilot owner, users, dates, metrics and stop conditions.", "Nommer le responsable, les utilisateurs, les dates, les métriques et les conditions d’arrêt."), self._t(language, "Who owns the next decision and on what date?", "Qui possède la prochaine décision et à quelle date ?"), self._t(language, "What will you do next week?", "Que ferez-vous la semaine prochaine ?"), self._t(language, "We will recruit the pilot cohort, test one workflow and schedule a decision review against predefined GO, PIVOT and NO-GO thresholds.", "Nous recruterons la cohorte pilote, testerons un workflow et planifierons une revue de décision selon des seuils GO, PIVOT et NO-GO prédéfinis."), [self._t(language, "Pilot charter", "Charte du pilote"), self._t(language, "Decision review date", "Date de revue de décision")], self._t(language, "We will continue developing the platform.", "Nous continuerons à développer la plateforme.")),
+        ]
+        return self._round(number, language, self._t(language, "Investment committee decision", "Décision du comité d’investissement"), self._t(language, "Convert the previous rounds into one bounded decision and experiment plan.", "Transformer les tours précédents en une décision limitée et un plan d’expérience."), self._t(language, "Should the project continue, pivot or stop at this evidence level?", "Le projet doit-il continuer, pivoter ou s’arrêter à ce niveau de preuve ?"), ["startup_score", "evidence_confidence", "debate_rounds_1_4"], [self._t(language, "The project is sufficiently defined for a focused pilot.", "Le projet est suffisamment défini pour un pilote ciblé."), self._t(language, "The next decision can be based on measurable evidence.", "La prochaine décision peut être fondée sur des preuves mesurables.")], [self._t(language, "Hypothesis: the pilot will demonstrate repeated workflow value and payment interest.", "Hypothèse : le pilote démontrera une valeur répétée du workflow et un intérêt de paiement.")], [self._t(language, "Evidence is too weak for full rollout or scaling.", "Les preuves sont trop faibles pour un déploiement complet ou le passage à l’échelle."), self._t(language, "Adoption and payment can still invalidate the project.", "L’adoption et le paiement peuvent encore invalider le projet.")], self._global_missing_evidence(analysis, language), [], questions, "CONDITIONAL_GO", self._t(language, "The committee authorizes a limited pilot under explicit evidence, reuse, payment and cost conditions.", "Le comité autorise un pilote limité sous conditions explicites de preuve, réutilisation, paiement et coût."), self._t(language, "Run the pilot, review the scorecard and decide GO, PIVOT or NO-GO without expanding scope first.", "Lancer le pilote, revoir le tableau de bord et décider GO, PIVOT ou NO-GO sans élargir le périmètre."), [self._t(language, "Five users complete the priority workflow and at least three reuse it.", "Cinq utilisateurs terminent le workflow prioritaire et au moins trois le réutilisent."), self._t(language, "At least one economic buyer accepts a concrete pilot offer.", "Au moins un acheteur économique accepte une offre pilote concrète."), self._t(language, "Task time, support cost and data reliability meet the pilot thresholds.", "Le temps de tâche, le coût de support et la fiabilité des données respectent les seuils du pilote.")], [self._t(language, "Users do not return or the workflow creates extra work.", "Les utilisateurs ne reviennent pas ou le workflow crée du travail supplémentaire."), self._t(language, "Buyers reject the tested value/price relationship.", "Les acheteurs rejettent le rapport valeur/prix testé."), self._t(language, "A critical technical, regulatory or operational risk cannot be mitigated.", "Un risque technique, réglementaire ou opérationnel critique ne peut pas être réduit.")])
+
+    # ------------------------------------------------------------------
+    # Shared round / judge construction
+    # ------------------------------------------------------------------
+
+    def _round(self, number: int, language: str, topic: str, objective: str, question: str, data_sources: List[str], supporting: List[str], hypotheses: List[str], risks: List[str], missing: List[str], validated: List[str], questions: List[Dict[str, Any]], decision: str, synthesis: str, next_action: str, go_conditions: List[str], no_go_conditions: List[str]) -> Dict[str, Any]:
+        assumptions = self._unique(hypotheses)
+        critical_risks = self._unique(risks)
+        missing_evidence = self._unique(missing)
+        return {
+            "round": number,
+            "topic": topic,
+            "objective": objective,
+            "main_question": question,
+            "moderator": {
+                "role": "committee_chair",
+                "round": number,
+                "topic": topic,
+                "focus": objective,
+                "key_question": question,
+                "data_sources": data_sources,
+            },
+            "member_positions": self._member_positions(number, language, decision),
+            "defender": {
+                "role": "project_defender",
+                "round": number,
+                "position": "conditional_support",
+                "main_argument": supporting[0] if supporting else "",
+                "supporting_points": self._unique(supporting)[:3],
+                "opportunities": assumptions[:2],
+                "assumptions": assumptions[:3],
+                "opportunity_score": 6.0,
+            },
+            "critic": {
+                "role": "critical_analyst",
+                "round": number,
+                "main_objection": critical_risks[0] if critical_risks else "",
+                "critical_risks": critical_risks[:3],
+                "weak_assumptions": assumptions[:3],
+                "missing_evidence": missing_evidence[:4],
+                "counter_recommendation": next_action,
+                "risk_score": 7.0 if critical_risks else 4.0,
+            },
+            "committee_questions": questions,
+            "cross_examination": questions[1:3],
+            "evidence_audit": [
+                {
+                    "claim": item,
+                    "status": "supported",
+                    "confidence": "medium",
+                }
+                for item in validated
+            ] + [
+                {
+                    "claim": item,
+                    "status": "field_validation_required",
+                    "confidence": "low",
+                }
+                for item in assumptions
+            ],
+            "agreements": self._unique(validated + supporting[:1]),
+            "disagreements": critical_risks[:2],
+            "unresolved_questions": missing_evidence,
+            "meeting_preparation": {
+                "likely_questions": [q["meeting_preparation"]["likely_real_question"] for q in questions],
+                "recommended_answers": [q["meeting_preparation"]["recommended_answer"] for q in questions],
+                "proofs_to_prepare": self._unique([proof for q in questions for proof in q["meeting_preparation"]["proofs_to_prepare"]]),
+                "answers_to_avoid": [q["meeting_preparation"]["answer_to_avoid"] for q in questions],
+            },
+            "round_summary": {
+                "validated_points": self._unique(validated),
+                "potential_opportunities": assumptions,
+                "remaining_risks": self._unique(critical_risks + missing_evidence),
+                "decision": decision,
+                "synthesis": synthesis,
+                "next_action": next_action,
+                "go_conditions": go_conditions,
+                "no_go_conditions": no_go_conditions,
+            },
+            "context_locked": True,
+            "output_language": language,
+        }
+
+    def _question(self, round_number: int, index: int, asked_by: str, addressed_to: str, question: str, direct_answer: str, reasoning: str, confidence: float, evidence_status: str, unresolved: str, follow_up: str, likely_real_question: str, recommended_answer: str, proofs: List[str], avoid: str) -> Dict[str, Any]:
+        return {
+            "question_id": f"round_{round_number}_q_{index}",
+            "asked_by": asked_by,
+            "addressed_to": addressed_to,
+            "question": question,
+            "question_type": "evidence_challenge" if asked_by in {"evidence_auditor", "red_team_challenger"} else "committee_review",
+            "answer": {
+                "direct_answer": direct_answer,
+                "reasoning_summary": reasoning,
+                "confidence": round(max(0.0, min(1.0, confidence)), 2),
+                "evidence_status": evidence_status,
+                "evidence_ids": [],
+                "unresolved_point": unresolved,
+            },
+            "follow_up_question": follow_up,
+            "meeting_preparation": {
+                "likely_real_question": likely_real_question,
+                "recommended_answer": recommended_answer,
+                "proofs_to_prepare": proofs,
+                "answer_to_avoid": avoid,
+            },
+        }
+
+    def _judge(self, rounds: List[Dict[str, Any]], context: Dict[str, Any], analysis: Dict[str, Any], evidence: Dict[str, Any], language: str) -> Dict[str, Any]:
+        score = self._section(analysis, "startup_score")
+        potential = self._number(score.get("potential_score") or score.get("score"), 6.0)
+        readiness = self._number(score.get("execution_readiness_score"), 5.0)
+        evidence_score = self._number(score.get("evidence_confidence_score"), evidence["score"])
+        votes = self._votes(evidence_score, readiness, language)
+        vote_counts = Counter(vote["vote"] for vote in votes)
+        verdict = "CONDITIONAL_GO"
+        validated = self._unique([item for rnd in rounds for item in (rnd.get("round_summary") or {}).get("validated_points", [])])
+        hypotheses = self._unique([item for rnd in rounds for item in (rnd.get("round_summary") or {}).get("potential_opportunities", [])])
+        risks = self._unique([item for rnd in rounds for item in (rnd.get("round_summary") or {}).get("remaining_risks", [])])
+        go_conditions = self._unique([item for rnd in rounds for item in (rnd.get("round_summary") or {}).get("go_conditions", [])])
+        no_go_conditions = self._unique([item for rnd in rounds for item in (rnd.get("round_summary") or {}).get("no_go_conditions", [])])
+        missing = self._global_missing_evidence(analysis, language)
+        investment = round(max(0.0, min(10.0, potential * 0.35 + evidence_score * 0.30 + readiness * 0.35)), 1)
+        return {
+            "format": "investment_committee_memo_v9",
+            "status": "completed",
+            "context_locked": True,
+            "output_language": language,
+            "role": "committee_chair",
+            "verdict": verdict,
+            "verdict_code": "conditional_go",
+            "argument_strength_score": round((potential + readiness) / 2, 1),
+            "confidence_score": evidence_score,
+            "risk_level": "high" if evidence_score < 4.5 else "medium",
+            "potential_score": potential,
+            "evidence_confidence_score": evidence_score,
+            "execution_readiness_score": readiness,
+            "investment_attractiveness_score": investment,
+            "committee_votes": votes,
+            "committee_vote": dict(vote_counts),
+            "vetoes": [vote for vote in votes if vote.get("veto")],
+            "validated_findings": validated,
+            "validated_opportunities": [],
+            "potential_opportunities": hypotheses[:8] or [self._t(language, "Hypothesis: the focused pilot can create measurable workflow value.", "Hypothèse : le pilote ciblé peut créer une valeur de workflow mesurable.")],
+            "critical_risks": risks[:10],
+            "missing_evidence": missing,
+            "improved_idea": self._t(language, f"Position {context['title']} around one priority workflow—{context['priority_workflow']}—and expand only after repeated use and payment evidence.", f"Positionner {context['title']} autour d’un workflow prioritaire — {context['priority_workflow']} — et élargir uniquement après preuve de réutilisation et de paiement."),
+            "final_recommendation": self._t(language, "Continue only to a limited pilot. Do not approve full rollout or scaling until the GO conditions are met.", "Continuer uniquement vers un pilote limité. Ne pas approuver le déploiement complet ou le passage à l’échelle avant satisfaction des conditions GO."),
+            "next_actions": [
+                self._t(language, "Observe five target users and measure the current workflow.", "Observer cinq utilisateurs cibles et mesurer le workflow actuel."),
+                self._t(language, "Run a two-to-four-week pilot with reuse and task-time metrics.", "Lancer un pilote de deux à quatre semaines avec des métriques de réutilisation et de temps."),
+                self._t(language, "Test three concrete prices with economic buyers.", "Tester trois prix concrets avec des acheteurs économiques."),
+            ],
+            "action_plan": [
+                self._t(language, "Week 1: interviews, workflow observation and competitor verification.", "Semaine 1 : entretiens, observation du workflow et vérification des concurrents."),
+                self._t(language, "Weeks 2–4: narrow pilot and evidence collection.", "Semaines 2–4 : pilote réduit et collecte des preuves."),
+                self._t(language, "Decision review: GO, PIVOT or NO-GO against predefined thresholds.", "Revue de décision : GO, PIVOT ou NO-GO selon les seuils prédéfinis."),
+            ],
+            "decision_by_round": [
+                {
+                    "round": rnd.get("round"),
+                    "topic": rnd.get("topic"),
+                    "decision": (rnd.get("round_summary") or {}).get("decision"),
+                    "critic_risk_score": (rnd.get("critic") or {}).get("risk_score"),
+                    "main_objection": (rnd.get("critic") or {}).get("main_objection"),
+                    "synthesis": (rnd.get("round_summary") or {}).get("synthesis"),
+                }
+                for rnd in rounds
+            ],
+            "debate_synthesis": self._t(language, "The committee agrees that the project is testable and potentially useful, but customer urgency, local demand, repeated use, payment and unit economics remain insufficiently evidenced.", "Le comité convient que le projet est testable et potentiellement utile, mais l’urgence client, la demande locale, l’usage répété, le paiement et l’économie unitaire restent insuffisamment prouvés."),
+            "go_no_go_conditions": go_conditions[:8],
+            "go_conditions": go_conditions[:8],
+            "no_go_conditions": no_go_conditions[:8],
+            "weak_assumptions": hypotheses[:8],
+        }
+
+    def _votes(self, evidence_score: float, readiness: float, language: str) -> List[Dict[str, Any]]:
+        base_confidence = 0.30 + (0.04 * evidence_score) + (0.03 * readiness)
+        role_adjustments = {
+            "customer_problem_analyst": 0.00,
+            "market_competition_analyst": -0.10,
+            "product_technology_architect": 0.07,
+            "business_financial_analyst": -0.04,
+            "risk_execution_officer": 0.04,
+            "evidence_auditor": -0.07,
+        }
+        base = [
+            ("customer_problem_analyst", "CONDITIONAL_GO", self._t(language, "The problem deserves a measured field test.", "Le problème mérite un test terrain mesuré.")),
+            ("market_competition_analyst", "INSUFFICIENT_EVIDENCE", self._t(language, "Local demand and competitive mapping remain incomplete.", "La demande locale et la cartographie concurrentielle restent incomplètes.")),
+            ("product_technology_architect", "CONDITIONAL_GO", self._t(language, "A narrow workflow pilot is technically feasible.", "Un pilote de workflow réduit est techniquement faisable.")),
+            ("business_financial_analyst", "CONDITIONAL_GO", self._t(language, "The model deserves a real payment test, not scaling.", "Le modèle mérite un vrai test de paiement, pas un passage à l’échelle.")),
+            ("risk_execution_officer", "CONDITIONAL_GO", self._t(language, "Risks are manageable only with explicit pilot thresholds.", "Les risques sont gérables uniquement avec des seuils pilote explicites.")),
+            ("evidence_auditor", "PIVOT" if evidence_score < 2.5 else "CONDITIONAL_GO", self._t(language, "Claims must remain cautious until compatible evidence is collected.", "Les affirmations doivent rester prudentes jusqu’à collecte de preuves compatibles.")),
+        ]
+        votes: List[Dict[str, Any]] = []
+        for member, vote, reason in base:
+            veto = member == "risk_execution_officer" and readiness < 3.0
+            confidence = round(
+                max(
+                    0.25,
+                    min(
+                        0.90,
+                        base_confidence + role_adjustments.get(member, 0.0),
+                    ),
+                ),
+                2,
+            )
+            votes.append({
+                "member": member,
+                "vote": vote,
+                "confidence": confidence,
+                "confidence_basis": {
+                    "evidence_score": round(evidence_score, 2),
+                    "execution_readiness_score": round(readiness, 2),
+                    "role_adjustment": role_adjustments.get(member, 0.0),
+                    "formula": "0.30 + 0.04×evidence + 0.03×readiness + role adjustment",
+                },
+                "blocking_conditions": [self._t(language, "Complete the relevant pilot evidence before scaling.", "Compléter les preuves pilote pertinentes avant le passage à l’échelle.")],
+                "reason": reason,
+                "veto": veto,
+            })
+        return votes
+
+
+    # ------------------------------------------------------------------
+    # Context and evidence helpers
+    # ------------------------------------------------------------------
+
+    CONFIRMED_ACTOR_STATUSES = {
+        "explicit",
+        "user_provided",
+        "confirmed",
+        "validated",
+        "provided_by_user",
+    }
+
+    def _actor_record(
+        self,
+        *,
+        role: str,
+        aliases: Iterable[str],
+        structured: Dict[str, Any],
+        actors: Dict[str, Any],
+        project_context: Dict[str, Any],
+    ) -> Dict[str, str]:
+        provenance = (
+            structured.get("actor_provenance")
+            or actors.get("provenance")
+            or project_context.get("actor_provenance")
+            or {}
+        )
+        if not isinstance(provenance, dict):
+            provenance = {}
+
+        raw: Any = None
+        status = ""
+
+        for key in aliases:
+            if actors.get(key) not in (None, ""):
+                raw = actors.get(key)
+                break
+            if structured.get(key) not in (None, ""):
+                raw = structured.get(key)
+                break
+            if project_context.get(key) not in (None, ""):
+                raw = project_context.get(key)
+                break
+
+        if isinstance(raw, dict):
+            status = self._text(
+                raw.get("status")
+                or raw.get("source")
+                or raw.get("provenance")
+            ).lower()
+            candidate = self._text(
+                raw.get("value")
+                or raw.get("name")
+                or raw.get("actor")
+                or raw.get("label")
+            )
+        else:
+            candidate = self._text(raw)
+
+        provenance_value = provenance.get(role)
+        if isinstance(provenance_value, dict):
+            status = status or self._text(
+                provenance_value.get("status")
+                or provenance_value.get("source")
+                or provenance_value.get("provenance")
+            ).lower()
+        else:
+            status = status or self._text(provenance_value).lower()
+
+        for key in aliases:
+            status = status or self._text(
+                structured.get(f"{key}_status")
+                or actors.get(f"{key}_status")
+                or project_context.get(f"{key}_status")
+            ).lower()
+
+        confirmed = status in self.CONFIRMED_ACTOR_STATUSES
+        return {
+            "value": candidate if confirmed else "",
+            "candidate": candidate,
+            "status": "explicit" if confirmed else "to_confirm",
+        }
+
+    def _context(self, *, title: str, description: str, industry: str, region: str, project_context: Dict[str, Any], analysis: Dict[str, Any]) -> Dict[str, Any]:
+        intelligence = self._section(analysis, "project_intelligence") or self._section(project_context, "project_intelligence")
+        structured = (
+            self._section(analysis, "structured_project_context")
+            or self._section(project_context, "structured_project_context")
+            or self._section(intelligence, "structured_project_context")
+            or project_context
+        )
+        language = normalize_output_language(
+            structured.get("output_language")
+            or project_context.get("output_language")
+            or "fr"
+        )
+        targets = self._list(structured.get("target_users"))
+        if not targets:
+            targets = self._list(self._section(analysis, "market_study").get("target_users"))
+        if not targets:
+            targets = [self._t(language, "target user", "utilisateur cible")]
+
+        workflows = self._list(
+            structured.get("priority_workflows")
+            or structured.get("use_cases")
+            or structured.get("use_case_terms")
+        )
+        if not workflows:
+            workflows = [
+                self._text(
+                    structured.get("main_use_case")
+                    or structured.get("mvp_scope")
+                    or "first operational workflow"
+                )
+            ]
+
+        problem = self._text(
+            structured.get("problem")
+            or self._section(analysis, "business_analysis").get("problem")
+            or description
+        )
+        solution = self._text(
+            structured.get("solution")
+            or self._section(analysis, "business_analysis").get("solution")
+            or description
+        )
+        business_model = self._text(
+            structured.get("business_model")
+            or self._section(analysis, "business_model_canvas").get("revenue_streams")
+            or "pricing model to validate"
+        )
+
+        actors = structured.get("actors") or project_context.get("actors") or {}
+        if not isinstance(actors, dict):
+            actors = {}
+
+        project_archetype = self._text(
+            structured.get("project_archetype")
+            or project_context.get("project_archetype")
+            or "generic_digital_product"
+        )
+
+        role_assignments = {
+            "payer": self._actor_record(
+                role="payer",
+                aliases=("payer", "economic_buyer", "budget_owner"),
+                structured=structured,
+                actors=actors,
+                project_context=project_context,
+            ),
+            "technical_maintainer": self._actor_record(
+                role="technical_maintainer",
+                aliases=("technical_maintainer", "maintenance_owner", "maintainer"),
+                structured=structured,
+                actors=actors,
+                project_context=project_context,
+            ),
+            "demand_side": self._actor_record(
+                role="demand_side",
+                aliases=("demand_side",),
+                structured=structured,
+                actors=actors,
+                project_context=project_context,
+            ),
+            "supply_side": self._actor_record(
+                role="supply_side",
+                aliases=("supply_side",),
+                structured=structured,
+                actors=actors,
+                project_context=project_context,
+            ),
+            "operator_or_partner": self._actor_record(
+                role="operator_or_partner",
+                aliases=("operator_or_partner", "platform_operator"),
+                structured=structured,
+                actors=actors,
+                project_context=project_context,
+            ),
+        }
+
+        primary_target = self._text(
+            structured.get("primary_target")
+            or actors.get("primary_user")
+            or actors.get("field_operator")
+            or targets[0]
+        )
+        if isinstance(actors.get("primary_user"), dict):
+            primary_target = self._text(
+                actors["primary_user"].get("value")
+                or actors["primary_user"].get("name")
+                or primary_target
+            )
+
+        demand_actor = (
+            role_assignments["demand_side"]["value"]
+            if project_archetype == "two_sided_marketplace"
+            else ""
+        )
+        supply_actor = (
+            role_assignments["supply_side"]["value"]
+            if project_archetype == "two_sided_marketplace"
+            else ""
+        )
+        operator_actor = (
+            role_assignments["operator_or_partner"]["value"]
+            if project_archetype == "two_sided_marketplace"
+            else ""
+        )
+        payer_value = role_assignments["payer"]["value"]
+        payer_label = payer_value or self._t(
+            language,
+            "not identified — to validate",
+            "non identifié — à valider",
+        )
+        maintainer_value = role_assignments["technical_maintainer"]["value"]
+        maintainer_label = maintainer_value or self._t(
+            language,
+            "not identified — to validate",
+            "non identifié — à valider",
+        )
+
+        success_metrics = self._unique(
+            self._list(
+                structured.get("success_metrics")
+                or project_context.get("success_metrics")
+            )
+        )
+        risk_dimensions = self._unique(
+            self._list(
+                structured.get("risk_dimensions")
+                or project_context.get("risk_dimensions")
+            )
+        )
+        evidence_needs = self._unique(
+            self._list(
+                structured.get("evidence_needs")
+                or project_context.get("evidence_needs")
+            )
+        )
+
+        return {
+            "title": self._text(structured.get("project_name") or structured.get("title") or title or "Project"),
+            "description": self._text(description),
+            "sector": self._text(structured.get("sector") or structured.get("industry") or industry or "target sector"),
+            "region": self._text(structured.get("target_region") or structured.get("market_region") or region or "target region"),
+            "problem": problem,
+            "solution": solution,
+            "target_users": targets,
+            "primary_target": primary_target,
+            "economic_buyer": payer_label,
+            "economic_buyer_value": payer_value,
+            "economic_buyer_status": role_assignments["payer"]["status"],
+            "technical_maintainer": maintainer_label,
+            "technical_maintainer_value": maintainer_value,
+            "technical_maintainer_status": role_assignments["technical_maintainer"]["status"],
+            "priority_workflows": workflows[:6],
+            "priority_workflow": self._text(structured.get("priority_workflow") or structured.get("core_action") or workflows[0]),
+            "mvp_scope": self._text(structured.get("mvp_scope") or workflows),
+            "business_model": business_model,
+            "project_archetype": project_archetype,
+            "vertical": self._text(structured.get("vertical") or project_context.get("vertical") or "general"),
+            "business_motion": self._text(structured.get("business_motion") or project_context.get("business_motion") or "unknown"),
+            "interaction_model": self._text(structured.get("interaction_model") or project_context.get("interaction_model") or "generic"),
+            "validation_unit": self._text(structured.get("validation_unit") or project_context.get("validation_unit") or "core action"),
+            "actors": actors,
+            "role_assignments": role_assignments,
+            "demand_actor": demand_actor,
+            "supply_actor": supply_actor,
+            "operator_actor": operator_actor,
+            "success_metrics": success_metrics,
+            "risk_dimensions": risk_dimensions,
+            "evidence_needs": evidence_needs,
+        }
+
+    def _frequency_question(self, context: Dict[str, Any], language: str) -> str:
+        actor = context["primary_target"]
+        action = context["priority_workflow"]
+        return self._t(
+            language,
+            f"How often is the following action currently performed by {actor}: {action}?",
+            f"À quelle fréquence l’action suivante est-elle actuellement réalisée par {actor} : {action} ?",
+        )
+
+    def _actor_map_answer(self, context: Dict[str, Any], language: str) -> str:
+        users = ", ".join(self._text(item) for item in context.get("target_users") or [])
+        if context.get("project_archetype") == "two_sided_marketplace":
+            demand = context.get("demand_actor") or self._t(language, "not identified", "non identifié")
+            supply = context.get("supply_actor") or self._t(language, "not identified", "non identifié")
+            operator = context.get("operator_actor") or self._t(language, "not identified", "non identifié")
+            return self._t(
+                language,
+                f"Explicit marketplace roles currently confirmed: demand={demand}, supply={supply}, operator={operator}. Unconfirmed roles remain hypotheses.",
+                f"Rôles marketplace explicitement confirmés : demande={demand}, offre={supply}, opérateur={operator}. Les rôles non confirmés restent des hypothèses.",
+            )
+
+        return self._t(
+            language,
+            f"The explicitly targeted user segments are {users}. The payer and technical maintainer are not identified unless separately confirmed.",
+            f"Les segments utilisateurs explicitement ciblés sont : {users}. Le payeur et le mainteneur technique ne sont pas identifiés tant qu’ils ne sont pas confirmés séparément.",
+        )
+
+    def _payer_answer(self, context: Dict[str, Any], language: str) -> str:
+        model = context["business_model"]
+        if context.get("economic_buyer_status") == "explicit":
+            return self._t(
+                language,
+                f"The explicitly identified payer is {context['economic_buyer_value']}. The current monetization hypothesis is: {model}.",
+                f"Le payeur explicitement identifié est {context['economic_buyer_value']}. L’hypothèse de monétisation actuelle est : {model}.",
+            )
+        return self._t(
+            language,
+            f"The economic payer is not yet identified. The monetization model remains a hypothesis to test with real budget owners: {model}.",
+            f"Le payeur économique n’est pas encore identifié. Le modèle de monétisation reste une hypothèse à tester avec de vrais détenteurs du budget : {model}.",
+        )
+
+    def _evidence_packet(self, analysis: Dict[str, Any]) -> Dict[str, Any]:
+        score = self._section(analysis, "startup_score")
+        level = self._evidence_level(analysis)
+        return {
+            "level": level,
+            "score": self._number(score.get("evidence_confidence_score"), self._evidence_score(level)),
+            "sources": self._sources(analysis),
+            "claims": self._list(self._section(analysis, "fact_check_report").get("claims")),
+            "confidence_by_category": self._section(analysis, "evidence_confidence"),
+        }
+
+    def _sources(self, analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
+        candidates: List[Any] = []
+        for section_name, keys in (("forgecrawler", ("sources", "public_sources", "retained_sources")), ("competitive_analysis", ("sources", "external_sources", "retained_sources", "public_sources"))):
+            section = self._section(analysis, section_name)
+            for key in keys:
+                value = section.get(key)
+                if isinstance(value, list):
+                    candidates.extend(value)
+        seen = set()
+        result: List[Dict[str, Any]] = []
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("url") or item.get("title") or "").strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            result.append(item)
+        return result
+
+    def _claim_status(self, analysis: Dict[str, Any], category: str) -> str:
+        for claim in self._list(self._section(analysis, "fact_check_report").get("claims")):
+            if not isinstance(claim, dict):
+                continue
+            haystack = f"{claim.get('category', '')} {claim.get('claim', '')}".lower()
+            if category.lower() not in haystack:
+                continue
+            status = str(claim.get("status") or claim.get("public_status") or "").lower()
+            if any(token in status for token in ("supported", "sourced", "verified", "confirm")) and "not" not in status:
+                return "supported"
+            if "estimate" in status:
+                return "estimated"
+            return "not_confirmed"
+        return "not_confirmed"
+
+    def _evidence_level(self, analysis: Dict[str, Any]) -> str:
+        score = self._section(analysis, "startup_score")
+        ledger = self._section(analysis, "evidence_confidence")
+        fact = self._section(analysis, "fact_check_report")
+        value = score.get("evidence_confidence_level") or ledger.get("overall_evidence_confidence") or analysis.get("overall_evidence_confidence") or fact.get("global_confidence") or "low"
+        normalized = str(value).lower()
+        if "high" in normalized or "élev" in normalized:
+            return "high"
+        if "medium" in normalized or "moy" in normalized:
+            return "medium"
+        return "low"
+
+    def _global_missing_evidence(self, analysis: Dict[str, Any], language: str) -> List[str]:
+        report = self._section(analysis, "fact_check_report")
+        items = self._list(report.get("recommended_next_checks")) + self._list(report.get("limitations"))
+        if not items:
+            items = [self._t(language, "Observed customer workflows and urgency.", "Workflows clients observés et urgence."), self._t(language, "Official local market evidence and competitor verification.", "Preuves officielles du marché local et vérification concurrentielle."), self._t(language, "Real price tests and pilot unit economics.", "Vrais tests de prix et économie unitaire du pilote.")]
+        return self._unique([self._text(item) for item in items])[:8]
+
+    def _committee(self, language: str) -> List[Dict[str, str]]:
+        members = [
+            ("committee_chair", "Committee Chair", "Président du comité", "Direct the sessions, resolve contradictions and issue the bounded decision.", "Diriger les sessions, résoudre les contradictions et émettre la décision limitée."),
+            ("customer_problem_analyst", "Customer and Problem Analyst", "Analyste client et problème", "Test frequency, urgency, behaviour and buyer/user separation.", "Tester fréquence, urgence, comportement et séparation acheteur/utilisateur."),
+            ("market_competition_analyst", "Market and Competition Analyst", "Analyste marché et concurrence", "Separate direct products, adjacent solutions, evidence pages and manual alternatives.", "Séparer produits directs, solutions adjacentes, pages de preuve et alternatives manuelles."),
+            ("product_technology_architect", "Product and Technology Architect", "Architecte produit et technologie", "Define the smallest valuable workflow and its technical acceptance criteria.", "Définir le plus petit workflow utile et ses critères techniques."),
+            ("business_financial_analyst", "Business and Financial Analyst", "Analyste business et financier", "Identify the buyer, test pricing and examine unit economics.", "Identifier l’acheteur, tester le prix et examiner l’économie unitaire."),
+            ("risk_execution_officer", "Risk and Execution Officer", "Responsable risque et exécution", "Identify blocking risks, mitigations, vetoes and stop conditions.", "Identifier les risques bloquants, réductions, vétos et conditions d’arrêt."),
+            ("evidence_auditor", "Evidence Auditor", "Auditeur des preuves", "Label every claim as supported, estimated, hypothesis or not confirmed.", "Étiqueter chaque affirmation comme soutenue, estimée, hypothèse ou non confirmée."),
+            ("red_team_challenger", "Red Team Challenger", "Challenger Red Team", "Attack the three assumptions most likely to destroy the project.", "Attaquer les trois hypothèses les plus susceptibles de détruire le projet."),
+        ]
+        return [{"id": mid, "role": en if language == "en" else fr, "mandate": mandate_en if language == "en" else mandate_fr, "voting_member": mid not in {"committee_chair", "red_team_challenger"}} for mid, en, fr, mandate_en, mandate_fr in members]
+
+    def _member_positions(self, number: int, language: str, decision: str) -> List[Dict[str, Any]]:
+        focus = {
+            1: ["customer_problem_analyst", "risk_execution_officer", "evidence_auditor"],
+            2: ["market_competition_analyst", "customer_problem_analyst", "evidence_auditor"],
+            3: ["product_technology_architect", "customer_problem_analyst", "risk_execution_officer"],
+            4: ["business_financial_analyst", "customer_problem_analyst", "risk_execution_officer"],
+            5: ["committee_chair", "evidence_auditor", "red_team_challenger"],
+        }.get(number, [])
+        return [{"member": member, "position": "conditional_support" if decision == "CONDITIONAL_GO" else decision.lower(), "confidence": "medium", "summary": self._t(language, "Support is conditional on the stated evidence and pilot requirements.", "Le soutien dépend des preuves et conditions pilote indiquées.")} for member in focus]
+
+    def _global_meeting_preparation(self, rounds: List[Dict[str, Any]], context: Dict[str, Any], language: str) -> Dict[str, Any]:
+        questions: List[str] = []
+        answers: List[str] = []
+        proofs: List[str] = []
+        avoid: List[str] = []
+        unresolved: List[str] = []
+        for rnd in rounds:
+            prep = rnd.get("meeting_preparation") or {}
+            questions.extend(self._list(prep.get("likely_questions")))
+            answers.extend(self._list(prep.get("recommended_answers")))
+            proofs.extend(self._list(prep.get("proofs_to_prepare")))
+            avoid.extend(self._list(prep.get("answers_to_avoid")))
+            unresolved.extend(self._list(rnd.get("unresolved_questions")))
+        return {
+            "title": self._t(language, "Real meeting preparation", "Préparation à une réunion réelle"),
+            "project": context["title"],
+            "top_questions": self._unique(questions)[:12],
+            "recommended_answers": self._unique(answers)[:12],
+            "proofs_to_prepare": self._unique(proofs)[:12],
+            "answers_to_avoid": self._unique(avoid)[:10],
+            "unresolved_questions": self._unique(unresolved)[:10],
+        }
+
+    def _fallback(self, context: Dict[str, Any], language: str, error: str) -> Dict[str, Any]:
+        return {
+            "format": "investment_committee_memo_v9_fallback",
+            "status": "completed_with_fallback",
+            "verdict": "INSUFFICIENT_EVIDENCE",
+            "verdict_code": "insufficient_evidence",
+            "risk_level": "high",
+            "argument_strength_score": 2.0,
+            "confidence_score": 1.0,
+            "validated_opportunities": [],
+            "potential_opportunities": [self._t(language, "Hypothesis: the project may justify a reduced validation test.", "Hypothèse : le projet peut justifier un test de validation réduit.")],
+            "critical_risks": [self._t(language, "The committee could not complete its structured review.", "Le comité n’a pas pu terminer sa revue structurée.")],
+            "missing_evidence": [self._t(language, "Manual review of the analysis is required.", "Une revue manuelle de l’analyse est requise.")],
+            "final_recommendation": self._t(language, "Do not scale. Review the analysis and rerun the committee.", "Ne pas passer à l’échelle. Revoir l’analyse et relancer le comité."),
+            "improved_idea": self._t(language, f"Reduce {context.get('title', 'the project')} to one measurable workflow.", f"Réduire {context.get('title', 'le projet')} à un workflow mesurable."),
+            "next_actions": [self._t(language, "Review the error and validate the project manually.", "Revoir l’erreur et valider le projet manuellement.")],
+            "go_no_go_conditions": [self._t(language, "NO-GO for scaling until the review is complete.", "NO-GO pour le passage à l’échelle tant que la revue n’est pas terminée.")],
+            "error": error,
+        }
+
+    @staticmethod
+    def _section(data: Dict[str, Any], key: str) -> Dict[str, Any]:
+        value = data.get(key)
+        return value if isinstance(value, dict) else {}
+
+    @staticmethod
+    def _list(value: Any) -> List[Any]:
+        if isinstance(value, list):
+            return value
+        if value in (None, ""):
+            return []
+        return [value]
+
+    @staticmethod
+    def _text(value: Any) -> str:
+        if isinstance(value, list):
+            return ", ".join(str(item).strip() for item in value if str(item).strip())
+        return " ".join(str(value or "").split()).strip()
+
+    @staticmethod
+    def _number(value: Any, default: float) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _evidence_score(level: str) -> float:
+        return {"low": 3.0, "medium": 5.5, "high": 8.0}.get(level, 3.0)
+
+    @staticmethod
+    def _unique(items: Iterable[Any]) -> List[str]:
+        result: List[str] = []
+        seen = set()
+        for item in items:
+            text = " ".join(str(item or "").split()).strip()
+            if not text or text.casefold() in seen:
+                continue
+            seen.add(text.casefold())
+            result.append(text)
+        return result
+
+    @staticmethod
+    def _t_list(language: str, english: List[str], french: List[str]) -> List[str]:
+        return english if language == "en" else french
+
+    @staticmethod
+    def _t(language: str, english: str, french: str) -> str:
+        return english if language == "en" else french

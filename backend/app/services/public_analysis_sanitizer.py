@@ -37,6 +37,9 @@ TECHNICAL_KEYS_TO_HIDE = {
     "local_market_candidates",
     "local_market_handoff_meta",
     "retained_for_reclassification",
+    "requires_canonical_recheck",
+    "candidate_status",
+    "hard_rejected",
     "initial_gate_decision",
 
     # Internal context / guard packets - never public
@@ -88,14 +91,20 @@ PUBLIC_SOURCE_SECTION_FIELDS = {
         "public_display_threshold",
         "sources_count",
         "local_competitors_count",
+        "local_adjacent_solutions_count",
         "regional_competitors_count",
         "international_benchmarks_count",
+        "technology_benchmarks_count",
+        "ecosystem_sources_count",
         "market_sources_count",
         "sources",
         "public_sources",
         "local_competitor_sources",
+        "local_adjacent_solution_sources",
         "regional_competitor_sources",
         "international_benchmark_sources",
+        "technology_benchmark_sources",
+        "ecosystem_actor_sources",
         "market_context_sources",
         "technology_provider_sources",
         "adjacent_solution_sources",
@@ -116,14 +125,20 @@ PUBLIC_SOURCE_SECTION_FIELDS = {
         "confidence_level",
         "sources_count",
         "local_competitors_count",
+        "local_adjacent_solutions_count",
         "regional_competitors_count",
         "international_benchmarks_count",
+        "technology_benchmarks_count",
+        "ecosystem_sources_count",
         "market_sources_count",
         "sources",
         "public_sources",
         "local_competitor_sources",
+        "local_adjacent_solution_sources",
         "regional_competitor_sources",
         "international_benchmark_sources",
+        "technology_benchmark_sources",
+        "ecosystem_actor_sources",
         "market_context_sources",
         "technology_provider_sources",
         "adjacent_solution_sources",
@@ -183,9 +198,9 @@ MOJIBAKE_TEXT_REPLACEMENTS = {
     "â€™": "’",
     "â€˜": "‘",
     "â€œ": "“",
-    "Ã¢â‚¬Â": "â€",
-    "Ã¢â‚¬â€": "â€”",
+    "â€": "”",
     "â€“": "–",
+    "â€”": "—",
     "â€¦": "…",
     "Ã€": "À",
     "Ã‚": "Â",
@@ -195,8 +210,8 @@ MOJIBAKE_TEXT_REPLACEMENTS = {
     "ÃŠ": "Ê",
     "Ã‹": "Ë",
     "ÃŽ": "Î",
-    "ÃƒÃ": "Ã",
-    "Ãƒâ€": "Ã”",
+    "ÃÏ": "Ï",
+    "Ã”": "Ô",
     "Ã™": "Ù",
     "Ã›": "Û",
     "Ãœ": "Ü",
@@ -217,8 +232,9 @@ MOJIBAKE_TEXT_REPLACEMENTS = {
     "Ã¼": "ü",
     "Å“": "œ",
     "Å’": "Œ",
-    "Ã‚ ": " ",
+    "Â ": " ",
 }
+
 
 
 TECHNICAL_WORD_REPLACEMENTS_FR = {
@@ -452,12 +468,34 @@ def _sanitize_recursive(value: Any, project_context: Dict[str, Any]) -> Any:
         return cleaned
 
     if isinstance(value, list):
-        return [_sanitize_recursive(item, project_context) for item in value]
+        cleaned_items = [
+            _sanitize_recursive(item, project_context)
+            for item in value
+        ]
+        return [
+            item
+            for item in cleaned_items
+            if not _is_incomplete_public_fragment(item)
+        ]
 
     if isinstance(value, str):
         return _clean_public_text(value, project_context)
 
     return value
+
+
+def _is_incomplete_public_fragment(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+
+    normalized = re.sub(r"\s+", " ", value).strip().casefold()
+    exact_fragments = {
+        "les contraintes principales sont le coût du matériel",
+        "les contraintes principales sont le cout du matériel",
+        "les contraintes principales sont le cout du materiel",
+        "the main constraints are the hardware cost",
+    }
+    return normalized in exact_fragments
 
 
 def _clean_public_text(text: str, project_context: Dict[str, Any]) -> str:
@@ -485,12 +523,12 @@ def _clean_public_text(text: str, project_context: Dict[str, Any]) -> str:
     # Normalize common technology names that are often split by language
     # models or PDF/text extraction. This is presentation-only cleanup.
     token_patterns = (
-        (r"\bIo\s+T\b", "IoT"),
-        (r"\bLo\s*Ra\s*WAN\b", "LoRaWAN"),
-        (r"\bLo\s*RaWAN\b", "LoRaWAN"),
-        (r"\b4\s+G\b", "4G"),
-        (r"\b5\s+G\b", "5G"),
-        (r"\bWi[ -]?Fi\b", "Wi-Fi"),
+        (r"\bIo[\s\u00A0._-]*T\b", "IoT"),
+        (r"\bLo[\s\u00A0._-]*Ra[\s\u00A0._-]*WAN\b", "LoRaWAN"),
+        (r"\bLo[\s\u00A0._-]*RaWAN\b", "LoRaWAN"),
+        (r"\b4[\s\u00A0._-]*G\b", "4G"),
+        (r"\b5[\s\u00A0._-]*G\b", "5G"),
+        (r"\bWi[\s\u00A0._-]*Fi\b", "Wi-Fi"),
     )
     for pattern, replacement in token_patterns:
         cleaned = re.sub(pattern, replacement, cleaned, flags=re.IGNORECASE)
@@ -613,8 +651,11 @@ def _sanitize_external_sources(
         "sources",
         "public_sources",
         "local_competitor_sources",
+        "local_adjacent_solution_sources",
         "regional_competitor_sources",
         "international_benchmark_sources",
+        "technology_benchmark_sources",
+        "ecosystem_actor_sources",
         "market_context_sources",
         "technology_provider_sources",
         "adjacent_solution_sources",
@@ -1086,7 +1127,7 @@ def _repair_mojibake_text(value: str) -> str:
     repaired = str(value or "")
 
     def marker_score(text: str) -> int:
-        markers = ("Ã", "Â", "â€", "â€™", "â€œ", "â€˜", "â€“", "â€”", "ï¿½")
+        markers = ("Ãƒ", "Ã‚", "Ã¢â‚¬", "Ã¢â‚¬â„¢", "Ã¢â‚¬Å“", "Ã¢â‚¬Ëœ", "Ã¢â‚¬â€œ", "Ã¢â‚¬â€", "Ã¯Â¿Â½")
         return sum(text.count(marker) for marker in markers)
 
     for _ in range(3):
@@ -1096,7 +1137,7 @@ def _repair_mojibake_text(value: str) -> str:
                 candidates.append(repaired.encode(encoding).decode("utf-8"))
             except (UnicodeEncodeError, UnicodeDecodeError):
                 continue
-        best = min(candidates, key=lambda item: (marker_score(item), item.count("�")))
+        best = min(candidates, key=lambda item: (marker_score(item), item.count("ï¿½")))
         if marker_score(best) >= marker_score(repaired):
             break
         repaired = best

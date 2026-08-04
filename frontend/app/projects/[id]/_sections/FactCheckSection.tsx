@@ -4,6 +4,7 @@ import { useForgeLanguage, type ForgeLang } from "@/lib/language-context";
 
 import type {
   FactCheckClaim,
+  FactCheckEvidence,
   FactCheckReport,
 } from "../_types/project-detail.types";
 
@@ -20,7 +21,10 @@ function resolveLanguage(
   return language === "en" || language === "fr" ? language : fallback;
 }
 
-function confidenceText(value?: string | null, language: ForgeLang = "fr"): string {
+function confidenceText(
+  value?: string | null,
+  language: ForgeLang = "fr"
+): string {
   const normalized = String(value || "").toLowerCase();
 
   if (language === "en") {
@@ -37,7 +41,10 @@ function confidenceText(value?: string | null, language: ForgeLang = "fr"): stri
   return cleanText(value || "—", language);
 }
 
-function statusText(value?: string | null, language: ForgeLang = "fr"): string {
+function statusText(
+  value?: string | null,
+  language: ForgeLang = "fr"
+): string {
   const normalized = String(value || "").toLowerCase();
 
   if (language === "en") {
@@ -60,6 +67,25 @@ function statusText(value?: string | null, language: ForgeLang = "fr"): string {
   if (normalized.includes("verified")) return "Vérifié";
 
   return cleanText(value || "À vérifier", language);
+}
+
+function formatEvidenceCategory(
+  value: string,
+  language: ForgeLang
+): string {
+  const labels: Record<string, Record<ForgeLang, string>> = {
+    market_size: { fr: "Taille du marché", en: "Market size" },
+    market_demand: { fr: "Demande marché", en: "Market demand" },
+    problem_context: { fr: "Contexte problème", en: "Problem context" },
+    solution_benchmark: { fr: "Benchmark solution", en: "Solution benchmark" },
+    competitor_product: { fr: "Produit concurrent", en: "Competitor product" },
+    pricing: { fr: "Tarification", en: "Pricing" },
+    regulation: { fr: "Réglementation", en: "Regulation" },
+    regional_context: { fr: "Contexte régional", en: "Regional context" },
+    sector_context: { fr: "Contexte sectoriel", en: "Sector context" },
+  };
+
+  return labels[value]?.[language] || cleanText(value.replaceAll("_", " "), language);
 }
 
 function MetricCard({
@@ -113,6 +139,7 @@ function ListPanel({
   language: ForgeLang;
 }) {
   const cleanedItems = (items || [])
+    .filter((item): item is string => typeof item === "string")
     .map((item) => cleanText(item, language))
     .filter(Boolean);
 
@@ -140,6 +167,141 @@ function ListPanel({
   );
 }
 
+function normalizeEvidence(
+  value: FactCheckEvidence | string
+): FactCheckEvidence {
+  if (typeof value === "string") {
+    return { title: value };
+  }
+  return value || {};
+}
+
+function isGenericEvidenceTitle(value?: string | null): boolean {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+
+  return [
+    "",
+    "source",
+    "external source",
+    "source externe",
+    "evidence source",
+    "source de preuve",
+  ].includes(normalized);
+}
+
+function domainLabel(url?: string | null): string {
+  if (!url) return "";
+
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+function evidenceTitle(
+  item: FactCheckEvidence,
+  language: ForgeLang
+): string {
+  const candidates = [
+    item.title,
+    item.source_title,
+    item.name,
+    item.vendor_name,
+  ];
+
+  for (const candidate of candidates) {
+    if (!isGenericEvidenceTitle(candidate)) {
+      return cleanText(String(candidate), language);
+    }
+  }
+
+  const domain = domainLabel(item.url);
+  if (domain) return domain;
+
+  return language === "en" ? "Evidence source" : "Source de preuve";
+}
+
+function EvidenceCard({
+  evidence,
+  language,
+}: {
+  evidence: FactCheckEvidence | string;
+  language: ForgeLang;
+}) {
+  const item = normalizeEvidence(evidence);
+  const title = evidenceTitle(item, language);
+  const reason = cleanText(
+    item.why_relevant || item.public_reason || "",
+    language
+  );
+  const categories = (item.evidence_categories || []).filter(Boolean);
+  const score =
+    typeof item.source_relevance_score === "number" &&
+    Number.isFinite(item.source_relevance_score)
+      ? `${Math.round(item.source_relevance_score * 100)}%`
+      : null;
+
+  return (
+    <article className="rounded-2xl border border-sky-100 bg-sky-50/60 p-4">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div className="min-w-0">
+          <p className="break-words text-sm font-black leading-6 text-slate-900">
+            {title}
+          </p>
+          {reason && (
+            <p className="mt-2 text-xs font-semibold leading-5 text-slate-600">
+              {reason}
+            </p>
+          )}
+        </div>
+
+        {item.url && (
+          <a
+            href={item.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="shrink-0 rounded-xl bg-white px-3 py-2 text-xs font-black text-sky-700 shadow-sm transition hover:bg-sky-100"
+          >
+            {language === "en" ? "Open source" : "Ouvrir la source"}
+          </a>
+        )}
+      </div>
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        {item.source_type && (
+          <span className="forge-badge">
+            {cleanText(item.source_type.replaceAll("_", " "), language)}
+          </span>
+        )}
+        {item.region_match && (
+          <span className="forge-badge">
+            {cleanText(item.region_match, language)}
+          </span>
+        )}
+        {item.confidence && (
+          <span className="forge-badge">
+            {confidenceText(item.confidence, language)}
+          </span>
+        )}
+        {score && <span className="forge-badge">{score}</span>}
+        {item.is_direct_competitor && (
+          <span className="forge-badge">
+            {language === "en" ? "Verified direct competitor" : "Concurrent direct vérifié"}
+          </span>
+        )}
+        {categories.map((category) => (
+          <span key={category} className="forge-badge">
+            {formatEvidenceCategory(category, language)}
+          </span>
+        ))}
+      </div>
+    </article>
+  );
+}
+
 function ClaimCard({
   claim,
   index,
@@ -158,6 +320,8 @@ function ClaimCard({
     claim.public_confidence ||
     claim.confidence ||
     (language === "en" ? "Medium" : "Moyenne");
+
+  const evidence = (claim.evidence || []).filter(Boolean);
 
   return (
     <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -185,12 +349,21 @@ function ClaimCard({
         </div>
       </div>
 
-      {claim.evidence && claim.evidence.length > 0 && (
-        <ListPanel
-          title={language === "en" ? "Evidence" : "Éléments de preuve"}
-          items={claim.evidence}
-          language={language}
-        />
+      {evidence.length > 0 && (
+        <div className="mt-4 rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+          <p className="text-xs font-black uppercase tracking-[0.2em] text-slate-400">
+            {language === "en" ? "Evidence" : "Éléments de preuve"}
+          </p>
+          <div className="mt-3 space-y-3">
+            {evidence.map((item, evidenceIndex) => (
+              <EvidenceCard
+                key={`${claim.category || "claim"}-${evidenceIndex}`}
+                evidence={item}
+                language={language}
+              />
+            ))}
+          </div>
+        </div>
       )}
 
       {claim.correction && (
@@ -229,7 +402,15 @@ export default function FactCheckSection({
     );
   }
 
-  const claims = getPriorityFactClaims(factCheckReport.claims || [], 6);
+  const claims = getPriorityFactClaims(factCheckReport.claims || []);
+  const totalSources =
+    factCheckReport.source_summary?.total_sources ??
+    factCheckReport.source_count ??
+    0;
+  const relevantSources =
+    factCheckReport.source_summary?.relevant_sources ??
+    factCheckReport.relevant_source_count ??
+    0;
 
   return (
     <div className="space-y-5">
@@ -255,8 +436,8 @@ export default function FactCheckSection({
         />
 
         <MetricCard
-          label={reportLanguage === "en" ? "Sources" : "Sources"}
-          value={String(factCheckReport.source_summary?.total_sources || 0)}
+          label={reportLanguage === "en" ? "Relevant sources" : "Sources pertinentes"}
+          value={`${relevantSources}/${totalSources}`}
         />
       </div>
 
@@ -272,6 +453,11 @@ export default function FactCheckSection({
 
       {claims.length > 0 ? (
         <div className="space-y-4">
+          <p className="text-sm font-semibold text-slate-500">
+            {reportLanguage === "en"
+              ? `${claims.length} claim(s) displayed.`
+              : `${claims.length} affirmation(s) affichée(s).`}
+          </p>
           {claims.map((claim, index) => (
             <ClaimCard
               key={`${claim.category || "claim"}-${index}`}

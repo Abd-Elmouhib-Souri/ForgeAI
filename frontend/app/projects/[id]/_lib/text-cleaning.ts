@@ -192,6 +192,16 @@ function fixMojibake(value: string): string {
   return replacePairs(value, mojibakePairs);
 }
 
+function normalizeTechnologyTokens(value: string): string {
+  return String(value || "")
+    .replace(/\bIo[\s\u00A0._-]*T\b/gi, "IoT")
+    .replace(/\bLo[\s\u00A0._-]*Ra[\s\u00A0._-]*WAN\b/gi, "LoRaWAN")
+    .replace(/\bLo[\s\u00A0._-]*RaWAN\b/gi, "LoRaWAN")
+    .replace(/\b4[\s\u00A0._-]*G\b/gi, "4G")
+    .replace(/\b5[\s\u00A0._-]*G\b/gi, "5G")
+    .replace(/\bWi[\s\u00A0._-]*Fi\b/gi, "Wi-Fi");
+}
+
 function fixCommonSpacing(value: string): string {
   return replacePairs(String(value || ""), spacingPairs)
     .replace(/\s+([.,;:!?])/g, "$1")
@@ -217,6 +227,7 @@ export function cleanText(value: string, language: ForgeLang = "fr"): string {
   );
 
   cleaned = replacePairs(cleaned, typoPairs);
+  cleaned = normalizeTechnologyTokens(cleaned);
   cleaned = fixCommonSpacing(fixMojibake(cleaned));
 
   const lowered = cleaned.toLowerCase();
@@ -261,6 +272,7 @@ export function normalizeSourceText(value: string): string {
     .trim();
 
   normalized = replacePairs(normalized, sourcePairs);
+  normalized = normalizeTechnologyTokens(normalized);
 
   return fixCommonSpacing(normalized);
 }

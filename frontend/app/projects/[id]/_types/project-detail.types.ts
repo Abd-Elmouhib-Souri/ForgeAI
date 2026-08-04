@@ -441,18 +441,26 @@ export interface PersonaBuilderData {
 
 export interface FactCheckEvidence {
   title?: string;
+  source_title?: string;
+  name?: string;
+  vendor_name?: string;
   url?: string;
   source_type?: string;
+  source_role?: string;
+  canonical_category?: string;
   region_match?: string;
   confidence?: string;
+  public_confidence?: string;
   source_relevance_score?: number;
   why_relevant?: string;
+  public_reason?: string;
   evidence_categories?: string[];
   is_direct_competitor?: boolean;
 }
 
 export interface FactCheckClaim {
   claim?: string;
+  path?: string;
   category?: string;
   status?: string;
   public_status?: string;
@@ -644,6 +652,12 @@ export interface DebateCommitteeVote {
   member?: string;
   vote?: string;
   confidence?: number;
+  confidence_basis?: {
+    evidence_score?: number;
+    execution_readiness_score?: number;
+    role_adjustment?: number;
+    formula?: string;
+  };
   blocking_conditions?: string[];
   reason?: string;
   veto?: boolean;
