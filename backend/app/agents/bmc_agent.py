@@ -32,11 +32,22 @@ class BMCAgent:
     def _hardware_canvas(self, context: Dict[str, Any], language: str) -> Dict[str, Any]:
         users = context["target_user_list"]
         actors = context["actors"]
-        primary = actors.get("field_operator") or actors.get("primary_user") or self._first(users)
-        payer = actors.get("payer") or context["economic_buyer"] or primary
-        maintainer = actors.get("technical_maintainer") or actors.get("operator_or_partner")
-        if not maintainer:
-            maintainer = "Technical maintainer or deployment partner" if language == "en" else "Responsable technique ou partenaire de déploiement"
+        assignments = context["role_assignments"]
+        primary = (
+            self._actor_text(actors.get("field_operator"))
+            or self._actor_text(actors.get("primary_user"))
+            or self._first(users)
+        )
+        payer = assignments["payer"]["value"] or (
+            "Not identified — validate with the budget owner"
+            if language == "en"
+            else "Non identifié — à valider avec le détenteur du budget"
+        )
+        maintainer = assignments["technical_maintainer"]["value"] or (
+            "Not identified — validate during the pilot"
+            if language == "en"
+            else "Non identifié — à valider pendant le pilote"
+        )
 
         workflow = self._core_action(context, language)
         workflows = self._specific_workflows(context, language)
@@ -205,17 +216,22 @@ class BMCAgent:
     def _marketplace_canvas(self, context: Dict[str, Any], language: str) -> Dict[str, Any]:
         actors = context["actors"]
         users = context["target_user_list"]
-        demand = actors.get("demand_side") or actors.get("primary_user") or self._first(users)
-        supply = actors.get("supply_side") or (users[1] if len(users) > 1 else "")
-        operator = actors.get("operator_or_partner") or (users[2] if len(users) > 2 else "")
-        payer = actors.get("payer") or context["economic_buyer"] or demand
+        assignments = context["role_assignments"]
+        demand = (
+            assignments["demand_side"]["value"]
+            or self._actor_text(actors.get("primary_user"))
+            or self._first(users)
+        )
+        supply = assignments["supply_side"]["value"]
+        operator = assignments["operator_or_partner"]["value"]
+        payer = assignments["payer"]["value"]
         core = self._core_action(context, language)
         model = context["business_model"]
         region = context["region"]
 
         if language == "en":
-            segments = [f"Demand side: {demand}.", f"Supply side: {supply or 'service providers'}.", f"Platform or ecosystem operator: {operator or 'marketplace operator'}.", f"Paying participant: {payer}."]
-            values = [f"For {demand}: complete {core} with reliable availability and confirmation.", f"For {supply or 'providers'}: receive relevant demand with transparent economics.", "For the operator: improve liquidity, quality, trust and incident handling.", f"Solve the launch-market problem: {context['problem']}."]
+            segments = [f"Demand side: {demand}.", f"Supply side: {supply or 'not identified — to validate'}.", f"Platform or ecosystem operator: {operator or 'not identified — to validate'}.", f"Paying participant: {payer or 'not identified — to validate'}."]
+            values = [f"For {demand}: complete {core} with reliable availability and confirmation.", f"For {supply or 'the supply side to validate'}: receive relevant demand with transparent economics.", "For the operator: improve liquidity, quality, trust and incident handling.", f"Solve the launch-market problem: {context['problem']}."]
             channels = ["Focused launch by geography, segment and time window", "Direct supply recruitment and onboarding", "Local digital acquisition and partnerships", "Referral after completed transactions"]
             relationships = ["Real-time status and support", "Identity, trust, rating and dispute mechanisms", "Supply onboarding and operational communication"]
             revenues = self._unique([model, "Commission or service fee per completed transaction", "Professional provider plan after liquidity is proven"])
@@ -228,8 +244,8 @@ class BMCAgent:
             priorities = context["evidence_needs"] or ["Demand frequency", "Supply availability", "Transaction completion", "Repeat use", "Contribution margin"]
             risk_note = "The main risk is liquidity failure: demand and supply may not be active in the same place and time."
         else:
-            segments = [f"Côté demande : {demand}.", f"Côté offre : {supply or 'prestataires'}.", f"Opérateur de plateforme ou écosystème : {operator or 'opérateur de marketplace'}.", f"Participant payeur : {payer}."]
-            values = [f"Pour {demand} : réaliser {core} avec disponibilité et confirmation fiables.", f"Pour {supply or 'les prestataires'} : recevoir une demande pertinente avec une économie transparente.", "Pour l’opérateur : améliorer liquidité, qualité, confiance et gestion des incidents.", f"Résoudre le problème du marché de lancement : {context['problem']}."]
+            segments = [f"Côté demande : {demand}.", f"Côté offre : {supply or 'non identifié — à valider'}.", f"Opérateur de plateforme ou écosystème : {operator or 'non identifié — à valider'}.", f"Participant payeur : {payer or 'non identifié — à valider'}."]
+            values = [f"Pour {demand} : réaliser {core} avec disponibilité et confirmation fiables.", f"Pour {supply or 'le côté offre à valider'} : recevoir une demande pertinente avec une économie transparente.", "Pour l’opérateur : améliorer liquidité, qualité, confiance et gestion des incidents.", f"Résoudre le problème du marché de lancement : {context['problem']}."]
             channels = ["Lancement concentré par zone, segment et plage horaire", "Recrutement et onboarding directs du côté offre", "Acquisition numérique locale et partenariats", "Recommandation après les transactions réussies"]
             relationships = ["Suivi et support en temps réel", "Identité, confiance, notation et gestion des litiges", "Onboarding et communication opérationnelle du côté offre"]
             revenues = self._unique([model, "Commission ou frais de service par transaction terminée", "Offre professionnelle après preuve de liquidité"])
@@ -247,7 +263,12 @@ class BMCAgent:
     def _digital_canvas(self, context: Dict[str, Any], language: str) -> Dict[str, Any]:
         users = context["target_user_list"]
         primary = self._first(users) or ("Primary user" if language == "en" else "Utilisateur principal")
-        payer = context["actors"].get("payer") or context["economic_buyer"] or primary
+        assignments = context["role_assignments"]
+        payer = assignments["payer"]["value"] or (
+            "Not identified — to validate"
+            if language == "en"
+            else "Non identifié — à valider"
+        )
         core = self._core_action(context, language)
         model = context["business_model"]
         region = context["region"]
@@ -335,6 +356,7 @@ class BMCAgent:
 
     def _finalize(self, result: Dict[str, Any], context: Dict[str, Any], language: str) -> Dict[str, Any]:
         result["output_language"] = language
+        result["actor_role_provenance"] = context["role_assignments"]
         result["project_context_used"] = {
             "title": context["title"], "sector": context["sector"], "region": context["region"],
             "target_users": context["target_user_list"], "problem": context["problem"], "solution": context["solution"],
@@ -354,6 +376,20 @@ class BMCAgent:
         if not isinstance(actors, dict): actors = {}
         actors = dict(actors)
         actors.setdefault("target_users", users)
+        actor_provenance = (
+            structured.get("actor_provenance")
+            or canonical.get("actor_provenance")
+            or actors.get("provenance")
+            or {}
+        )
+        if not isinstance(actor_provenance, dict):
+            actor_provenance = {}
+        role_assignments = self._role_assignments(
+            structured=structured,
+            canonical=canonical,
+            actors=actors,
+            provenance=actor_provenance,
+        )
         return {
             "title": self._text(structured.get("project_name") or structured.get("title") or canonical.get("project_name") or project_context.get("title") or state.get("title"), "Project"),
             "sector": self._text(structured.get("sector") or structured.get("industry") or canonical.get("domain_label") or project_context.get("industry") or state.get("industry")),
@@ -368,6 +404,8 @@ class BMCAgent:
             "project_archetype": self._text(structured.get("project_archetype") or canonical.get("project_archetype") or project_context.get("project_archetype"), "generic_digital_product"),
             "validation_unit": self._packet_text(structured.get("validation_unit") or canonical.get("validation_unit")),
             "actors": actors,
+            "actor_provenance": actor_provenance,
+            "role_assignments": role_assignments,
             "priority_workflows": self._list(structured.get("priority_workflows") or structured.get("priority_workflow") or canonical.get("priority_workflow")),
             "success_metrics": self._list(structured.get("success_metrics") or canonical.get("success_metrics")),
             "constraints": self._list(structured.get("constraints") or canonical.get("constraints")),
@@ -384,6 +422,101 @@ class BMCAgent:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    CONFIRMED_ROLE_STATUSES = {
+        "explicit",
+        "user_provided",
+        "confirmed",
+        "validated",
+        "provided_by_user",
+    }
+
+    def _role_assignments(
+        self,
+        *,
+        structured: Dict[str, Any],
+        canonical: Dict[str, Any],
+        actors: Dict[str, Any],
+        provenance: Dict[str, Any],
+    ) -> Dict[str, Dict[str, str]]:
+        aliases = {
+            "payer": ("payer", "economic_buyer", "budget_owner"),
+            "technical_maintainer": (
+                "technical_maintainer",
+                "maintenance_owner",
+                "maintainer",
+            ),
+            "demand_side": ("demand_side",),
+            "supply_side": ("supply_side",),
+            "operator_or_partner": ("operator_or_partner", "platform_operator"),
+        }
+        assignments: Dict[str, Dict[str, str]] = {}
+
+        for role, keys in aliases.items():
+            raw: Any = None
+            status = ""
+
+            for key in keys:
+                if key in actors and actors.get(key) not in (None, ""):
+                    raw = actors.get(key)
+                    break
+                if key in structured and structured.get(key) not in (None, ""):
+                    raw = structured.get(key)
+                    break
+                if key in canonical and canonical.get(key) not in (None, ""):
+                    raw = canonical.get(key)
+                    break
+
+            if isinstance(raw, dict):
+                status = self._text(
+                    raw.get("status")
+                    or raw.get("provenance")
+                    or raw.get("source")
+                ).lower()
+                candidate = self._text(
+                    raw.get("value")
+                    or raw.get("name")
+                    or raw.get("actor")
+                    or raw.get("label")
+                )
+            else:
+                candidate = self._text(raw)
+
+            provenance_value = provenance.get(role)
+            if isinstance(provenance_value, dict):
+                status = status or self._text(
+                    provenance_value.get("status")
+                    or provenance_value.get("source")
+                    or provenance_value.get("provenance")
+                ).lower()
+            else:
+                status = status or self._text(provenance_value).lower()
+
+            for key in keys:
+                status = status or self._text(
+                    structured.get(f"{key}_status")
+                    or actors.get(f"{key}_status")
+                    or canonical.get(f"{key}_status")
+                ).lower()
+
+            confirmed = status in self.CONFIRMED_ROLE_STATUSES
+            assignments[role] = {
+                "value": candidate if confirmed else "",
+                "candidate": candidate,
+                "status": "explicit" if confirmed else "to_confirm",
+            }
+
+        return assignments
+
+    def _actor_text(self, value: Any) -> str:
+        if isinstance(value, dict):
+            return self._text(
+                value.get("value")
+                or value.get("name")
+                or value.get("actor")
+                or value.get("label")
+            )
+        return self._text(value)
 
     def _hardware_partners(self, context: Dict[str, Any], language: str) -> List[str]:
         sector = context["sector"].lower()

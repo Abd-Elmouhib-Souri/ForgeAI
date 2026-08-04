@@ -674,6 +674,15 @@ class ForgeCrawler:
 
             "public_display_threshold": 0.70,
             "public_threshold_policy": "role_aware",
+            "public_selection_policy": "role_aware_diversity_v10",
+            "public_selection_quotas": {
+                "local_direct_competitor": 1,
+                "local_adjacent_solution": 2,
+                "local_market_evidence": 2,
+                "local_ecosystem_actor": 1,
+                "technology_benchmark": 1,
+                "external_market_evidence": 1,
+            },
             "role_thresholds": {
                 "direct_competitor_local": 0.58,
                 "adjacent_solution_local": 0.32,
@@ -737,6 +746,17 @@ class ForgeCrawler:
                 "classified_sources_count": len(classified_sources),
                 "raw_public_sources_count": len(raw_public_sources),
                 "public_sources_count": len(forge_sources),
+                "public_selection_buckets": {
+                    bucket: sum(
+                        1
+                        for item in public_sources
+                        if self._source_diversity_bucket(item) == bucket
+                    )
+                    for bucket in {
+                        self._source_diversity_bucket(item)
+                        for item in public_sources
+                    }
+                },
                 "hygiene_rejected_count": len(hygiene_rejected),
                 "hygiene_rejected_debug": hygiene_rejected[:20],
                 "internal_sources_count": len(internal_sources),
@@ -2095,9 +2115,15 @@ class ForgeCrawler:
         if source_type in self.PRODUCT_SOURCE_TYPES:
             if vendor_key:
                 return vendor_key
-            registrable = self._registrable_domain(domain)
-            if registrable:
-                return f"vendor:{registrable}"
+
+            # `_select_public_sources()` is also exercised directly by unit
+            # tests and legacy callers, before `_enrich_vendor_identity()` has
+            # necessarily created a vendor key. In that case, use the exact
+            # normalized host rather than the registrable domain. Collapsing
+            # every `*.example.com` or shared-hosting subdomain into one vendor
+            # incorrectly removes distinct products before diversity selection.
+            if domain:
+                return f"vendor:{domain}"
 
         language_segments = {
             "en",
@@ -2174,6 +2200,101 @@ class ForgeCrawler:
         extraction_weight = 0.15 if source.get("text_extracted") else 0.0
         return round(type_weight + evidence_weight + specificity + extraction_weight + score, 4)
 
+    def _source_diversity_bucket(
+        self,
+        source: Dict[str, Any],
+    ) -> str:
+        category = str(
+            source.get("canonical_category")
+            or source.get("source_role")
+            or source.get("source_type")
+            or ""
+        ).strip().lower()
+        role = str(source.get("source_role") or "").strip().lower()
+        region_match = str(source.get("region_match") or "").strip().lower()
+
+        if bool(source.get("is_direct_competitor")) and region_match == "local":
+            return "local_direct_competitor"
+
+        if category == "adjacent_solution" and region_match == "local":
+            return "local_adjacent_solution"
+
+        if category == "ecosystem_actor" and region_match == "local":
+            return "local_ecosystem_actor"
+
+        if category == "market_evidence" and region_match == "local":
+            return "local_market_evidence"
+
+        if category == "technology_benchmark" or role in {
+            "technology_provider",
+            "international_benchmark",
+            "regional_benchmark",
+        }:
+            return "technology_benchmark"
+
+        if category == "market_evidence":
+            return "external_market_evidence"
+
+        return "other"
+
+    def _select_diverse_ranked_sources(
+        self,
+        ranked: List[Dict[str, Any]],
+        limit: int,
+    ) -> List[Dict[str, Any]]:
+        """Select a role-diverse evidence set before filling by global rank.
+
+        The previous global top-N selection frequently kept several commercial
+        international reports while dropping all local adjacent solutions and
+        ecosystem signals. The quotas below are minimum opportunities, not
+        unconditional passes: every source has already passed the relevance
+        gate, URL hygiene and canonical deduplication.
+        """
+
+        if limit <= 0 or len(ranked) <= limit:
+            return list(ranked)
+
+        quota_plan = (
+            ("local_direct_competitor", 1),
+            ("local_adjacent_solution", 2),
+            ("local_market_evidence", 2),
+            ("local_ecosystem_actor", 1),
+            ("technology_benchmark", 1),
+            ("external_market_evidence", 1),
+        )
+
+        selected_ids: set[int] = set()
+
+        for bucket, quota in quota_plan:
+            taken = 0
+            for source in ranked:
+                source_id = id(source)
+                if source_id in selected_ids:
+                    continue
+                if self._source_diversity_bucket(source) != bucket:
+                    continue
+                selected_ids.add(source_id)
+                taken += 1
+                if taken >= quota or len(selected_ids) >= limit:
+                    break
+            if len(selected_ids) >= limit:
+                break
+
+        if len(selected_ids) < limit:
+            for source in ranked:
+                source_id = id(source)
+                if source_id in selected_ids:
+                    continue
+                selected_ids.add(source_id)
+                if len(selected_ids) >= limit:
+                    break
+
+        return [
+            source
+            for source in ranked
+            if id(source) in selected_ids
+        ][:limit]
+
     def _select_public_sources(
         self,
         sources: List[Dict[str, Any]],
@@ -2240,14 +2361,47 @@ class ForgeCrawler:
         )
 
         if enforce_limit and len(ranked) > self.max_sources:
-            for source in ranked[self.max_sources:]:
+            # Very small result sets should preserve pure evidence quality.
+            # Applying six category quotas to a capacity of one or two can
+            # force a weak article into the result while excluding a second
+            # official product page. Production uses eight sources, where the
+            # diversity plan is meaningful and prevents international reports
+            # from crowding out local evidence.
+            diversity_applied = self.max_sources >= 4
+
+            if diversity_applied:
+                selected = self._select_diverse_ranked_sources(
+                    ranked=ranked,
+                    limit=self.max_sources,
+                )
+            else:
+                selected = ranked[: self.max_sources]
+
+            selected_ids = {id(source) for source in selected}
+            plain_top_ids = {
+                id(source) for source in ranked[: self.max_sources]
+            }
+            diversity_changed_selection = (
+                diversity_applied and selected_ids != plain_top_ids
+            )
+            capacity_reason = (
+                "capacity_lower_priority_after_diversity"
+                if diversity_changed_selection
+                else "capacity_lower_priority"
+            )
+
+            for source in ranked:
+                if id(source) in selected_ids:
+                    continue
                 removed.append({
                     **source,
                     "canonical_key": self._canonical_source_key(source),
                     "public_rank": source.get("_public_rank"),
-                    "hygiene_reason": "capacity_lower_priority",
+                    "diversity_bucket": self._source_diversity_bucket(source),
+                    "hygiene_reason": capacity_reason,
                 })
-            ranked = ranked[: self.max_sources]
+
+            ranked = selected
 
         cleaned = []
         for source in ranked:

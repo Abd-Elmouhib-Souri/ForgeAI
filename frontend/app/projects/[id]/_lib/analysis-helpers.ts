@@ -69,6 +69,7 @@ export function getOfficialStartupScore(
   const scoreData = analysisData?.startup_score || {};
 
   const candidates = [
+    scoreData.potential_score,
     scoreData.score,
     scoreData.startup_score,
     scoreData.overall_score,
@@ -92,32 +93,57 @@ export function getConcreteSolution(
   analysisData: AnalysisData,
   project: Project
 ): string {
-  const proposedSolution = analysisData.proposed_solution || "";
+  const structured =
+    (analysisData.project_intelligence as { structured_project_context?: Record<string, unknown> } | undefined)
+      ?.structured_project_context || {};
 
-  if (proposedSolution && !isGenericSolution(proposedSolution)) {
-    return proposedSolution;
+  const structuredSolution = String(structured.solution || "").trim();
+  const proposedSolution = String(analysisData.proposed_solution || "").trim();
+
+  for (const candidate of [structuredSolution, proposedSolution]) {
+    const cleaned = extractSolutionOnly(candidate);
+    if (cleaned && !isGenericSolution(cleaned)) return cleaned;
   }
+
+  const descriptionSolution = extractLabeledSolution(project.description || "");
+  if (descriptionSolution) return descriptionSolution;
 
   const improvedIdea = analysisData.debate_room?.judge?.improved_idea;
+  return improvedIdea || "â€”";
+}
 
-  if (improvedIdea) {
-    return improvedIdea;
+function extractLabeledSolution(value: string): string {
+  const match = value.match(
+    /(?:the solution is|proposed solution|solution\s*:|la solution est|solution proposÃ©e\s*:|solution proposee\s*:)([\s\S]*?)(?=(?:the first target users|target users|the mvp|mvp\s*:|the business model|business model|les utilisateurs cibles|le mvp|modÃ¨le Ã©conomique|modele economique)|$)/i
+  );
+  return extractSolutionOnly(match?.[1] || "");
+}
+
+function extractSolutionOnly(value: string): string {
+  let result = String(value || "").replace(/\s+/g, " ").trim();
+  if (!result) return "";
+
+  const contamination = [
+    /\bthe problem is\b/i,
+    /\bthis makes it hard\b/i,
+    /\ble problÃ¨me est\b/i,
+    /\bce qui rend\b/i,
+  ];
+
+  for (const marker of contamination) {
+    const match = marker.exec(result);
+    if (match && match.index > 0) result = result.slice(0, match.index).trim();
   }
 
-  const firstParagraph = project.description
-    .split("\n")
-    .map((line) => line.trim())
-    .find(Boolean);
-
-  return firstParagraph || proposedSolution || "—";
+  return result.replace(/[.\s]+$/, ".");
 }
 
 export function isGenericSolution(value: string): boolean {
   const lower = value.toLowerCase();
 
   return (
-    lower.includes("solution numérique adaptée au secteur") ||
-    lower.includes("mvp à valider sur le terrain") ||
+    lower.includes("solution numÃ©rique adaptÃ©e au secteur") ||
+    lower.includes("mvp Ã  valider sur le terrain") ||
     lower.includes("mvp a valider sur le terrain") ||
     lower.includes("clear mvp directly based on the user's project description")
   );
@@ -141,13 +167,13 @@ export function getPublicLocalMarketAssessment(
     }
 
     return (
-      "Le projet vise un marché global. Avant toute extension internationale, " +
-      "ForgeAI recommande de choisir un marché initial précis pour tester le besoin, " +
-      "le prix acceptable, l’acquisition utilisateur et la concurrence réelle."
+      "Le projet vise un marchÃ© global. Avant toute extension internationale, " +
+      "ForgeAI recommande de choisir un marchÃ© initial prÃ©cis pour tester le besoin, " +
+      "le prix acceptable, lâ€™acquisition utilisateur et la concurrence rÃ©elle."
     );
   }
 
-  return value || "—";
+  return value || "â€”";
 }
 
 export function getPublicAnalysisWarning(
@@ -162,8 +188,8 @@ export function getPublicAnalysisWarning(
   const partialMarkers = [
     "partiellement",
     "partially",
-    "n’a pas pu être complétée automatiquement",
-    "n'a pas pu être complétée automatiquement",
+    "nâ€™a pas pu Ãªtre complÃ©tÃ©e automatiquement",
+    "n'a pas pu Ãªtre complÃ©tÃ©e automatiquement",
     "could not be completed automatically",
   ];
 
@@ -180,8 +206,8 @@ export function getPublicAnalysisWarning(
     }
 
     return (
-      "Analyse terminée. Certaines informations doivent être confirmées par " +
-      "une validation terrain avant décision finale."
+      "Analyse terminÃ©e. Certaines informations doivent Ãªtre confirmÃ©es par " +
+      "une validation terrain avant dÃ©cision finale."
     );
   }
 
@@ -192,7 +218,7 @@ export function publicAnalysisStep(
   value?: string | null,
   language: ForgeLang = "fr"
 ): string {
-  if (!value) return "—";
+  if (!value) return "â€”";
 
   const cleaned = cleanText(value, language);
 
@@ -208,31 +234,31 @@ export function publicAnalysisStep(
       .replaceAll("Self-Correction RAG", "Claim verification")
       .replaceAll("persona_builder", "Customer personas")
       .replaceAll("Persona Builder", "Customer personas")
-      .replaceAll("Analyse Sprint 3 + Debate Room terminée", "Strategic analysis completed")
-      .replaceAll("Analyse terminée", "Analysis completed")
-      .replaceAll("terminée partiellement", "completed")
-      .replaceAll("terminé partiellement", "completed")
+      .replaceAll("Analyse Sprint 3 + Debate Room terminÃ©e", "Strategic analysis completed")
+      .replaceAll("Analyse terminÃ©e", "Analysis completed")
+      .replaceAll("terminÃ©e partiellement", "completed")
+      .replaceAll("terminÃ© partiellement", "completed")
       .replaceAll("completed partially", "completed")
       .replaceAll("idle", "Idle");
   }
 
   return cleaned
     .replaceAll("Sprint 2", "Analyse initiale")
-    .replaceAll("Sprint 3", "Analyse stratégique")
-    .replaceAll("Startup Evaluator", "Évaluation stratégique")
-    .replaceAll("startup_evaluator", "évaluation stratégique")
-    .replaceAll("Debate Room", "Débat stratégique")
-    .replaceAll("Fact Checker", "Vérification des affirmations")
-    .replaceAll("fact_checker", "Vérification des affirmations")
-    .replaceAll("Self-Correction RAG", "Vérification des affirmations")
+    .replaceAll("Sprint 3", "Analyse stratÃ©gique")
+    .replaceAll("Startup Evaluator", "Ã‰valuation stratÃ©gique")
+    .replaceAll("startup_evaluator", "Ã©valuation stratÃ©gique")
+    .replaceAll("Debate Room", "DÃ©bat stratÃ©gique")
+    .replaceAll("Fact Checker", "VÃ©rification des affirmations")
+    .replaceAll("fact_checker", "VÃ©rification des affirmations")
+    .replaceAll("Self-Correction RAG", "VÃ©rification des affirmations")
     .replaceAll("persona_builder", "Personas clients")
     .replaceAll("Persona Builder", "Personas clients")
-    .replaceAll("Analyse Analyse stratégique", "Analyse stratégique")
-    .replaceAll("Analyse stratégique Analyse stratégique", "Analyse stratégique")
+    .replaceAll("Analyse Analyse stratÃ©gique", "Analyse stratÃ©gique")
+    .replaceAll("Analyse stratÃ©gique Analyse stratÃ©gique", "Analyse stratÃ©gique")
     .replaceAll("Analyse Analyse", "Analyse")
-    .replaceAll("terminée partiellement", "terminée")
-    .replaceAll("terminé partiellement", "terminé")
-    .replaceAll("completed partially", "terminée")
+    .replaceAll("terminÃ©e partiellement", "terminÃ©e")
+    .replaceAll("terminÃ© partiellement", "terminÃ©")
+    .replaceAll("completed partially", "terminÃ©e")
     .replaceAll("idle", "En attente");
 }
 
@@ -267,17 +293,17 @@ export function getSourceDisplayContext(
     isGlobal,
     directMetricLabel: isGlobal ? "Solutions comparables" : "Concurrents locaux",
     directGroupTitle: isGlobal
-      ? "Solutions comparables vérifiées"
-      : "Concurrents locaux vérifiés",
+      ? "Solutions comparables vÃ©rifiÃ©es"
+      : "Concurrents locaux vÃ©rifiÃ©s",
     directEmptyText: isGlobal
-      ? "Aucune solution comparable vérifiée."
-      : "Aucun concurrent local direct vérifié.",
+      ? "Aucune solution comparable vÃ©rifiÃ©e."
+      : "Aucun concurrent local direct vÃ©rifiÃ©.",
     adjacentGroupTitle: isGlobal
       ? "Solutions adjacentes"
       : "Solutions adjacentes locales",
     adjacentEmptyText: isGlobal
-      ? "Aucune solution adjacente remontée."
-      : "Aucune solution adjacente locale remontée.",
+      ? "Aucune solution adjacente remontÃ©e."
+      : "Aucune solution adjacente locale remontÃ©e.",
   };
 }
 
@@ -292,10 +318,11 @@ export function getPublicDisplaySources(sources: SourceItem[]): SourceItem[] {
     if (type === "irrelevant") return false;
     if (source.rejected) return false;
     if (source.internal_only) return false;
+    if (source.public_display === false) return false;
 
     if (
       url.includes("youtube.com") &&
-      (snippet.includes("О сервисе") || snippet.length < 40)
+      (snippet.includes("Ðž ÑÐµÑ€Ð²Ð¸ÑÐµ") || snippet.length < 40)
     ) {
       return false;
     }
@@ -344,7 +371,7 @@ export function getPublicSourceSnippet(
 
 export function getPriorityFactClaims(
   claims: FactCheckClaim[],
-  maxItems = 6
+  maxItems?: number
 ): FactCheckClaim[] {
   const categoryPriority: Record<string, number> = {
     finance: 100,
@@ -368,7 +395,9 @@ export function getPriorityFactClaims(
     sourced: 30,
   };
 
-  return [...claims]
+  const seen = new Set<string>();
+
+  const ordered = [...claims]
     .map((claim, index) => {
       const category = claim.category || "";
       const status = claim.status || "";
@@ -381,6 +410,51 @@ export function getPriorityFactClaims(
       if (b.score !== a.score) return b.score - a.score;
       return a.index - b.index;
     })
-    .slice(0, maxItems)
+    .filter(({ claim }) => {
+      const key = `${claim.path || ""}|${claim.category || ""}|${
+        claim.claim || ""
+      }`
+        .trim()
+        .toLowerCase();
+
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
     .map((item) => item.claim);
+
+  if (
+    typeof maxItems === "number" &&
+    Number.isFinite(maxItems) &&
+    maxItems > 0
+  ) {
+    return ordered.slice(0, maxItems);
+  }
+
+  return ordered;
+}
+export function isVerifiedDirectCompetitorSource(
+  source: SourceItem
+): boolean {
+  return Boolean(
+    source.is_direct_competitor &&
+      source.public_display !== false &&
+      !source.rejected &&
+      !source.internal_only &&
+      source.source_type &&
+      ["competitor", "pricing_page"].includes(source.source_type) &&
+      source.region_match === "local" &&
+      source.same_or_close_use_case &&
+      source.same_or_close_solution_category &&
+      (source.matched_domain_terms?.length || 0) >= 2 &&
+      (source.product_evidence_signals?.length || 0) >= 2
+  );
+}
+
+export function getSourceEvidenceCategories(source: SourceItem): string[] {
+  return uniqueStrings(
+    (source.evidence_categories || [])
+      .map((item) => String(item || "").trim())
+      .filter(Boolean)
+  );
 }

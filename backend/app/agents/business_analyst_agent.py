@@ -390,20 +390,26 @@ FORMAT JSON ATTENDU :
                 result["sources_used"].append(source_url)
 
                 source_status = str(
-                    source_copy.get("status")
+                    source_copy.get("candidate_status")
                     or source_copy.get("decision_status")
+                    or source_copy.get("status")
                     or ""
                 ).strip().lower()
                 retained_for_reclassification = bool(
                     source_copy.get("retained_for_reclassification")
+                    or source_copy.get("requires_canonical_recheck")
                     or source_status in {
                         "candidate",
                         "reclassify",
                         "retained",
                         "internal_candidate",
+                        "needs_manual_review",
                     }
                 )
-                hard_rejected = bool(source_copy.get("hard_rejected"))
+                hard_rejected = bool(
+                    source_copy.get("hard_rejected")
+                    or source_status in {"hard_rejected", "rejected_hard"}
+                )
                 source_is_not_rejected = False
                 if not bool(source.get("rejected")):
                     source_is_not_rejected = True
@@ -416,6 +422,10 @@ FORMAT JSON ATTENDU :
                     retained_for_reclassification
                     or source_is_not_rejected
                 ):
+                    source_copy["candidate_status"] = (
+                        source_status or "candidate"
+                    )
+                    source_copy["requires_canonical_recheck"] = True
                     source_copy["retained_for_reclassification"] = True
                     source_copy["origin"] = (
                         source_copy.get("origin") or "local_market_search"
@@ -485,9 +495,22 @@ FORMAT JSON ATTENDU :
 
         logger.info(
             "[AIBusinessAnalystAgent][LocalCandidateHandoff] "
-            "candidates=%s | public=%s",
+            "candidates=%s | public=%s | statuses=%s",
             len(preserved_local_candidates),
             len(preserved_local_sources),
+            {
+                status: sum(
+                    1
+                    for item in preserved_local_candidates
+                    if str(item.get("candidate_status") or "candidate") == status
+                )
+                for status in sorted(
+                    {
+                        str(item.get("candidate_status") or "candidate")
+                        for item in preserved_local_candidates
+                    }
+                )
+            },
         )
 
         return result

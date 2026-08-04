@@ -17,6 +17,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 import chromadb
+from chromadb.config import Settings as ChromaSettings
 from chromadb.utils import embedding_functions
 
 from app.config import settings
@@ -147,6 +148,134 @@ def format_local_context(
     return "\n".join(lines).strip()
 
 
+LOCAL_SOURCE_PASSTHROUGH_FIELDS = (
+    "title",
+    "url",
+    "domain",
+    "query",
+    "snippet",
+    "text_length",
+    "source_type",
+    "source_role",
+    "canonical_category",
+    "comparison_scope",
+    "region_match",
+    "source_relevance_score",
+    "canonical_source_id",
+    "confidence",
+    "public_confidence",
+    "public_reason",
+    "why_relevant",
+    "reason",
+    "candidate_status",
+    "status",
+    "decision_status",
+    "origin",
+    "target_match_level",
+    "search_provider",
+    "provider_score",
+)
+
+LOCAL_SOURCE_BOOLEAN_FIELDS = (
+    "public_display",
+    "internal_only",
+    "rejected",
+    "hard_rejected",
+    "retained_for_reclassification",
+    "requires_canonical_recheck",
+    "is_direct_competitor",
+    "technology_supplier",
+    "same_or_close_target_user",
+    "same_or_close_sector",
+    "same_or_close_use_case",
+    "same_or_close_solution_category",
+    "is_product_page",
+    "clear_contextual_link",
+    "pricing_found",
+    "text_extracted",
+)
+
+LOCAL_SOURCE_LIST_FIELDS = (
+    "matched_strong_terms",
+    "matched_domain_terms",
+    "matched_sector_terms",
+    "matched_target_terms",
+    "matched_use_case_terms",
+    "matched_solution_terms",
+    "matched_forbidden_terms",
+    "product_evidence_signals",
+    "market_evidence_signals",
+    "evidence_categories",
+)
+
+
+def copy_local_source_contract(item: Dict[str, Any]) -> Dict[str, Any]:
+    """Preserve the complete LocalMarketSearch hand-off contract.
+
+    LocalMarketSearch may keep a page as an internal candidate even when the
+    first relevance gate cannot publish it. CompetitiveAnalysisAgent must
+    receive the candidate status and reclassification flags, otherwise useful
+    local evidence silently disappears between local search and the canonical
+    source ledger.
+    """
+
+    source = {
+        field: item.get(field)
+        for field in LOCAL_SOURCE_PASSTHROUGH_FIELDS
+    }
+
+    for field in LOCAL_SOURCE_BOOLEAN_FIELDS:
+        source[field] = bool(item.get(field))
+
+    for field in LOCAL_SOURCE_LIST_FIELDS:
+        source[field] = list(item.get(field) or [])
+
+    candidate_status = str(
+        item.get("candidate_status")
+        or item.get("decision_status")
+        or item.get("status")
+        or ""
+    ).strip().lower()
+
+    requires_recheck = bool(
+        item.get("requires_canonical_recheck")
+        or item.get("retained_for_reclassification")
+        or candidate_status in {
+            "candidate",
+            "reclassify",
+            "retained",
+            "internal_candidate",
+            "needs_manual_review",
+        }
+    )
+
+    source["candidate_status"] = candidate_status
+    source["requires_canonical_recheck"] = requires_recheck
+    source["retained_for_reclassification"] = requires_recheck
+    source["hard_rejected"] = bool(
+        item.get("hard_rejected")
+        or candidate_status in {"hard_rejected", "rejected_hard"}
+    )
+    source["origin"] = item.get("origin") or "local_market_search"
+    source["why_relevant"] = (
+        item.get("why_relevant")
+        or item.get("public_reason")
+        or item.get("reason")
+        or ""
+    )
+
+    extracted_text = str(
+        item.get("text")
+        or item.get("body")
+        or item.get("extracted_text_preview")
+        or ""
+    )
+    source["extracted_text_preview"] = extracted_text[:4000]
+    source["body"] = extracted_text[:4000]
+
+    return source
+
+
 class DynamicWebRAGService:
     """
     Service RAG web dynamique.
@@ -173,6 +302,7 @@ class DynamicWebRAGService:
             headers={
                 "Authorization": f"Bearer {settings.CHROMA_AUTH_TOKEN}",
             },
+            settings=ChromaSettings(anonymized_telemetry=False),
         )
 
     def _create_temp_collection_name(self) -> str:
@@ -304,6 +434,8 @@ class DynamicWebRAGService:
             "local_context": "",
             "passages": [],
             "sources": [],
+            "candidates": [],
+            "local_market_candidates": [],
             "web_results_count": 0,
             "chunks_count": 0,
             "temp_collection_name": temp_collection_name,
@@ -321,17 +453,29 @@ class DynamicWebRAGService:
             )
 
             result["web_results_count"] = len(web_results)
+            # Preserve the already-gated source contract. These sources are
+            # used for local RAG and can later be merged into the canonical
+            # evidence ledger; reducing them to title/url would lose the role,
+            # score and competitor/evidence classification.
             result["sources"] = [
-                {
-                    "title": item.get("title"),
-                    "url": item.get("url"),
-                    "domain": item.get("domain"),
-                    "query": item.get("query"),
-                    "snippet": item.get("snippet"),
-                    "text_length": item.get("text_length"),
-                }
+                copy_local_source_contract(item)
                 for item in web_results
+                if isinstance(item, dict)
             ]
+
+            retained_candidates = [
+                dict(source)
+                for source in result["sources"]
+                if not bool(source.get("hard_rejected"))
+                and (
+                    bool(source.get("retained_for_reclassification"))
+                    or bool(source.get("requires_canonical_recheck"))
+                    or not bool(source.get("rejected"))
+                )
+            ]
+            result["candidates"] = retained_candidates
+            result["local_market_candidates"] = retained_candidates
+
 
             if not web_results:
                 result["local_context"] = format_local_context([], language)
