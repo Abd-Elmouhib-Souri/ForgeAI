@@ -19,7 +19,7 @@ export const reportCopy = {
     sectionBmc: "Business Model Canvas",
     sectionSources: "Sources externes et concurrents",
     sectionFinancial: "Évaluation financière",
-    sectionStartupScore: "Startup Score",
+    sectionStartupScore: "Évaluation startup",
     sectionDebate: "Debate Room Pro",
     sectionVerdict: "Verdict final",
     sectionActionPlan: "Plan d’action recommandé",
@@ -27,7 +27,7 @@ export const reportCopy = {
 
     sector: "Secteur",
     region: "Région",
-    startupScore: "Startup Score",
+    startupScore: "Score de potentiel",
     verdict: "Verdict",
     risk: "Risque",
     score: "Score",
@@ -106,7 +106,7 @@ export const reportCopy = {
     feasibility: "Faisabilité",
     profitability: "Rentabilité",
     scalability: "Scalabilité",
-    globalScore: "Score global",
+    globalScore: "Score de potentiel",
 
     debateRounds: "Tours",
     argumentScore: "Score argumentaire",
@@ -123,6 +123,7 @@ export const reportCopy = {
     finalRecommendation: "Recommandation finale",
     improvedIdea: "Idée améliorée proposée",
     validatedOpportunities: "Opportunités validées",
+    potentialOpportunities: "Hypothèses d’opportunité",
     goNoGo: "Conditions go/no-go",
     nextActions: "Actions recommandées",
 
@@ -156,7 +157,7 @@ export const reportCopy = {
     sectionBmc: "Business Model Canvas",
     sectionSources: "External sources and competitors",
     sectionFinancial: "Financial estimation",
-    sectionStartupScore: "Startup Score",
+    sectionStartupScore: "Startup assessment",
     sectionDebate: "Debate Room Pro",
     sectionVerdict: "Final verdict",
     sectionActionPlan: "Recommended action plan",
@@ -164,7 +165,7 @@ export const reportCopy = {
 
     sector: "Sector",
     region: "Region",
-    startupScore: "Startup Score",
+    startupScore: "Potential score",
     verdict: "Verdict",
     risk: "Risk",
     score: "Score",
@@ -243,7 +244,7 @@ export const reportCopy = {
     feasibility: "Feasibility",
     profitability: "Profitability",
     scalability: "Scalability",
-    globalScore: "Global score",
+    globalScore: "Potential score",
 
     debateRounds: "Rounds",
     argumentScore: "Argument score",
@@ -260,6 +261,7 @@ export const reportCopy = {
     finalRecommendation: "Final recommendation",
     improvedIdea: "Improved idea",
     validatedOpportunities: "Validated opportunities",
+    potentialOpportunities: "Opportunity hypotheses",
     goNoGo: "Go/no-go conditions",
     nextActions: "Recommended actions",
 

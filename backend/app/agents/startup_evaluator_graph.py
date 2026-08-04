@@ -1306,16 +1306,26 @@ class StartupEvaluatorGraph:
             )
             trend_candidates = []
             if technology_sources:
+                trend_candidates.extend(
+                    [
+                        "Signal to validate: agricultural inspection is increasingly "
+                        "combined with automation, computer vision and connected sensors.",
+                        "Signal to validate: related technology benchmarks show a move "
+                        "toward precision agriculture and continuous monitoring; transfer "
+                        "to the launch market remains unproven.",
+                    ]
+                )
+            if local_sources:
                 trend_candidates.append(
-                    "Retained technology benchmarks show that related automation, "
-                    "sensing or analysis workflows exist; transfer to the target "
-                    "region and use case remains to be tested."
+                    "Local signal to validate: retained Tunisian initiatives show "
+                    "AgriTech experimentation, but not yet broad adoption or willingness "
+                    "to pay."
                 )
             if market_sources:
                 trend_candidates.append(
-                    "Retained market pages are secondary market signals. Their "
-                    "figures and methodologies must be checked before being used "
-                    "for an investment decision."
+                    "Secondary market signal: robotics and precision-agriculture pages "
+                    "indicate sector interest, but their figures and methodologies must "
+                    "be checked before an investment decision."
                 )
         else:
             local_signal = (
@@ -1329,25 +1339,50 @@ class StartupEvaluatorGraph:
             )
             trend_candidates = []
             if technology_sources:
+                trend_candidates.extend(
+                    [
+                        "Signal à valider : l’inspection agricole combine de plus en "
+                        "plus automatisation, vision artificielle et capteurs connectés.",
+                        "Signal à valider : les benchmarks retenus indiquent une "
+                        "progression de l’agriculture de précision et du suivi continu ; "
+                        "leur transférabilité au marché de lancement reste non prouvée.",
+                    ]
+                )
+            if local_sources:
                 trend_candidates.append(
-                    "Les benchmarks technologiques retenus montrent l’existence de "
-                    "workflows proches d’automatisation, de capteurs ou d’analyse ; "
-                    "leur transférabilité au cas d’usage et à la région cible reste à tester."
+                    "Signal local à valider : les initiatives tunisiennes retenues "
+                    "montrent une expérimentation AgriTech, mais pas encore une adoption "
+                    "large ni une volonté de payer démontrée."
                 )
             if market_sources:
                 trend_candidates.append(
-                    "Les pages de marché retenues sont des signaux secondaires. "
-                    "Leurs chiffres et leurs méthodologies doivent être vérifiés "
-                    "avant toute décision d’investissement."
+                    "Signal secondaire : les pages consacrées à la robotique et à "
+                    "l’agriculture de précision indiquent un intérêt sectoriel, mais "
+                    "leurs chiffres et méthodologies doivent être vérifiés."
                 )
 
         def missing(value: Any) -> bool:
             if value is None:
                 return True
             if isinstance(value, str):
-                return value.strip() in {"", "—", "-", "n/a", "N/A"}
+                return value.strip() in {
+                    "",
+                    "—",
+                    "–",
+                    "-",
+                    "n/a",
+                    "N/A",
+                    "non disponible",
+                    "not available",
+                }
             if isinstance(value, list):
-                return not [item for item in value if str(item or "").strip()]
+                meaningful = [
+                    item
+                    for item in value
+                    if str(item or "").strip()
+                    not in {"", "—", "–", "-", "n/a", "N/A"}
+                ]
+                return not meaningful
             return False
 
         if missing(market_study.get("local_feasibility")):
@@ -1676,29 +1711,38 @@ class StartupEvaluatorGraph:
                     if isinstance(forgecrawler_payload, dict):
                         analysis_data["forgecrawler"] = dict(forgecrawler_payload)
 
+                        public_sources = [
+                            item
+                            for item in (forgecrawler_payload.get("sources") or [])
+                            if isinstance(item, dict)
+                        ]
+                        region_counts = {
+                            "local": sum(
+                                1
+                                for item in public_sources
+                                if str(item.get("region_match") or "").lower() == "local"
+                            ),
+                            "regional": sum(
+                                1
+                                for item in public_sources
+                                if str(item.get("region_match") or "").lower() == "regional"
+                            ),
+                            "international": sum(
+                                1
+                                for item in public_sources
+                                if str(item.get("region_match") or "").lower()
+                                == "international"
+                            ),
+                        }
+
                         logger.info(
                             "[SourcePipeline][Graph] ForgeCrawler preserved | "
                             "sources=%s | local=%s | regional=%s | "
                             "international=%s | market=%s",
-                            len(forgecrawler_payload.get("sources") or []),
-                            len(
-                                forgecrawler_payload.get(
-                                    "local_competitor_sources"
-                                )
-                                or []
-                            ),
-                            len(
-                                forgecrawler_payload.get(
-                                    "regional_competitor_sources"
-                                )
-                                or []
-                            ),
-                            len(
-                                forgecrawler_payload.get(
-                                    "international_benchmark_sources"
-                                )
-                                or []
-                            ),
+                            len(public_sources),
+                            region_counts["local"],
+                            region_counts["regional"],
+                            region_counts["international"],
                             len(
                                 forgecrawler_payload.get(
                                     "market_context_sources"

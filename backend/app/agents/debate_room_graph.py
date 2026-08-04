@@ -182,17 +182,29 @@ class DebateRoomGraph:
     ) -> List[Dict[str, Any]]:
         questions: List[Dict[str, Any]] = []
         for index, spec in enumerate(specifications[:4], start=1):
+            asked_by = spec.get("asked_by", "evidence_auditor")
+            evidence_status = spec.get("status", "field_validation_required")
+            explicit_confidence = spec.get("confidence")
+            confidence = (
+                float(explicit_confidence)
+                if explicit_confidence is not None
+                else self._adaptive_question_confidence(
+                    asked_by=asked_by,
+                    evidence_status=evidence_status,
+                    round_number=number,
+                )
+            )
             questions.append(
                 self._question(
                     round_number=number,
                     index=index,
-                    asked_by=spec.get("asked_by", "evidence_auditor"),
+                    asked_by=asked_by,
                     addressed_to=spec.get("addressed_to", "project_defender"),
                     question=spec["question"],
                     direct_answer=spec["answer"],
                     reasoning=spec["reasoning"],
-                    confidence=float(spec.get("confidence", 0.4)),
-                    evidence_status=spec.get("status", "field_validation_required"),
+                    confidence=confidence,
+                    evidence_status=evidence_status,
                     unresolved=spec["unresolved"],
                     follow_up=spec["follow_up"],
                     likely_real_question=spec["likely"],
@@ -982,12 +994,51 @@ class DebateRoomGraph:
         }
 
     def _frequency_question(self, context: Dict[str, Any], language: str) -> str:
-        actor = context["primary_target"]
-        action = context["priority_workflow"]
+        actor = self._text(context["primary_target"])
+        action = self._text(context["priority_workflow"])
+        french_actor = actor
+        lowered_actor = actor.casefold()
+        if actor and not lowered_actor.startswith(
+            ("le ", "la ", "les ", "l’", "l'", "un ", "une ", "des ")
+        ):
+            french_actor = f"les {actor}"
+
         return self._t(
             language,
             f"How often is the following action currently performed by {actor}: {action}?",
-            f"À quelle fréquence l’action suivante est-elle actuellement réalisée par {actor} : {action} ?",
+            f"À quelle fréquence l’action suivante est-elle actuellement réalisée "
+            f"par {french_actor} : {action} ?",
+        )
+
+    def _adaptive_question_confidence(
+        self,
+        *,
+        asked_by: str,
+        evidence_status: str,
+        round_number: int,
+    ) -> float:
+        status_base = {
+            "supported": 0.68,
+            "sourced": 0.66,
+            "estimated": 0.52,
+            "committee_synthesis": 0.72,
+            "field_validation_required": 0.36,
+            "not_confirmed": 0.32,
+        }.get(str(evidence_status or "").lower(), 0.38)
+        role_adjustment = {
+            "customer_problem_analyst": 0.04,
+            "market_competition_analyst": 0.02,
+            "product_technology_architect": 0.03,
+            "business_finance_analyst": 0.01,
+            "risk_execution_officer": -0.01,
+            "evidence_auditor": -0.03,
+            "red_team_challenger": -0.05,
+            "committee_chair": 0.05,
+        }.get(str(asked_by or "").lower(), 0.0)
+        round_adjustment = min(0.03, max(0.0, (round_number - 1) * 0.005))
+        return round(
+            max(0.20, min(0.90, status_base + role_adjustment + round_adjustment)),
+            2,
         )
 
     def _actor_map_answer(self, context: Dict[str, Any], language: str) -> str:
