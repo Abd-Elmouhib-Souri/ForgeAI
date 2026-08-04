@@ -2,7 +2,7 @@
 # backend/app/agents/competitive_analysis_agent.py
 # ============================================================
 #
-# CompetitiveAnalysisAgent V7 — Public Sources Aligned
+# CompetitiveAnalysisAgent V7.1 — Public Sources Preserved
 #
 # Objectifs :
 # - garder ForgeCrawler V5 comme moteur strict ;
@@ -21,12 +21,18 @@
 
 from __future__ import annotations
 
+import logging
 import re
+
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 from app.services.domain_integrity_guard import normalize_output_language
 from app.services.forgecrawler import ForgeCrawler
+from app.services.canonical_source_ledger import canonical_source_ledger
+from app.services.source_relevance_gate import source_relevance_gate
+
+logger = logging.getLogger(__name__)
 
 
 class CompetitiveAnalysisAgent:
@@ -48,7 +54,6 @@ class CompetitiveAnalysisAgent:
         "stock trading",
         "forex",
         "medicine stock",
-        "super app",
         "orange max it",
         "vpn",
         "antivirus",
@@ -90,10 +95,30 @@ class CompetitiveAnalysisAgent:
         "help",
         "short",
         "system",
+        "problem",
+        "problème",
+        "probleme",
+        "market",
+        "industry",
+        "product",
+    }
+
+    GENERIC_WEAK_PHRASES = {
+        "the problem",
+        "main problem",
+        "business problem",
+        "saas platform",
+        "software platform",
+        "digital platform",
+        "software solution",
+        "digital solution",
+        "platform for",
+        "solution for",
+        "business platform",
     }
 
     PUBLIC_MIN_SCORE = 0.70
-    LOCAL_DIRECT_MIN_SCORE = 0.78
+    LOCAL_DIRECT_MIN_SCORE = 0.58
 
     def __init__(self):
         self.crawler = ForgeCrawler(max_results_per_query=10, max_sources=8)
@@ -104,7 +129,7 @@ class CompetitiveAnalysisAgent:
         title = str(state.get("title") or "").strip()
         description = str(state.get("description") or "").strip()
         industry = str(state.get("industry") or "").strip()
-        region = str(state.get("region") or "Tunisie").strip()
+        region = str(state.get("region") or "").strip()
 
         analysis_data = dict(state.get("analysis_data") or {})
         project_context = dict(state.get("project_context") or {})
@@ -168,7 +193,24 @@ class CompetitiveAnalysisAgent:
             query_planner=query_planner,
         )
 
-        raw_public_sources = forgecrawler_result.get("sources") or []
+        crawler_public_sources = list(forgecrawler_result.get("sources") or [])
+        raw_local_candidates = self._collect_local_market_candidates(
+            state=state,
+            analysis_data=analysis_data,
+        )
+        local_market_sources = self._reclassify_local_market_candidates(
+            candidates=raw_local_candidates,
+            project_context=merged_project_context,
+        )
+        raw_public_sources = crawler_public_sources + local_market_sources
+
+        logger.info(
+            "[CompetitiveAnalysisAgent][CanonicalMerge] "
+            "crawler=%s | local_candidates=%s | local_public=%s",
+            len(crawler_public_sources),
+            len(raw_local_candidates),
+            len(local_market_sources),
+        )
 
         safe_public_sources = self._safe_public_sources(
             sources=raw_public_sources,
@@ -177,17 +219,31 @@ class CompetitiveAnalysisAgent:
             project_context=merged_project_context,
         )
 
-        local_competitor_sources = self._local_direct_source_items(
-            sources=safe_public_sources,
+        source_ledger = canonical_source_ledger.build(safe_public_sources)
+        safe_public_sources = list(source_ledger.get("sources") or [])
+        local_competitor_sources = list(
+            source_ledger.get("local_direct_competitor_sources") or []
         )
-        regional_competitor_sources = self._regional_source_items(
-            sources=safe_public_sources,
+        local_adjacent_source_items = list(
+            source_ledger.get("adjacent_solution_sources") or []
         )
-        international_benchmark_sources = self._international_source_items(
-            sources=safe_public_sources,
+        regional_competitor_sources = list(
+            source_ledger.get("regional_benchmark_sources") or []
         )
-        market_context_sources = self._market_source_items(
-            sources=safe_public_sources,
+        international_benchmark_sources = list(
+            source_ledger.get("international_benchmark_sources") or []
+        )
+        technology_provider_sources = list(
+            source_ledger.get("technology_provider_sources") or []
+        )
+        technology_benchmark_sources = list(
+            source_ledger.get("technology_benchmark_sources") or []
+        )
+        ecosystem_actor_sources = list(
+            source_ledger.get("ecosystem_actor_sources") or []
+        )
+        market_context_sources = list(
+            source_ledger.get("evidence_sources") or []
         )
 
         local_direct_competitors = self._local_direct_competitors(
@@ -202,6 +258,22 @@ class CompetitiveAnalysisAgent:
         international_benchmarks = self._international_benchmarks(
             sources=safe_public_sources,
         )
+        technology_providers = self._sources_to_competitor_cards(
+            sources=technology_provider_sources,
+            fallback_region="Technology benchmark",
+        )
+        technology_benchmarks = self._sources_to_competitor_cards(
+            sources=technology_benchmark_sources,
+            fallback_region="Technology benchmark",
+        )
+        ecosystem_actors = self._sources_to_competitor_cards(
+            sources=ecosystem_actor_sources,
+            fallback_region=region or "Local",
+        )
+        local_adjacent_solutions = self._sources_to_competitor_cards(
+            sources=local_adjacent_source_items,
+            fallback_region=region,
+        )
 
         market_context_cards = self._market_context_sources(
             sources=safe_public_sources,
@@ -214,7 +286,9 @@ class CompetitiveAnalysisAgent:
 
         source_quality = {
             "public_display_threshold": self.PUBLIC_MIN_SCORE,
+            "public_threshold_policy": "role_aware",
             "sources_count": public_sources_count,
+            "canonical_sources_count": public_sources_count,
             "raw_public_sources_count_before_safety_filter": raw_sources_count,
             "removed_from_public_after_safety_filter": max(
                 0,
@@ -238,12 +312,14 @@ class CompetitiveAnalysisAgent:
             regional_competitor_sources=regional_competitor_sources,
             international_benchmark_sources=international_benchmark_sources,
             market_context_sources=market_context_sources,
+            source_ledger=source_ledger,
+            technology_provider_sources=technology_provider_sources,
             source_quality=source_quality,
             language=output_language,
         )
 
         result = {
-            "format": "competitive_analysis_v7_public_sources_aligned",
+            "format": "competitive_analysis_v9_canonical_source_intelligence",
             "status": "completed",
             "source_based": public_sources_count > 0,
             "context_locked": True,
@@ -253,9 +329,15 @@ class CompetitiveAnalysisAgent:
                 local_direct_competitors=local_direct_competitors,
             ),
             "sources_count": public_sources_count,
+            "canonical_sources_count": public_sources_count,
+            "canonical_source_ledger": source_ledger,
             "local_competitors_count": len(local_direct_competitors),
+            "local_adjacent_solutions_count": len(local_adjacent_solutions),
             "regional_competitors_count": len(regional_competitors),
             "international_benchmarks_count": len(international_benchmarks),
+            "technology_providers_count": len(technology_providers),
+            "technology_benchmarks_count": len(technology_benchmarks),
+            "ecosystem_actors_count": len(ecosystem_actors),
             "market_sources_count": len(market_context_sources),
             "no_local_competitor_found": no_local_found,
             "no_verified_relevant_source_found": public_sources_count == 0,
@@ -271,6 +353,9 @@ class CompetitiveAnalysisAgent:
             "local_competitor_sources": local_competitor_sources,
             "regional_competitor_sources": regional_competitor_sources,
             "international_benchmark_sources": international_benchmark_sources,
+            "technology_provider_sources": technology_provider_sources,
+            "technology_benchmark_sources": technology_benchmark_sources,
+            "ecosystem_actor_sources": ecosystem_actor_sources,
             "market_context_sources": market_context_sources,
 
             # Competitor card arrays used by frontend.
@@ -280,25 +365,47 @@ class CompetitiveAnalysisAgent:
                 if item.get("name")
             ],
             "local_direct_competitors": local_direct_competitors,
-            "local_adjacent_solutions": [],
+            "local_adjacent_solutions": local_adjacent_solutions,
             "regional_competitors": regional_competitors,
             "international_benchmarks": international_benchmarks,
+            "technology_providers": technology_providers,
+            "technology_benchmarks": technology_benchmarks,
+            "ecosystem_actors": ecosystem_actors,
+            "technology_provider_sources": technology_provider_sources,
 
             # Aliases for old/new frontend compatibility.
             "verified_competitors": local_direct_competitors,
             "local_competitors": local_direct_competitors,
             "market_sources": market_context_sources,
             "external_sources": {
+                "sources_count": public_sources_count,
+                "canonical_sources_count": public_sources_count,
+                "local_competitors_count": len(local_direct_competitors),
+                "local_adjacent_solutions_count": len(local_adjacent_solutions),
+                "regional_competitors_count": len(regional_competitors),
+                "international_benchmarks_count": len(international_benchmarks),
+                "technology_providers_count": len(technology_providers),
+                "technology_benchmarks_count": len(technology_benchmarks),
+                "ecosystem_actors_count": len(ecosystem_actors),
+                "market_sources_count": len(market_context_sources),
+                "canonical_source_ledger": source_ledger,
                 "sources": safe_public_sources,
                 "public_sources": safe_public_sources,
                 "local_competitor_sources": local_competitor_sources,
                 "regional_competitor_sources": regional_competitor_sources,
                 "international_benchmark_sources": international_benchmark_sources,
+                "technology_provider_sources": technology_provider_sources,
+                "technology_benchmark_sources": technology_benchmark_sources,
+                "ecosystem_actor_sources": ecosystem_actor_sources,
+                "adjacent_solution_sources": local_adjacent_source_items,
                 "market_context_sources": market_context_sources,
                 "verified_competitors": local_direct_competitors,
                 "local_competitors": local_direct_competitors,
                 "regional_competitors": regional_competitors,
                 "international_benchmarks": international_benchmarks,
+                "technology_providers": technology_providers,
+                "technology_benchmarks": technology_benchmarks,
+                "ecosystem_actors": ecosystem_actors,
                 "market_sources": market_context_sources,
             },
 
@@ -306,6 +413,7 @@ class CompetitiveAnalysisAgent:
                 market_context_sources=market_context_cards,
                 regional_competitors=regional_competitors,
                 international_benchmarks=international_benchmarks,
+                structured_project_context=structured_project_context,
                 language=output_language,
             ),
             "competitive_advantages": self._competitive_advantages(
@@ -339,6 +447,139 @@ class CompetitiveAnalysisAgent:
     # Public source safety
     # ========================================================
 
+    def _collect_local_market_candidates(
+        self,
+        *,
+        state: Dict[str, Any],
+        analysis_data: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Collect the local RAG hand-off from every supported state shape.
+
+        The Business Analyst is executed before this graph in the current
+        orchestration. Its result is therefore normally stored under
+        ``analysis_data["business_analysis"]``. Older versions of this agent
+        only inspected top-level keys and silently lost valid local pages.
+
+        The collector intentionally accepts both the canonical candidate key
+        and the legacy public-only key, then de-duplicates by canonical URL.
+        It does not trust the previous classification: every item is evaluated
+        again by ``_reclassify_local_market_candidates`` with the complete
+        project-intelligence packet.
+        """
+        containers = [
+            ("state", state),
+            ("analysis_data", analysis_data),
+            ("state.business_analysis", state.get("business_analysis")),
+            (
+                "analysis_data.business_analysis",
+                analysis_data.get("business_analysis"),
+            ),
+            (
+                "analysis_data.business_analyst",
+                analysis_data.get("business_analyst"),
+            ),
+        ]
+
+        collected: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        origin_counts: Dict[str, int] = {}
+
+        for origin, container in containers:
+            if not isinstance(container, dict):
+                continue
+
+            for key in ("local_market_candidates", "local_market_sources"):
+                values = container.get(key) or []
+                if not isinstance(values, list):
+                    continue
+
+                for item in values:
+                    if not isinstance(item, dict) or not item.get("url"):
+                        continue
+
+                    normalized_url = self._normalized_source_url(
+                        str(item.get("url") or "")
+                    )
+                    dedupe_key = normalized_url or self._normalize(
+                        f"{item.get('title', '')}|{item.get('url', '')}"
+                    )
+                    if not dedupe_key or dedupe_key in seen:
+                        continue
+
+                    seen.add(dedupe_key)
+                    collected.append(dict(item))
+                    origin_counts[origin] = origin_counts.get(origin, 0) + 1
+
+        logger.info(
+            "[CompetitiveAnalysisAgent][LocalCandidateHandoff] "
+            "total=%s | origins=%s",
+            len(collected),
+            origin_counts,
+        )
+
+        return collected
+
+    def _reclassify_local_market_candidates(
+        self,
+        *,
+        candidates: List[Dict[str, Any]],
+        project_context: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Re-evaluate local RAG candidates with the complete project packet.
+
+        LocalMarketSearch keeps useful internal candidates for semantic RAG.
+        The business analyst previously discarded those candidates before the
+        canonical ledger. This method performs one authoritative final gate
+        using the preserved extracted-text preview and returns only sources
+        that are now safe for public evidence.
+        """
+        public_sources: List[Dict[str, Any]] = []
+
+        for candidate in candidates:
+            gate_input = {
+                **candidate,
+                "extracted_text_preview": (
+                    candidate.get("extracted_text_preview")
+                    or candidate.get("body")
+                    or candidate.get("snippet")
+                    or ""
+                ),
+                "body": (
+                    candidate.get("body")
+                    or candidate.get("extracted_text_preview")
+                    or candidate.get("snippet")
+                    or ""
+                ),
+            }
+            decision = source_relevance_gate.evaluate_source(
+                source=gate_input,
+                project_context=project_context,
+            )
+            enriched = {**candidate, **decision}
+
+            logger.info(
+                "[CompetitiveAnalysisAgent][LocalCandidate] "
+                "title=%s | role=%s | region=%s | score=%s | "
+                "public=%s | internal=%s | rejected=%s | forbidden=%s",
+                enriched.get("title"),
+                enriched.get("source_role"),
+                enriched.get("region_match"),
+                enriched.get("source_relevance_score"),
+                enriched.get("public_display"),
+                enriched.get("internal_only"),
+                enriched.get("rejected"),
+                enriched.get("matched_forbidden_terms") or [],
+            )
+
+            if (
+                bool(enriched.get("public_display"))
+                and not bool(enriched.get("internal_only"))
+                and not bool(enriched.get("rejected"))
+            ):
+                public_sources.append(enriched)
+
+        return public_sources
+
     def _safe_public_sources(
         self,
         *,
@@ -347,28 +588,81 @@ class CompetitiveAnalysisAgent:
         structured_project_context: Dict[str, Any],
         project_context: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
+        """
+        Apply a final, lightweight public-safety check.
+
+        ForgeCrawler and SourceRelevanceGate have already:
+        - classified each candidate;
+        - calculated relevance;
+        - separated public, internal and rejected sources;
+        - applied URL hygiene.
+
+        This agent must not repeat the complete relevance gate. It only
+        removes malformed sources and obvious generic false positives.
+        """
+
         safe_sources: List[Dict[str, Any]] = []
 
         for source in sources:
-            if not self._is_public_safe_source(
+            rejection_reason = self._public_source_rejection_reason(
                 source=source,
                 title=title,
                 structured_project_context=structured_project_context,
                 project_context=project_context,
-            ):
+            )
+
+            if rejection_reason:
+                logger.info(
+                    "[CompetitiveAnalysisAgent][SourceRejected] "
+                    "title=%s | type=%s | score=%s | reason=%s",
+                    source.get("title") if isinstance(source, dict) else None,
+                    source.get("source_type") if isinstance(source, dict) else None,
+                    (
+                        source.get("source_relevance_score")
+                        if isinstance(source, dict)
+                        else None
+                    ),
+                    rejection_reason,
+                )
                 continue
 
             compact_source = self._compact_public_source(source)
 
-            if compact_source:
-                safe_sources.append(compact_source)
+            if not compact_source:
+                logger.info(
+                    "[CompetitiveAnalysisAgent][SourceRejected] "
+                    "title=%s | reason=invalid_public_shape",
+                    source.get("title") if isinstance(source, dict) else None,
+                )
+                continue
+
+            safe_sources.append(compact_source)
+
+            logger.info(
+                "[CompetitiveAnalysisAgent][SourceRetained] "
+                "title=%s | type=%s | region=%s | score=%s",
+                compact_source.get("title"),
+                compact_source.get("source_type"),
+                compact_source.get("region_match"),
+                compact_source.get("source_relevance_score"),
+            )
 
         safe_sources.sort(
             key=lambda item: float(item.get("source_relevance_score") or 0),
             reverse=True,
         )
+        safe_sources = self._dedupe_vendor_sources(safe_sources)
+        safe_sources = safe_sources[:8]
 
-        return safe_sources[:8]
+        logger.info(
+            "[CompetitiveAnalysisAgent][AUDIT] "
+            "raw_public=%s | safe_public=%s | titles=%s",
+            len(sources),
+            len(safe_sources),
+            [item.get("title") for item in safe_sources],
+        )
+
+        return safe_sources
 
     def _is_public_safe_source(
         self,
@@ -378,62 +672,115 @@ class CompetitiveAnalysisAgent:
         structured_project_context: Dict[str, Any],
         project_context: Dict[str, Any],
     ) -> bool:
-        if bool(source.get("rejected")):
-            return False
+        """
+        Backward-compatible boolean wrapper.
 
-        if not bool(source.get("public_display")):
-            return False
+        The detailed and auditable decision is centralized in
+        `_public_source_rejection_reason`.
+        """
 
-        score = float(source.get("source_relevance_score") or 0)
-
-        if score < self.PUBLIC_MIN_SCORE:
-            return False
-
-        source_type = str(source.get("source_type") or "").lower()
-
-        if source_type == "irrelevant":
-            return False
-
-        if source_type == "directory" and score < 0.82:
-            return False
-
-        title_text = self._normalize(
-            " ".join(
-                [
-                    str(source.get("title") or ""),
-                    str(source.get("url") or ""),
-                ]
+        return not bool(
+            self._public_source_rejection_reason(
+                source=source,
+                title=title,
+                structured_project_context=structured_project_context,
+                project_context=project_context,
             )
         )
 
-        if self._contains_offtopic_title_terms(title_text):
-            return False
+    def _public_source_rejection_reason(
+        self,
+        *,
+        source: Dict[str, Any],
+        title: str,
+        structured_project_context: Dict[str, Any],
+        project_context: Dict[str, Any],
+    ) -> str:
+        """Apply shape and contamination checks without redoing the gate.
 
-        forbidden_terms = source.get("matched_forbidden_terms") or []
+        SourceRelevanceGate is authoritative. This final pass must never delete
+        a valid technology benchmark, adjacent solution, market proof or
+        ecosystem actor simply because it is not a direct competitor.
+        """
+        if not isinstance(source, dict):
+            return "invalid_source_object"
+        if bool(source.get("rejected")):
+            return "already_rejected_by_source_gate"
+        if bool(source.get("internal_only")):
+            return "internal_only_source"
+        if not bool(source.get("public_display")):
+            return "not_marked_for_public_display"
 
-        if forbidden_terms:
-            return False
+        try:
+            score = float(source.get("source_relevance_score") or 0)
+        except (TypeError, ValueError):
+            return "invalid_relevance_score"
 
-        strong_terms = self._business_matched_terms(
+        source_type = str(source.get("source_type") or "").strip().lower()
+        source_role = str(source.get("source_role") or "").strip().lower()
+        category = str(source.get("canonical_category") or "").strip().lower()
+        region_match = str(source.get("region_match") or "unknown").strip().lower()
+
+        minimum_score = self.PUBLIC_MIN_SCORE
+        if category == "direct_competitor" and region_match == "local":
+            minimum_score = 0.58
+        elif category == "adjacent_solution" and region_match == "local":
+            minimum_score = 0.32
+        elif category == "ecosystem_actor" and region_match == "local":
+            minimum_score = 0.28
+        elif category == "market_evidence" and region_match == "local":
+            minimum_score = 0.36
+        elif category == "market_evidence":
+            minimum_score = 0.42
+        elif category == "technology_benchmark":
+            minimum_score = 0.40
+        if score < minimum_score:
+            return "score_below_role_aware_public_threshold"
+
+        if source_type in {"", "irrelevant"} or category in {"", "irrelevant"}:
+            return "irrelevant_source_type"
+        if source_type == "directory" and score < 0.55:
+            return "weak_directory_source"
+
+        title_and_url = self._normalize(
+            " ".join([str(source.get("title") or ""), str(source.get("url") or "")])
+        )
+        if self._contains_offtopic_title_terms(title_and_url):
+            return "off_topic_title_or_url"
+        if source.get("matched_forbidden_terms"):
+            return "forbidden_context_detected"
+
+        business_terms = self._business_matched_terms(
             source=source,
             title=title,
             structured_project_context=structured_project_context,
             project_context=project_context,
         )
+        if not business_terms:
+            return "no_business_specific_term"
 
-        if len(strong_terms) < 1:
-            return False
+        evidence_categories = {
+            str(item).strip().lower()
+            for item in (source.get("evidence_categories") or [])
+            if str(item).strip()
+        }
+        if not evidence_categories:
+            return "missing_evidence_category"
 
-        if not bool(source.get("clear_contextual_link")):
-            return False
+        # Only the direct-competitor category requires exact target, workflow
+        # and solution identity. Every other category is intentionally useful
+        # without satisfying that strict test.
+        if category == "direct_competitor":
+            if not bool(source.get("is_direct_competitor")):
+                return "direct_competitor_not_verified"
+            if not bool(source.get("same_or_close_target_user")):
+                return "direct_competitor_target_not_verified"
+            if not bool(source.get("same_or_close_use_case")):
+                return "direct_competitor_workflow_not_verified"
+            if not bool(source.get("same_or_close_solution_category")):
+                return "direct_competitor_solution_not_verified"
 
-        if not bool(source.get("same_or_close_use_case")) and not bool(
-            source.get("same_or_close_solution_category")
-        ):
-            if source_type not in {"market_article", "regulation"}:
-                return False
-
-        return True
+        return ""
 
     def _business_matched_terms(
         self,
@@ -443,6 +790,13 @@ class CompetitiveAnalysisAgent:
         structured_project_context: Dict[str, Any],
         project_context: Dict[str, Any],
     ) -> List[str]:
+        """
+        Keep only terms that provide real business-domain evidence.
+
+        Generic product vocabulary, project-name tokens and phrases such as
+        "SaaS platform" cannot justify publication by themselves.
+        """
+
         matched = [
             self._normalize(item)
             for item in (source.get("matched_strong_terms") or [])
@@ -458,75 +812,213 @@ class CompetitiveAnalysisAgent:
             if self._normalize(item)
         )
 
+        context_terms = set(
+            self._context_business_terms(structured_project_context)
+        )
+
         business_terms: List[str] = []
 
         for term in matched:
-            if term in weak_terms:
+            if not self._is_business_specific_term(
+                term=term,
+                weak_terms=weak_terms,
+                project_name_terms=project_name_terms,
+            ):
                 continue
 
-            if term in project_name_terms:
-                continue
-
-            if len(term) < 4:
-                continue
-
+            # A term already accepted by SourceRelevanceGate remains valid.
+            # Membership in context_terms is an additional positive signal,
+            # not a requirement, because compact project contexts can omit
+            # legitimate domain expressions found by the crawler.
             business_terms.append(term)
 
-        context_terms = self._context_business_terms(structured_project_context)
-
-        for term in matched:
-            if term in context_terms and term not in business_terms:
-                business_terms.append(term)
-
+        # Preserve deterministic ordering and remove duplicates.
         return self._unique(business_terms)
+
+    def _is_business_specific_term(
+        self,
+        *,
+        term: str,
+        weak_terms: set[str],
+        project_name_terms: set[str],
+    ) -> bool:
+        normalized = self._normalize(term)
+
+        if not normalized:
+            return False
+
+        if normalized in weak_terms:
+            return False
+
+        if normalized in self.GENERIC_WEAK_PHRASES:
+            return False
+
+        if normalized in project_name_terms:
+            return False
+
+        if len(normalized) < 4:
+            return False
+
+        tokens = {
+            token.strip()
+            for token in normalized.split()
+            if token.strip()
+        }
+
+        if tokens and all(token in weak_terms for token in tokens):
+            return False
+
+        return True
 
     def _compact_public_source(self, source: Dict[str, Any]) -> Dict[str, Any]:
         title = self._clean_title(source.get("title"), source.get("url"))
         url = self._safe_url(source.get("url"))
-
         if not title or not url:
             return {}
+        try:
+            score = round(float(source.get("source_relevance_score") or 0), 2)
+        except (TypeError, ValueError):
+            return {}
 
-        score = round(float(source.get("source_relevance_score") or 0), 2)
-
+        public_reason = str(source.get("public_reason") or "").strip()
         return {
             "title": title,
             "url": url,
             "source_relevance_score": score,
             "source_type": self._safe_label(source.get("source_type"), "source"),
+            "source_role": self._safe_label(source.get("source_role"), "evidence"),
+            "canonical_category": self._safe_label(
+                source.get("canonical_category"),
+                "market_evidence",
+            ),
+            "canonical_classification": self._safe_label(
+                source.get("canonical_category"),
+                "market_evidence",
+            ),
+            "comparison_scope": self._safe_label(source.get("comparison_scope"), "evidence"),
+            "technology_supplier": bool(source.get("technology_supplier")),
+            "canonical_source_id": str(source.get("canonical_source_id") or ""),
             "region_match": self._safe_label(source.get("region_match"), "unknown"),
             "confidence": self._safe_label(source.get("confidence"), "low"),
             "pricing_found": bool(source.get("pricing_found")),
-            "why_relevant": self._short_why_relevant(source),
+            "why_relevant": public_reason or self._short_why_relevant(source),
+            "public_reason": public_reason or self._short_why_relevant(source),
+            "technical_reason": str(source.get("why_relevant") or "")[:500],
             "public_display": True,
             "is_direct_competitor": bool(source.get("is_direct_competitor")),
+            "same_or_close_target_user": bool(source.get("same_or_close_target_user")),
+            "same_or_close_sector": bool(source.get("same_or_close_sector")),
+            "target_match_level": str(source.get("target_match_level") or "none"),
+            "is_product_page": bool(source.get("is_product_page")),
+            "same_or_close_use_case": bool(source.get("same_or_close_use_case")),
+            "same_or_close_solution_category": bool(source.get("same_or_close_solution_category")),
+            "clear_contextual_link": bool(source.get("clear_contextual_link")),
+            "evidence_categories": [
+                str(item).strip()
+                for item in (source.get("evidence_categories") or [])
+                if str(item).strip()
+            ][:12],
+            "matched_strong_terms": [
+                str(item).strip()
+                for item in (source.get("matched_strong_terms") or [])
+                if str(item).strip()
+            ][:12],
+            "matched_domain_terms": list(source.get("matched_domain_terms") or [])[:12],
+            "matched_sector_terms": list(source.get("matched_sector_terms") or [])[:10],
+            "matched_target_terms": list(source.get("matched_target_terms") or [])[:10],
+            "matched_use_case_terms": list(source.get("matched_use_case_terms") or [])[:10],
+            "matched_solution_terms": list(source.get("matched_solution_terms") or [])[:10],
+            "product_evidence_signals": list(source.get("product_evidence_signals") or [])[:10],
+            "market_evidence_signals": list(source.get("market_evidence_signals") or [])[:10],
+            "vendor_key": str(source.get("vendor_key") or ""),
+            "vendor_name": str(source.get("vendor_name") or ""),
+            "canonical_vendor_domain": str(source.get("canonical_vendor_domain") or ""),
+            "sector_mismatch": bool(source.get("sector_mismatch")),
+            "mismatch_terms": list(source.get("mismatch_terms") or [])[:8],
         }
 
+    def _dedupe_vendor_sources(
+        self,
+        sources: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        result: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for source in sources:
+            canonical_id = str(source.get("canonical_source_id") or "").strip().lower()
+            source_type = str(source.get("source_type") or "").lower()
+            source_role = str(source.get("source_role") or "").lower()
+            vendor_key = str(source.get("vendor_key") or "").strip().lower()
+            normalized_url = self._normalized_source_url(str(source.get("url") or ""))
+            vendor_scoped = source_type in {
+                "competitor", "pricing_page", "adjacent_solution", "technology_benchmark"
+            } or source_role in {
+                "direct_competitor", "adjacent_solution", "regional_benchmark",
+                "international_benchmark", "technology_provider",
+            }
+            if normalized_url:
+                key = normalized_url
+            elif vendor_scoped and vendor_key:
+                key = vendor_key
+            else:
+                key = canonical_id or str(source.get("title") or "").strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            result.append(source)
+        return result
+
+    @staticmethod
+    def _normalized_source_url(value: str) -> str:
+        try:
+            parsed = urlparse(value.strip())
+        except Exception:
+            return ""
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return ""
+        host = parsed.netloc.lower().split("@")[-1]
+        if host.startswith("www."):
+            host = host[4:]
+        path = re.sub(r"/{2,}", "/", parsed.path or "/").rstrip("/")
+        return f"https://{host}{path}"
+
     def _short_why_relevant(self, source: Dict[str, Any]) -> str:
-        source_type = self._safe_label(source.get("source_type"), "source")
-        region = self._safe_label(source.get("region_match"), "unknown")
-        score = round(float(source.get("source_relevance_score") or 0), 2)
-
-        parts = [
-            f"Retained as {source_type}",
-            f"region={region}",
-            f"relevance_score={score}",
-        ]
-
-        if bool(source.get("same_or_close_target_user")):
-            parts.append("target_match=true")
-
-        if bool(source.get("same_or_close_use_case")):
-            parts.append("use_case_match=true")
-
-        if bool(source.get("same_or_close_solution_category")):
-            parts.append("solution_match=true")
-
-        return " | ".join(parts)[:280]
+        explicit = str(source.get("public_reason") or "").strip()
+        if explicit:
+            return explicit[:280]
+        category = str(source.get("canonical_category") or "market_evidence").lower()
+        region = str(source.get("region_match") or "unknown").lower()
+        labels = {
+            "direct_competitor": "Concurrent direct vérifié",
+            "adjacent_solution": "Solution adjacente",
+            "technology_benchmark": "Benchmark technologique",
+            "market_evidence": "Preuve de marché",
+            "ecosystem_actor": "Acteur de l’écosystème",
+        }
+        label = labels.get(category, "Source externe pertinente")
+        location = "locale" if region == "local" else region
+        return f"{label} retenu comme preuve {location}."[:280]
 
     # ========================================================
     # Canonical source groups
     # ========================================================
+
+    def _is_strict_direct_source(
+        self,
+        source: Dict[str, Any],
+    ) -> bool:
+        try:
+            score = float(source.get("source_relevance_score") or 0)
+        except (TypeError, ValueError):
+            return False
+
+        return (
+            score >= self.LOCAL_DIRECT_MIN_SCORE
+            and bool(source.get("is_direct_competitor"))
+            and bool(source.get("same_or_close_target_user"))
+            and bool(source.get("same_or_close_use_case"))
+            and bool(source.get("same_or_close_solution_category"))
+            and bool(source.get("url"))
+        )
 
     def _local_direct_source_items(
         self,
@@ -543,10 +1035,13 @@ class CompetitiveAnalysisAgent:
             if region_match != "local":
                 continue
 
+            if str(source.get("source_role") or "").lower() != "direct_competitor":
+                continue
+
             if source_type not in {"competitor", "pricing_page"}:
                 continue
 
-            if score < self.LOCAL_DIRECT_MIN_SCORE:
+            if not self._is_strict_direct_source(source):
                 continue
 
             result.append(source)
@@ -608,6 +1103,8 @@ class CompetitiveAnalysisAgent:
             if source_type not in {
                 "market_article",
                 "regulation",
+                "official_source",
+                "local_ecosystem",
                 "directory",
                 "adjacent_solution",
             }:
@@ -640,12 +1137,12 @@ class CompetitiveAnalysisAgent:
             if source_type not in {"competitor", "pricing_page"}:
                 continue
 
-            if score < self.LOCAL_DIRECT_MIN_SCORE:
+            if not self._is_strict_direct_source(source):
                 continue
 
             competitors.append(
                 {
-                    "name": source.get("title"),
+                    "name": source.get("vendor_name") or source.get("title"),
                     "title": source.get("title"),
                     "url": source.get("url"),
                     "source_url": source.get("url"),
@@ -656,6 +1153,8 @@ class CompetitiveAnalysisAgent:
                     "why_relevant": source.get("why_relevant") or "",
                     "evidence": source.get("why_relevant") or "",
                     "pricing_found": bool(source.get("pricing_found")),
+                    "vendor_key": source.get("vendor_key"),
+                    "canonical_vendor_domain": source.get("canonical_vendor_domain"),
                 }
             )
 
@@ -670,9 +1169,7 @@ class CompetitiveAnalysisAgent:
             sources=[
                 source
                 for source in sources
-                if str(source.get("region_match") or "").lower() == "regional"
-                and str(source.get("source_type") or "").lower()
-                in {"competitor", "pricing_page", "adjacent_solution"}
+                if str(source.get("source_role") or "").lower() == "regional_benchmark"
             ],
             fallback_region="Regional",
         )
@@ -686,10 +1183,8 @@ class CompetitiveAnalysisAgent:
             sources=[
                 source
                 for source in sources
-                if str(source.get("region_match") or "").lower()
-                in {"international", "unknown"}
-                and str(source.get("source_type") or "").lower()
-                in {"competitor", "pricing_page", "adjacent_solution"}
+                if str(source.get("source_role") or "").lower()
+                == "international_benchmark"
             ],
             fallback_region="International",
         )
@@ -707,6 +1202,8 @@ class CompetitiveAnalysisAgent:
             if source_type not in {
                 "market_article",
                 "regulation",
+                "official_source",
+                "local_ecosystem",
                 "directory",
                 "adjacent_solution",
             }:
@@ -735,19 +1232,30 @@ class CompetitiveAnalysisAgent:
         competitors: List[Dict[str, Any]] = []
 
         for source in sources:
+            raw_region = str(source.get("region_match") or "").strip().lower()
+            display_region = raw_region if raw_region in {"local", "regional", "international"} else fallback_region
             competitors.append(
                 {
-                    "name": source.get("title"),
+                    "name": source.get("vendor_name") or source.get("title"),
                     "title": source.get("title"),
                     "url": source.get("url"),
                     "source_url": source.get("url"),
-                    "region": source.get("region_match") or fallback_region,
+                    "region": display_region,
+                    "region_match": raw_region or display_region.lower(),
                     "source_type": source.get("source_type"),
+                    "source_role": source.get("source_role"),
+                    "comparison_scope": source.get("comparison_scope"),
+                    "technology_supplier": bool(source.get("technology_supplier")),
+                    "canonical_source_id": source.get("canonical_source_id"),
                     "confidence": source.get("confidence") or "low",
                     "source_relevance_score": source.get("source_relevance_score"),
                     "why_relevant": source.get("why_relevant") or "",
                     "evidence": source.get("why_relevant") or "",
                     "pricing_found": bool(source.get("pricing_found")),
+                    "vendor_key": source.get("vendor_key"),
+                    "canonical_vendor_domain": source.get("canonical_vendor_domain"),
+                    "sector_mismatch": bool(source.get("sector_mismatch")),
+                    "mismatch_terms": source.get("mismatch_terms") or [],
                 }
             )
 
@@ -763,6 +1271,7 @@ class CompetitiveAnalysisAgent:
         market_context_sources: List[Dict[str, Any]],
         regional_competitors: List[Dict[str, Any]],
         international_benchmarks: List[Dict[str, Any]],
+        structured_project_context: Dict[str, Any],
         language: str,
     ) -> List[str]:
         names: List[str] = []
@@ -772,23 +1281,41 @@ class CompetitiveAnalysisAgent:
             if name:
                 names.append(str(name))
 
-        for item in market_context_sources:
-            title = item.get("title")
-            if title:
-                names.append(str(title))
+        # Editorial evidence is not a competitor. Market articles, reports,
+        # directories and regulations remain in market_context_sources only.
 
         if names:
             return self._unique(names)[:8]
 
+        archetype = str(
+            structured_project_context.get("project_archetype") or ""
+        ).strip().lower()
+        vertical = str(
+            structured_project_context.get("vertical") or ""
+        ).strip().lower()
+
+        if archetype == "two_sided_marketplace" and vertical == "mobility_taxi":
+            if language == "en":
+                return [
+                    "Street hailing and taxi ranks",
+                    "Direct phone dispatch or a driver's personal customer network",
+                    "Existing local taxi and ride-hailing applications",
+                ]
+            return [
+                "Maraude dans la rue et stations de taxis",
+                "Réservation directe par téléphone ou réseau personnel du chauffeur",
+                "Applications locales existantes de taxi ou de ride-hailing",
+            ]
+
         if language == "en":
             return [
                 "Manual tools currently used by the target users",
-                "Generic spreadsheets, messaging apps and existing workflow habits",
+                "Existing specialist products or direct offline coordination",
             ]
 
         return [
             "Outils manuels actuellement utilisés par la cible",
-            "Tableurs, messageries et habitudes de travail existantes",
+            "Produits spécialisés existants ou coordination directe hors ligne",
         ]
 
     def _competitive_advantages(
@@ -970,26 +1497,44 @@ class CompetitiveAnalysisAgent:
         regional_competitor_sources: List[Dict[str, Any]],
         international_benchmark_sources: List[Dict[str, Any]],
         market_context_sources: List[Dict[str, Any]],
+        source_ledger: Dict[str, Any],
+        technology_provider_sources: List[Dict[str, Any]],
         source_quality: Dict[str, Any],
         language: str,
     ) -> Dict[str, Any]:
+        adjacent_sources = list(source_ledger.get("adjacent_solution_sources") or [])
+        technology_sources = list(source_ledger.get("technology_benchmark_sources") or [])
+        ecosystem_sources = list(source_ledger.get("ecosystem_actor_sources") or [])
+        market_evidence_sources = list(source_ledger.get("market_evidence_sources") or [])
         return {
-            "format": "forgecrawler_v5_public_sanitized_summary",
+            "format": "forgecrawler_v8_public_canonical_summary",
             "status": forgecrawler_result.get("status") or "completed",
             "confidence_level": forgecrawler_result.get("confidence_level") or "low",
             "context_locked": True,
             "output_language": language,
             "public_display_threshold": self.PUBLIC_MIN_SCORE,
+            "public_threshold_policy": "role_aware",
             "sources_count": len(safe_sources),
+            "canonical_sources_count": len(safe_sources),
+            "canonical_source_ledger": source_ledger,
             "local_competitors_count": len(local_competitor_sources),
+            "adjacent_solutions_count": len(adjacent_sources),
             "regional_competitors_count": len(regional_competitor_sources),
             "international_benchmarks_count": len(international_benchmark_sources),
+            "technology_benchmarks_count": len(technology_sources),
+            "ecosystem_actors_count": len(ecosystem_sources),
             "market_sources_count": len(market_context_sources),
+            "market_evidence_count": len(market_evidence_sources),
             "sources": safe_sources,
             "public_sources": safe_sources,
             "local_competitor_sources": local_competitor_sources,
+            "adjacent_solution_sources": adjacent_sources,
             "regional_competitor_sources": regional_competitor_sources,
             "international_benchmark_sources": international_benchmark_sources,
+            "technology_provider_sources": technology_provider_sources,
+            "technology_benchmark_sources": technology_sources,
+            "ecosystem_actor_sources": ecosystem_sources,
+            "market_evidence_sources": market_evidence_sources,
             "market_context_sources": market_context_sources,
             "no_verified_relevant_source_found": len(safe_sources) == 0,
             "no_source_message": (
@@ -1000,6 +1545,7 @@ class CompetitiveAnalysisAgent:
             "source_quality": source_quality,
             "debug": {
                 "strict_gate": True,
+                "canonical_categories_enabled": True,
                 "raw_debug_removed_from_public_payload": True,
                 "rejected_sources_debug_hidden": True,
                 "internal_sources_debug_hidden": True,

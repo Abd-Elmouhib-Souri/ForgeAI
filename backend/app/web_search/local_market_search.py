@@ -2,7 +2,7 @@
 # backend/app/web_search/local_market_search.py
 # ============================================================
 #
-# LocalMarketSearchService V2 — Dynamic Context-Locked Web Search
+# LocalMarketSearchService V3 — Secondary Market Context Search
 #
 # Objectif :
 # - garder ton Bloc 3 existant ;
@@ -25,13 +25,16 @@ from urllib.parse import urlparse
 
 import httpx
 from bs4 import BeautifulSoup
-from ddgs import DDGS
+from app.web_search.search_gateway import search_gateway
 
 from app.services.domain_integrity_guard import (
     domain_integrity_guard,
     normalize_output_language,
 )
 from app.services.project_context_builder import project_context_builder
+from app.services.project_archetype_resolver import project_archetype_resolver
+from app.services.source_relevance_gate import source_relevance_gate
+from app.services.source_classifier import source_classifier
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +59,14 @@ BLOCKED_DOMAINS = (
     "youtube.com",
     "youtu.be",
     "pinterest.com",
+    "ebay.com",
+    "amazon.com",
+    "yandex.com",
+    "kaggle.com",
+    "translate.google.com",
 )
 
 BLOCKED_EXTENSIONS = (
-    ".pdf",
     ".jpg",
     ".jpeg",
     ".png",
@@ -199,12 +206,12 @@ class LocalMarketSearchService:
     def __init__(
         self,
         max_results_per_query: int = 5,
-        max_pages_to_fetch: int = 5,
+        max_pages_to_fetch: int = 6,
         max_text_chars: int = DEFAULT_MAX_TEXT_CHARS,
     ) -> None:
-        self.max_results_per_query = max_results_per_query
-        self.max_pages_to_fetch = max_pages_to_fetch
-        self.max_text_chars = max_text_chars
+        self.max_results_per_query = max(2, min(int(max_results_per_query or 5), 5))
+        self.max_pages_to_fetch = max(1, min(int(max_pages_to_fetch or 6), 8))
+        self.max_text_chars = max(1000, int(max_text_chars or DEFAULT_MAX_TEXT_CHARS))
 
     def build_queries(
         self,
@@ -213,141 +220,212 @@ class LocalMarketSearchService:
         description: str = "",
         project_context: Optional[Dict[str, Any]] = None,
     ) -> List[str]:
-        sector = str(sector or "").strip() or "startup"
-        region = str(region or "").strip() or "Tunisie"
-        description = str(description or "").strip()
+        """Build concise bilingual local-market queries.
 
-        anchor_terms = []
-        core_terms = []
-
-        if isinstance(project_context, dict):
-            anchor_terms = project_context.get("anchor_terms") or []
-            core_terms = project_context.get("core_terms") or []
-
-        project_terms = self._unique_strings(
-            [
-                str(term)
-                for term in list(anchor_terms) + list(core_terms)
-                if self._is_searchable_term(str(term))
-            ]
+        French and English discovery are both required for Tunisia because local
+        vendors frequently publish in one language only. Project Intelligence
+        remains the source of truth; domain profiles only add narrow synonyms.
+        """
+        sector = clean_text(sector or "")
+        region = clean_text(region or "")
+        region_normalized = normalize_text(region)
+        region_fr = "Tunisie" if region_normalized in {"tunisie", "tunisia"} else region
+        region_en = "Tunisia" if region_normalized in {"tunisie", "tunisia"} else region
+        context = self._ensure_archetype_context(
+            project_context or {},
+            sector=sector,
+            region=region,
+            description=description,
         )
+        intelligence = context.get("project_intelligence") or {}
+        planner = context.get("query_planner") or intelligence.get("query_planner") or {}
+        queries_by_intent = planner.get("queries_by_intent") or {}
 
-        short_context = " ".join(project_terms[:8])
-        long_context = " ".join(project_terms[:12])
-        description_short = " ".join(description.split()[:14])
-
-        queries: List[str] = []
-
-        if short_context:
-            queries.extend(
-                [
-                    f"{short_context} {region}",
-                    f"{short_context} marché {region}",
-                    f"{short_context} startup {region}",
-                    f"{short_context} logiciel SaaS {region}",
-                    f"{short_context} concurrents {region}",
-                    f"{short_context} competitors {region}",
-                    f"site:.tn {short_context}",
-                ]
-            )
-
-        if long_context:
-            queries.extend(
-                [
-                    f"{long_context} solution",
-                    f"{long_context} pricing",
-                    f"{long_context} market",
-                    f"{long_context} case study",
-                ]
-            )
-
-        queries.extend(
-            [
-                f"{sector} {region} marché startup",
-                f"{sector} {region} innovation transformation digitale",
-                f"{sector} {region} software SaaS",
-                f"{sector} {region} competitors",
-            ]
+        concepts = self._specific_context_terms(context)
+        primary = concepts[0] if concepts else self._compact_sector(sector)
+        secondary = concepts[1] if len(concepts) > 1 else ""
+        structured = (
+            context.get("structured_project_context")
+            or intelligence.get("structured_project_context")
+            or {}
         )
+        packet = context.get("agent_context_packet") or intelligence.get("agent_context_packet") or {}
+        archetype_context = (
+            context.get("archetype_context")
+            or packet.get("archetype_context")
+            or intelligence.get("archetype_context")
+            or {}
+        )
+        workflows = self._safe_term_list(
+            structured.get("priority_workflows")
+            or structured.get("use_cases")
+            or structured.get("use_case_terms")
+        )
+        workflow = workflows[0] if workflows else secondary
 
-        if description_short:
-            queries.append(f"{description_short} {region} marché")
-            queries.append(f"{description_short} {region} competitors")
-
-        cleaned_queries = []
-
-        for query in queries:
-            query = clean_text(query)
-
-            if not query:
-                continue
-
-            query = re.sub(
-                r"\b(None|non spécifié|not specified|null)\b",
-                " ",
-                query,
-                flags=re.IGNORECASE,
+        archetype_terms = self._safe_term_list(archetype_context.get("search_terms"))
+        semantic_text = normalize_text(
+            " ".join(
+                [sector, description, primary, secondary, workflow]
+                + concepts[:12]
+                + archetype_terms[:12]
+                + self._safe_term_list(archetype_context.get("priority_workflows"))[:4]
             )
-            query = clean_text(query)
+        )
+        candidates: List[str] = []
 
-            if query:
-                cleaned_queries.append(query)
+        archetype_queries = archetype_context.get("search_queries") or {}
+        for key in ("local_fr", "local_en", "all"):
+            candidates.extend(self._safe_term_list(archetype_queries.get(key))[:6])
 
-        return self._unique_strings(cleaned_queries)[:12]
+        # Narrow bilingual profiles fix low recall without weakening relevance.
+        if any(term in semantic_text for term in (
+            "workforce scheduling", "employee scheduling", "shift planning",
+            "attendance tracking", "human resources", "planning equipes",
+        )):
+            candidates.extend([
+                f"logiciel planning personnel {region_fr}",
+                f"logiciel gestion horaires employes {region_fr}",
+                f"application pointage presence {region_fr}",
+                f"SIRH planning conges {region_fr}",
+                f"workforce scheduling software {region_en}",
+                f"shift planning employee attendance {region_en}",
+            ])
+        elif any(term in semantic_text for term in (
+            "beekeeping", "beekeeper", "apiculture", "apiculteur",
+            "hive management", "gestion ruches", "honey traceability",
+        )):
+            candidates.extend([
+                f"logiciel apiculture gestion ruches {region_fr}",
+                f"application apiculteur suivi ruches {region_fr}",
+                f"tracabilite miel logiciel {region_fr}",
+                f"beekeeping hive management software {region_en}",
+                f"honey traceability software {region_en}",
+            ])
+        elif any(term in semantic_text for term in (
+            "taxi booking", "ride hailing", "e hailing", "taxi dispatch",
+            "reservation taxi", "réservation taxi", "commande taxi",
+            "mise en relation taxi chauffeur",
+        )):
+            candidates.extend([
+                f"application réservation taxi {region_fr}",
+                f"commander taxi application {region_fr}",
+                f"plateforme mise en relation taxi chauffeur {region_fr}",
+                f"taxi booking app {region_en}",
+                f"ride hailing {region_en}",
+                f"taxi dispatch platform {region_en}",
+            ])
+        elif any(term in semantic_text for term in (
+            "internship platform", "internship job board", "plateforme stages",
+            "offres de stage etudiants", "offres de stage étudiants",
+            "student recruitment",
+        )):
+            candidates.extend([
+                f"plateforme stages étudiants {region_fr}",
+                f"offres de stage entreprises {region_fr}",
+                f"site recrutement stages {region_fr}",
+                f"internship platform {region_en}",
+                f"student internship job board {region_en}",
+            ])
 
-    def search_urls(self, queries: List[str]) -> List[Dict[str, Any]]:
+        # Generic fallback is used only when the archetype resolver could not
+        # provide exact domain queries. This prevents broad sector terms such as
+        # "transport software" from displacing a precise ride-hailing query.
+        has_archetype_queries = any(
+            self._safe_term_list(archetype_queries.get(key))
+            for key in ("local_fr", "local_en", "all")
+        )
+        if not has_archetype_queries and primary:
+            candidates.extend([
+                f"{primary} logiciel {region}",
+                f"{primary} software {region}",
+                f"site:.tn {primary} logiciel" if normalize_text(region) in {"tunisie", "tunisia"} else f"{primary} local software {region}",
+                f"{primary} statistiques officielles {region}",
+                f"{primary} official statistics {region}",
+            ])
+        if not has_archetype_queries and workflow:
+            candidates.extend([
+                f"{workflow} logiciel {region}",
+                f"{workflow} software {region}",
+            ])
+
+        # Keep only the strongest short planner queries after the bilingual core.
+        for intent in (
+            "local_solutions",
+            "direct_competitors",
+            "market_sources",
+            "official_sources",
+            "field_validation",
+        ):
+            values = queries_by_intent.get(intent) or []
+            if isinstance(values, list):
+                candidates.extend(str(item) for item in values[:1])
+
+        cleaned: List[str] = []
+        for query in candidates:
+            value = self._normalize_query(query)
+            if 3 <= len(value.split()) <= 9:
+                cleaned.append(value)
+        return self._unique_strings(cleaned)[:6]
+
+    async def search_urls(self, queries: List[str]) -> List[Dict[str, Any]]:
+        """Search through the shared gateway and return unique URL candidates.
+
+        LocalMarketSearch stays a secondary market-context consumer. The gateway
+        owns provider selection, cache, circuit breaking and optional Gemini
+        fallback, which prevents this service from launching an independent DDGS
+        search path.
+        """
         results: List[Dict[str, Any]] = []
         seen_urls: set[str] = set()
 
         logger.info("[LocalMarketSearchService] Début recherche web dynamique")
 
-        with DDGS() as ddgs:
-            for query in queries:
-                logger.info("[LocalMarketSearchService] Query web : %s", query)
+        for query in queries:
+            logger.info("[LocalMarketSearchService] Query web : %s", query)
 
-                try:
-                    search_results = ddgs.text(
-                        query,
-                        max_results=self.max_results_per_query,
-                    )
+            try:
+                search_results = await search_gateway.search(
+                    query,
+                    min_results=min(4, self.max_results_per_query),
+                    allow_gemini_fallback=True,
+                )
+            except Exception as exc:
+                logger.error(
+                    "[LocalMarketSearchService] Erreur query='%s' : %s",
+                    query,
+                    str(exc)[:300],
+                )
+                continue
 
-                    for item in search_results:
-                        url = item.get("href") or item.get("url") or ""
-                        title = item.get("title") or ""
-                        snippet = item.get("body") or item.get("snippet") or ""
+            for item in search_results[: self.max_results_per_query]:
+                url = item.get("url") or item.get("href") or ""
+                title = item.get("title") or ""
+                snippet = item.get("snippet") or item.get("body") or ""
 
-                        if not is_probably_valid_url(url):
-                            continue
+                if not is_probably_valid_url(url):
+                    continue
 
-                        normalized_url = self._normalize_url(url)
+                normalized_url = self._normalize_url(url)
+                if normalized_url in seen_urls:
+                    continue
 
-                        if normalized_url in seen_urls:
-                            continue
-
-                        seen_urls.add(normalized_url)
-
-                        results.append(
-                            {
-                                "query": query,
-                                "title": title,
-                                "url": url,
-                                "domain": get_domain(url),
-                                "snippet": snippet,
-                            }
-                        )
-
-                except Exception as exc:
-                    logger.error(
-                        "[LocalMarketSearchService] Erreur query='%s' : %s",
-                        query,
-                        str(exc)[:300],
-                    )
+                seen_urls.add(normalized_url)
+                results.append(
+                    {
+                        "query": query,
+                        "title": title,
+                        "url": url,
+                        "domain": get_domain(url),
+                        "snippet": snippet,
+                        "provider": item.get("provider"),
+                    }
+                )
 
         logger.info(
             "[LocalMarketSearchService] URLs trouvées après filtrage : %s",
             len(results),
         )
-
         return results
 
     async def fetch_page_text(self, url: str) -> str:
@@ -370,7 +448,7 @@ class LocalMarketSearchService:
 
             response.raise_for_status()
 
-            soup = BeautifulSoup(response.text, "lxml")
+            soup = BeautifulSoup(response.text, "html.parser")
 
             for tag in soup(
                 [
@@ -426,38 +504,48 @@ class LocalMarketSearchService:
         project_context: Optional[Dict[str, Any]] = None,
         output_language: str = "fr",
     ) -> List[Dict[str, Any]]:
+        """Return canonical local candidates, not only direct competitors.
+
+        The previous implementation discarded a page as soon as the first
+        deterministic gate did not prove the exact workflow. That removed useful
+        local market evidence, ecosystem actors and adjacent solutions before the
+        canonical source ledger could classify them. V4 performs extraction and
+        optional AI classification first, then keeps every context-compatible
+        local candidate with an explicit public/internal/candidate status.
+        """
         language = normalize_output_language(output_language)
+        clean_region = clean_text(region or "")
 
         context = project_context or project_context_builder.build(
             title=self._title_from_description(description),
             description=description,
             industry=sector,
-            market_region=region,
+            market_region=clean_region,
             output_language=language,
             analysis_data={},
+        )
+        context = self._ensure_archetype_context(
+            context,
+            sector=sector,
+            region=clean_region,
+            description=description,
+            output_language=language,
         )
 
         queries = self.build_queries(
             sector=sector,
-            region=region,
+            region=clean_region,
             description=description,
             project_context=context,
         )
+        url_results = await self.search_urls(queries)
 
-        url_results = self.search_urls(queries)
-
-        enriched_results: List[Dict[str, Any]] = []
-
-        for result in url_results:
-            if len(enriched_results) >= self.max_pages_to_fetch:
-                break
-
-            url = result["url"]
-
+        raw_candidates: List[Dict[str, Any]] = []
+        for result in url_results[: self.max_pages_to_fetch]:
+            url = str(result.get("url") or "")
             logger.info("[LocalMarketSearchService] Extraction texte : %s", url)
 
             page_text = await self.fetch_page_text(url)
-
             fallback_text = clean_text(
                 " ".join(
                     [
@@ -466,10 +554,8 @@ class LocalMarketSearchService:
                     ]
                 )
             )
-
             text = page_text if len(page_text) >= MIN_TEXT_CHARS else fallback_text
-
-            if len(text) < 120:
+            if len(text) < 80:
                 continue
 
             matched_project_terms = self._matched_project_terms(
@@ -478,33 +564,85 @@ class LocalMarketSearchService:
                         str(result.get("title") or ""),
                         str(result.get("snippet") or ""),
                         text,
-                        str(result.get("url") or ""),
+                        url,
                     ]
                 ),
                 project_context=context,
             )
+            raw_candidates.append(
+                {
+                    **result,
+                    "extracted_text_preview": text[: self.max_text_chars],
+                    "text": text[: self.max_text_chars],
+                    "text_length": len(text),
+                    "text_extracted": len(page_text) >= MIN_TEXT_CHARS,
+                    "search_query": result.get("query"),
+                    "matched_project_terms": matched_project_terms,
+                    "candidate_origin": "local_market_search",
+                }
+            )
 
+        classified_candidates = await source_classifier.classify_sources(
+            raw_candidates,
+            context,
+        )
+
+        enriched_results: List[Dict[str, Any]] = []
+        for candidate in classified_candidates:
+            gate_decision = source_relevance_gate.evaluate_source(
+                source=candidate,
+                project_context=context,
+            )
             enriched_result = {
-                **result,
-                "text": text[: self.max_text_chars],
-                "text_length": len(text),
-                "matched_project_terms": matched_project_terms,
+                **candidate,
+                **gate_decision,
+                "local_source_type": gate_decision.get("source_type"),
             }
 
             if not self._is_relevant_to_project(enriched_result, context):
                 logger.info(
-                    "[LocalMarketSearchService] Source rejetée hors contexte : %s",
-                    url,
+                    "[LocalMarketSearchService][CandidateRejected] "
+                    "title=%s | ai_type=%s | role=%s | type=%s | region=%s "
+                    "| score=%s | reason=%s",
+                    enriched_result.get("title"),
+                    enriched_result.get("ai_source_type"),
+                    enriched_result.get("source_role"),
+                    enriched_result.get("source_type"),
+                    enriched_result.get("region_match"),
+                    enriched_result.get("source_relevance_score"),
+                    enriched_result.get("rejection_reason"),
                 )
                 continue
 
+            if enriched_result.get("public_display"):
+                candidate_status = "public"
+            elif enriched_result.get("internal_only"):
+                candidate_status = "internal"
+            else:
+                candidate_status = "candidate"
+
+            enriched_result["candidate_status"] = candidate_status
+            enriched_result["public_candidate"] = candidate_status == "public"
+            enriched_result["requires_canonical_recheck"] = candidate_status != "public"
+
+            logger.info(
+                "[LocalMarketSearchService][CandidateRetained] "
+                "title=%s | category=%s | role=%s | type=%s | region=%s "
+                "| score=%s | status=%s",
+                enriched_result.get("title"),
+                enriched_result.get("canonical_category"),
+                enriched_result.get("source_role"),
+                enriched_result.get("source_type"),
+                enriched_result.get("region_match"),
+                enriched_result.get("source_relevance_score"),
+                candidate_status,
+            )
             enriched_results.append(enriched_result)
 
         logger.info(
-            "[LocalMarketSearchService] Pages enrichies valides : %s",
+            "[LocalMarketSearchService] Candidats locaux conservés : %s",
             len(enriched_results),
         )
-
         return enriched_results
 
     def _is_relevant_to_project(
@@ -512,23 +650,59 @@ class LocalMarketSearchService:
         source: Dict[str, Any],
         project_context: Dict[str, Any],
     ) -> bool:
-        matched_terms = source.get("matched_project_terms") or []
+        if source.get("matched_forbidden_terms"):
+            return False
 
-        if len(matched_terms) >= 1:
-            return True
+        source_type = str(source.get("source_type") or "").lower()
+        ai_type = str(source.get("ai_source_type") or "").lower()
+        ai_confidence = float(source.get("ai_classifier_confidence") or 0)
+        region_match = str(source.get("region_match") or "").lower()
 
-        validation = domain_integrity_guard.validate_text(
-            text=" ".join(
-                [
-                    str(source.get("title") or ""),
-                    str(source.get("snippet") or ""),
-                    str(source.get("text") or ""),
-                ]
-            ),
-            project_context=project_context,
+        matched_terms = self._safe_term_list(source.get("matched_project_terms"))
+        domain_terms = self._safe_term_list(source.get("matched_domain_terms"))
+        sector_terms = self._safe_term_list(source.get("matched_sector_terms"))
+        target_terms = self._safe_term_list(source.get("matched_target_terms"))
+        use_case_terms = self._safe_term_list(source.get("matched_use_case_terms"))
+        solution_terms = self._safe_term_list(source.get("matched_solution_terms"))
+        all_matches = self._unique_strings(
+            matched_terms
+            + domain_terms
+            + sector_terms
+            + target_terms
+            + use_case_terms
+            + solution_terms
         )
 
-        return bool(validation.get("is_valid"))
+        if not all_matches:
+            return False
+
+        # Preserve local evidence and adjacent actors even when they cannot be
+        # presented as direct competitors. The canonical gate will decide the
+        # final public role later.
+        if region_match == "local":
+            if source_type != "irrelevant":
+                return True
+            return bool(
+                ai_confidence >= 0.60
+                and ai_type in {
+                    "adjacent_solution",
+                    "technology_benchmark",
+                    "market_evidence",
+                    "market_article",
+                    "official_source",
+                    "directory",
+                    "local_ecosystem",
+                }
+            )
+
+        if source_type == "technology_benchmark":
+            return bool(domain_terms or use_case_terms or solution_terms)
+
+        if source.get("public_display") or source.get("internal_only"):
+            return True
+
+        multiword = any(len(normalize_text(item).split()) >= 2 for item in all_matches)
+        return multiword or len(all_matches) >= 2
 
     def _matched_project_terms(
         self,
@@ -536,57 +710,161 @@ class LocalMarketSearchService:
         project_context: Dict[str, Any],
     ) -> List[str]:
         normalized_text = normalize_text(text)
-
-        terms = list(project_context.get("anchor_terms") or []) + list(
-            project_context.get("core_terms") or []
-        )
-
         matches: List[str] = []
-
-        for term in terms:
-            clean = normalize_text(str(term))
-
-            if len(clean) < 3:
+        for term in self._specific_context_terms(project_context):
+            clean = normalize_text(term)
+            if len(clean) < 4:
                 continue
-
-            if clean in normalized_text:
-                matches.append(str(term))
-
+            pattern = rf"(?<![a-z0-9]){re.escape(clean)}(?![a-z0-9])"
+            if re.search(pattern, normalized_text):
+                matches.append(term)
         return self._unique_strings(matches)[:20]
 
     def _is_searchable_term(self, term: str) -> bool:
         clean = normalize_text(term)
-
-        if len(clean) < 3:
+        if len(clean) < 4:
             return False
-
         blocked = {
-            "project",
-            "startup",
-            "business",
-            "model",
-            "solution",
-            "platform",
-            "application",
-            "software",
-            "market",
-            "marche",
-            "marché",
-            "local",
-            "global",
-            "tunisie",
-            "tunisia",
-            "simple",
-            "small",
-            "users",
-            "clients",
-            "user",
-            "client",
-            "management",
-            "digital",
+            "project", "startup", "business", "model", "solution", "platform",
+            "application", "software", "market", "marche", "local", "global",
+            "tunisie", "tunisia", "simple", "small", "users", "clients",
+            "user", "client", "management", "digital", "problem", "service",
+            "tool", "system", "saas", "pricing", "price", "monthly",
         }
+        tokens = [token for token in clean.split() if token not in blocked]
+        return bool(tokens)
 
-        return clean not in blocked
+    def _specific_context_terms(self, project_context: Dict[str, Any]) -> List[str]:
+        intelligence = project_context.get("project_intelligence") or {}
+        packet = project_context.get("agent_context_packet") or {}
+        structured = (
+            project_context.get("structured_project_context")
+            or intelligence.get("structured_project_context")
+            or {}
+        )
+        packet = project_context.get("agent_context_packet") or intelligence.get("agent_context_packet") or {}
+        archetype_context = (
+            project_context.get("archetype_context")
+            or packet.get("archetype_context")
+            or intelligence.get("archetype_context")
+            or {}
+        )
+        actors = archetype_context.get("actors") or structured.get("actors") or {}
+        raw_values = [
+            project_context.get("domain_concepts"),
+            project_context.get("search_concepts"),
+            project_context.get("use_case_terms"),
+            packet.get("domain_concepts"),
+            packet.get("search_concepts"),
+            packet.get("use_case_terms"),
+            structured.get("domain_concepts"),
+            structured.get("search_concepts"),
+            structured.get("use_case_terms"),
+            structured.get("priority_workflows"),
+            structured.get("vertical"),
+            structured.get("project_archetype"),
+            archetype_context.get("search_terms"),
+            archetype_context.get("priority_workflows"),
+            archetype_context.get("vertical"),
+            archetype_context.get("validation_unit"),
+            list(actors.values()) if isinstance(actors, dict) else actors,
+            project_context.get("must_match_terms"),
+        ]
+        result: List[str] = []
+        for value in raw_values:
+            values = value if isinstance(value, list) else [value]
+            for item in values:
+                if item and self._is_searchable_term(str(item)):
+                    result.append(clean_text(str(item)))
+        return self._unique_strings(result)[:24]
+
+    def _ensure_archetype_context(
+        self,
+        context: Dict[str, Any],
+        *,
+        sector: str,
+        region: str,
+        description: str,
+        output_language: str = "fr",
+    ) -> Dict[str, Any]:
+        merged = dict(context or {})
+        intelligence = dict(merged.get("project_intelligence") or {})
+        packet = dict(
+            merged.get("agent_context_packet")
+            or intelligence.get("agent_context_packet")
+            or {}
+        )
+        existing = (
+            merged.get("archetype_context")
+            or packet.get("archetype_context")
+            or intelligence.get("archetype_context")
+            or {}
+        )
+        if not existing or not (existing.get("search_queries") or {}).get("all"):
+            existing = project_archetype_resolver.resolve(
+                title=self._title_from_description(description),
+                description=description,
+                industry=sector,
+                target_region=region,
+                output_language=output_language,
+            )
+
+        structured = dict(
+            merged.get("structured_project_context")
+            or intelligence.get("structured_project_context")
+            or {}
+        )
+        structured.setdefault("project_archetype", existing.get("project_archetype"))
+        structured.setdefault("vertical", existing.get("vertical"))
+        structured.setdefault("actors", existing.get("actors") or {})
+        structured.setdefault("target_users", existing.get("target_users") or [])
+        structured.setdefault("priority_workflows", existing.get("priority_workflows") or [])
+        structured.setdefault("success_metrics", existing.get("success_metrics") or [])
+        structured.setdefault("risk_dimensions", existing.get("risk_dimensions") or [])
+
+        packet["archetype_context"] = existing
+        packet.setdefault("structured_project_context", structured)
+        intelligence["archetype_context"] = existing
+        intelligence.setdefault("structured_project_context", structured)
+        intelligence["agent_context_packet"] = packet
+
+        merged["archetype_context"] = existing
+        merged["structured_project_context"] = structured
+        merged["agent_context_packet"] = packet
+        merged["project_intelligence"] = intelligence
+        return merged
+
+    def _compact_sector(self, sector: str) -> str:
+        tokens = [
+            token for token in normalize_text(sector).split()
+            if self._is_searchable_term(token)
+        ]
+        return " ".join(tokens[:3])
+
+    def _normalize_query(self, query: str) -> str:
+        value = clean_text(query)
+        value = re.sub(
+            r"\b(None|non spécifié|not specified|null)\b",
+            " ",
+            value,
+            flags=re.IGNORECASE,
+        )
+        tokens: List[str] = []
+        seen = set()
+        for token in value.split():
+            key = normalize_text(token)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            tokens.append(token)
+        return clean_text(" ".join(tokens[:9]))
+
+    def _safe_term_list(self, value: Any) -> List[str]:
+        if isinstance(value, list):
+            return [str(item) for item in value if str(item).strip()]
+        if value:
+            return [str(value)]
+        return []
 
     def _title_from_description(self, description: str) -> str:
         text = str(description or "").strip()
