@@ -256,8 +256,8 @@ function evidenceTitle(
   language: ForgeLang
 ): string {
   const candidates = [
-    item.title,
     item.source_title,
+    item.title,
     item.name,
     item.vendor_name,
   ];

@@ -134,6 +134,53 @@ function confidenceLabel(
   return cleanText(value || "—", language);
 }
 
+function criterionLabel(key: string, language: ForgeLang): string {
+  const normalized = String(key || "").trim().toLowerCase();
+  const labels: Record<string, Record<ForgeLang, string>> = {
+    problem_solution_fit: {
+      fr: "Adéquation problème-solution",
+      en: "Problem-solution fit",
+    },
+    market_potential: {
+      fr: "Potentiel de marché",
+      en: "Market potential",
+    },
+    execution_feasibility: {
+      fr: "Faisabilité d’exécution",
+      en: "Execution feasibility",
+    },
+    business_model_strength: {
+      fr: "Solidité du modèle économique",
+      en: "Business model strength",
+    },
+    competitive_advantage: {
+      fr: "Avantage concurrentiel",
+      en: "Competitive advantage",
+    },
+    innovation: {
+      fr: "Innovation",
+      en: "Innovation",
+    },
+    scalability: {
+      fr: "Capacité de passage à l’échelle",
+      en: "Scalability",
+    },
+    financial_viability: {
+      fr: "Viabilité financière",
+      en: "Financial viability",
+    },
+    risk_management: {
+      fr: "Gestion des risques",
+      en: "Risk management",
+    },
+  };
+
+  return (
+    labels[normalized]?.[language] ||
+    cleanText(normalized.replaceAll("_", " "), language)
+  );
+}
+
 function verdictLabel(value?: string | null, language: ForgeLang = "fr"): string {
   const normalized = String(value || "")
     .trim()
@@ -750,7 +797,7 @@ export function StartupScoreSection({
           {Object.entries(breakdown).map(([key, value]) => (
             <MetricCard
               key={key}
-              label={cleanText(key.replaceAll("_", " "), lang)}
+              label={criterionLabel(key, lang)}
               value={formatScore(typeof value === "number" ? value : null)}
             />
           ))}
