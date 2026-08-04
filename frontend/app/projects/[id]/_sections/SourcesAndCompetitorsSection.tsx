@@ -40,16 +40,47 @@ function asArray<T = unknown>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
 }
 
+function canonicalSourceKey(source: SourceItem): string {
+  const rawUrl = String(source.url || "").trim();
+  if (rawUrl) {
+    try {
+      const parsed = new URL(rawUrl);
+      const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
+      const path = parsed.pathname.replace(/\/{2,}/g, "/").replace(/\/$/, "");
+      return `url:https://${host}${path}`;
+    } catch {
+      // Fall through to stable non-URL identifiers.
+    }
+  }
+
+  const sourceType = String(source.source_type || "").toLowerCase();
+  const sourceRole = String(source.source_role || "").toLowerCase();
+  const vendorKey = String(source.vendor_key || "").trim().toLowerCase();
+  const vendorScoped =
+    ["competitor", "pricing_page", "adjacent_solution", "technology_benchmark"].includes(sourceType) ||
+    [
+      "direct_competitor",
+      "adjacent_solution",
+      "regional_benchmark",
+      "international_benchmark",
+      "technology_provider",
+    ].includes(sourceRole);
+
+  if (vendorScoped && vendorKey) return `vendor:${vendorKey}`;
+
+  const canonicalId = String(source.canonical_source_id || "").trim().toLowerCase();
+  if (canonicalId) return `id:${canonicalId}`;
+
+  return String(source.title || "").trim().toLowerCase();
+}
+
 function uniqueSources(sources: SourceItem[]): SourceItem[] {
   const result: SourceItem[] = [];
   const seen = new Set<string>();
 
   for (const source of sources) {
-    const key = String(source.url || source.title || "").trim().toLowerCase();
-
-    if (!key) continue;
-    if (seen.has(key)) continue;
-
+    const key = canonicalSourceKey(source);
+    if (!key || seen.has(key)) continue;
     seen.add(key);
     result.push(source);
   }
@@ -62,7 +93,15 @@ function uniqueCompetitors(items: VerifiedCompetitor[]): VerifiedCompetitor[] {
   const seen = new Set<string>();
 
   for (const item of items) {
-    const key = String(item.url || item.source_url || item.name || item.title || "")
+    const key = String(
+      item.vendor_key ||
+        item.canonical_vendor_domain ||
+        item.url ||
+        item.source_url ||
+        item.name ||
+        item.title ||
+        ""
+    )
       .trim()
       .toLowerCase();
 
@@ -80,13 +119,13 @@ function confidenceText(value?: string | null, language: ForgeLang = "fr"): stri
   const normalized = String(value || "").toLowerCase();
 
   if (language === "en") {
-    if (normalized.includes("high") || normalized.includes("élev")) return "High";
+    if (normalized.includes("high") || normalized.includes("élev") || normalized.includes("elev")) return "High";
     if (normalized.includes("medium") || normalized.includes("moy")) return "Medium";
     if (normalized.includes("low") || normalized.includes("faib")) return "Low";
     return cleanText(value || "—", language);
   }
 
-  if (normalized.includes("high") || normalized.includes("élev")) return "Élevée";
+  if (normalized.includes("high") || normalized.includes("élev") || normalized.includes("elev")) return "Élevée";
   if (normalized.includes("medium") || normalized.includes("moy")) return "Moyenne";
   if (normalized.includes("low") || normalized.includes("faib")) return "Faible";
 
@@ -95,14 +134,24 @@ function confidenceText(value?: string | null, language: ForgeLang = "fr"): stri
 
 function sourceToCompetitor(source: SourceItem): VerifiedCompetitor {
   return {
-    name: source.title,
+    name: source.vendor_name || source.title,
     title: source.title,
     region: source.region_match,
+    region_match: source.region_match,
+    source_type: source.source_type,
+    source_role: source.source_role,
+    comparison_scope: source.comparison_scope,
+    technology_supplier: source.technology_supplier,
+    canonical_source_id: source.canonical_source_id,
     evidence: source.why_relevant || source.snippet,
     source_url: source.url,
     url: source.url,
     pricing: source.pricing_found ? "Pricing signal detected" : undefined,
     why_relevant: source.why_relevant,
+    vendor_key: source.vendor_key,
+    canonical_vendor_domain: source.canonical_vendor_domain,
+    sector_mismatch: source.sector_mismatch,
+    mismatch_terms: source.mismatch_terms,
   };
 }
 
@@ -207,9 +256,21 @@ export default function SourcesAndCompetitorsSection({
     return <EmptyState text={t.noSources} />;
   }
 
-  const allSourceCandidates = getPublicDisplaySources([
+  const canonicalLedger = (
+    competitiveRecord.canonical_source_ledger ||
+    sourcesRecord.canonical_source_ledger ||
+    {}
+  ) as Record<string, unknown>;
+  const canonicalLedgerRoles = (canonicalLedger.roles || {}) as Record<string, unknown>;
+  const canonicalLedgerSources = getPublicDisplaySources(
+    asArray<SourceItem>(canonicalLedger.sources)
+  );
+
+  const fallbackSourceCandidates = getPublicDisplaySources([
     ...asArray<SourceItem>(sourcesRecord.sources),
     ...asArray<SourceItem>(sourcesRecord.public_sources),
+    ...asArray<SourceItem>(sourcesRecord.technology_provider_sources),
+    ...asArray<SourceItem>(sourcesRecord.adjacent_solution_sources),
     ...asArray<SourceItem>(sourcesRecord.local_competitor_sources),
     ...asArray<SourceItem>(sourcesRecord.regional_competitor_sources),
     ...asArray<SourceItem>(sourcesRecord.international_benchmark_sources),
@@ -218,6 +279,8 @@ export default function SourcesAndCompetitorsSection({
 
     ...asArray<SourceItem>(competitiveRecord.sources),
     ...asArray<SourceItem>(competitiveRecord.public_sources),
+    ...asArray<SourceItem>(competitiveRecord.technology_provider_sources),
+    ...asArray<SourceItem>(competitiveRecord.adjacent_solution_sources),
     ...asArray<SourceItem>(competitiveRecord.local_competitor_sources),
     ...asArray<SourceItem>(competitiveRecord.regional_competitor_sources),
     ...asArray<SourceItem>(competitiveRecord.international_benchmark_sources),
@@ -225,36 +288,83 @@ export default function SourcesAndCompetitorsSection({
     ...asArray<SourceItem>(competitiveRecord.market_sources),
   ]);
 
-  const allSources = uniqueSources(allSourceCandidates);
+  const hasCanonicalLedger = canonicalLedgerSources.length > 0;
+  const allSources = uniqueSources(
+    hasCanonicalLedger ? canonicalLedgerSources : fallbackSourceCandidates
+  );
+
+  const numericSourceCounts = [
+    competitiveRecord.canonical_sources_count,
+    sourcesRecord.canonical_sources_count,
+    canonicalLedger.sources_count,
+  ]
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value) && value >= 0);
+  const retainedCount =
+    numericSourceCounts.length > 0 ? numericSourceCounts[0] : allSources.length;
 
   const localSourceItems = uniqueSources(
-    getPublicDisplaySources([
-      ...asArray<SourceItem>(sourcesRecord.local_competitor_sources),
-      ...asArray<SourceItem>(competitiveRecord.local_competitor_sources),
-    ])
+    getPublicDisplaySources(
+      hasCanonicalLedger
+        ? asArray<SourceItem>(canonicalLedgerRoles.direct_competitor)
+        : [
+            ...asArray<SourceItem>(sourcesRecord.local_competitor_sources),
+            ...asArray<SourceItem>(competitiveRecord.local_competitor_sources),
+          ]
+    ).filter((source) => String(source.region_match || "").toLowerCase() === "local")
   );
 
   const regionalSourceItems = uniqueSources(
-    getPublicDisplaySources([
-      ...asArray<SourceItem>(sourcesRecord.regional_competitor_sources),
-      ...asArray<SourceItem>(competitiveRecord.regional_competitor_sources),
-    ])
+    getPublicDisplaySources(
+      hasCanonicalLedger
+        ? asArray<SourceItem>(canonicalLedgerRoles.regional_benchmark)
+        : [
+            ...asArray<SourceItem>(sourcesRecord.regional_competitor_sources),
+            ...asArray<SourceItem>(competitiveRecord.regional_competitor_sources),
+          ]
+    )
   );
 
   const internationalSourceItems = uniqueSources(
-    getPublicDisplaySources([
-      ...asArray<SourceItem>(sourcesRecord.international_benchmark_sources),
-      ...asArray<SourceItem>(competitiveRecord.international_benchmark_sources),
-    ])
+    getPublicDisplaySources(
+      hasCanonicalLedger
+        ? asArray<SourceItem>(canonicalLedgerRoles.international_benchmark)
+        : [
+            ...asArray<SourceItem>(sourcesRecord.international_benchmark_sources),
+            ...asArray<SourceItem>(competitiveRecord.international_benchmark_sources),
+          ]
+    ).filter(
+      (source) => String(source.source_role || "").toLowerCase() !== "technology_provider"
+    )
+  );
+
+  const technologySourceItems = uniqueSources(
+    getPublicDisplaySources(
+      hasCanonicalLedger
+        ? asArray<SourceItem>(canonicalLedgerRoles.technology_provider)
+        : [
+            ...asArray<SourceItem>(sourcesRecord.technology_provider_sources),
+            ...asArray<SourceItem>(competitiveRecord.technology_provider_sources),
+          ]
+    )
   );
 
   const marketSources = uniqueSources(
-    getPublicDisplaySources([
-      ...asArray<SourceItem>(sourcesRecord.market_context_sources),
-      ...asArray<SourceItem>(sourcesRecord.market_sources),
-      ...asArray<SourceItem>(competitiveRecord.market_context_sources),
-      ...asArray<SourceItem>(competitiveRecord.market_sources),
-    ])
+    getPublicDisplaySources(
+      hasCanonicalLedger
+        ? [
+            ...asArray<SourceItem>(canonicalLedgerRoles.market_evidence),
+            ...asArray<SourceItem>(canonicalLedgerRoles.official_evidence),
+            ...asArray<SourceItem>(canonicalLedgerRoles.local_ecosystem),
+            ...asArray<SourceItem>(canonicalLedgerRoles.directory),
+          ]
+        : [
+            ...asArray<SourceItem>(sourcesRecord.market_context_sources),
+            ...asArray<SourceItem>(sourcesRecord.market_sources),
+            ...asArray<SourceItem>(competitiveRecord.market_context_sources),
+            ...asArray<SourceItem>(competitiveRecord.market_sources),
+          ]
+    )
   );
 
   const directFromCompetitive = uniqueCompetitors([
@@ -268,9 +378,14 @@ export default function SourcesAndCompetitorsSection({
       ? directFromCompetitive
       : localSourceItems.map(sourceToCompetitor);
 
-  const adjacent = asArray<VerifiedCompetitor>(
-    competitiveRecord.local_adjacent_solutions
-  );
+  const adjacent = uniqueCompetitors([
+    ...asArray<VerifiedCompetitor>(competitiveRecord.local_adjacent_solutions).filter(
+      (item) => String(item.region_match || item.region || "").toLowerCase() === "local"
+    ),
+    ...asArray<SourceItem>(canonicalLedgerRoles.adjacent_solution)
+      .filter((source) => String(source.region_match || "").toLowerCase() === "local")
+      .map(sourceToCompetitor),
+  ]);
 
   const regionalFromCompetitive = uniqueCompetitors(
     asArray<VerifiedCompetitor>(competitiveRecord.regional_competitors)
@@ -290,34 +405,60 @@ export default function SourcesAndCompetitorsSection({
       ? internationalFromCompetitive
       : internationalSourceItems.map(sourceToCompetitor);
 
+  const technologyFromCompetitive = uniqueCompetitors(
+    asArray<VerifiedCompetitor>(competitiveRecord.technology_providers)
+  );
+  const technologyProviders =
+    technologyFromCompetitive.length > 0
+      ? technologyFromCompetitive
+      : technologySourceItems.map(sourceToCompetitor);
+
   const displayedSources = marketSources.length
     ? marketSources.slice(0, 6)
     : allSources.slice(0, 6);
 
-  const sourceStatus =
-    String(sourcesRecord.status || competitiveRecord.status || "—") || "—";
+  const searchCoverage = String(
+    sourcesRecord.search_coverage ||
+      competitiveRecord.search_coverage ||
+      analysisData.search_coverage ||
+      sourcesRecord.discovery_confidence ||
+      "low"
+  );
 
-  const sourceConfidence =
-    String(
+  const evidenceConfidence = String(
+    sourcesRecord.overall_evidence_confidence ||
+      competitiveRecord.source_confidence ||
+      analysisData.overall_evidence_confidence ||
       sourcesRecord.confidence_level ||
-        competitiveRecord.confidence_level ||
-        "low"
-    ) || "low";
+      competitiveRecord.confidence_level ||
+      "low"
+  );
+
+  const relevanceConfidence = String(
+    sourcesRecord.source_relevance_confidence ||
+      competitiveRecord.source_relevance_confidence ||
+      analysisData.source_relevance_confidence ||
+      "low"
+  );
 
   return (
     <div className="space-y-5">
-      <div className="grid gap-3 md:grid-cols-5">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
         <MiniMetricLocal
-          label={t.sourcesCoverage}
-          value={cleanText(sourceStatus, reportLanguage)}
+          label={reportLanguage === "en" ? "Search coverage" : "Couverture de recherche"}
+          value={confidenceText(searchCoverage, reportLanguage)}
         />
         <MiniMetricLocal
-          label={t.sourceConfidence}
-          value={confidenceText(sourceConfidence, reportLanguage)}
+          label={reportLanguage === "en" ? "Evidence confidence" : "Confiance des preuves"}
+          value={confidenceText(evidenceConfidence, reportLanguage)}
+        />
+        <MiniMetricLocal
+          label={reportLanguage === "en" ? "Source relevance" : "Pertinence des sources"}
+          value={confidenceText(relevanceConfidence, reportLanguage)}
         />
         <MiniMetricLocal
           label={t.retainedSources}
-          value={String(allSources.length)}
+          value={String(retainedCount)}
         />
         <MiniMetricLocal
           label={context.directMetricLabel}
@@ -380,6 +521,22 @@ export default function SourcesAndCompetitorsSection({
           }
           language={reportLanguage}
         />
+
+        <CompetitorGroup
+          title={
+            reportLanguage === "en"
+              ? "Technology providers"
+              : "Fournisseurs technologiques"
+          }
+          competitors={technologyProviders}
+          fallbackItems={[]}
+          emptyText={
+            reportLanguage === "en"
+              ? "No technology provider retained."
+              : "Aucun fournisseur technologique retenu."
+          }
+          language={reportLanguage}
+        />
       </div>
 
       <div className="grid gap-5 md:grid-cols-2">
@@ -424,7 +581,9 @@ function CompetitorGroup({
 }) {
   return (
     <div className="rounded-3xl border border-slate-200/70 bg-white/75 p-5 shadow-sm">
-      <h4 className="font-black text-slate-950">{title}</h4>
+      <h4 className="font-black text-slate-950">
+        {cleanText(title, language)}
+      </h4>
 
       <div className="mt-4 space-y-3">
         {competitors.length > 0 ? (
@@ -438,7 +597,7 @@ function CompetitorGroup({
         ) : fallbackItems.length > 0 ? (
           <ListBlockLocal title="Summary" items={fallbackItems} language={language} />
         ) : (
-          <EmptyState text={emptyText} />
+          <EmptyState text={cleanText(emptyText, language)} />
         )}
       </div>
     </div>
@@ -460,7 +619,9 @@ function SourceGroup({
 }) {
   return (
     <div className="rounded-3xl border border-slate-200/70 bg-white/75 p-5 shadow-sm">
-      <h4 className="font-black text-slate-950">{title}</h4>
+      <h4 className="font-black text-slate-950">
+        {cleanText(title, language)}
+      </h4>
 
       <div className="mt-4 space-y-3">
         {sources.length > 0 ? (
@@ -474,7 +635,7 @@ function SourceGroup({
             />
           ))
         ) : (
-          <EmptyState text={emptyText} />
+          <EmptyState text={cleanText(emptyText, language)} />
         )}
       </div>
     </div>

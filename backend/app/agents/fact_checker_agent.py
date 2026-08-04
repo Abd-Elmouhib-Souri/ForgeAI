@@ -1928,8 +1928,11 @@ class FactCheckerAgent:
         self,
         source: Dict[str, Any],
     ) -> Dict[str, Any]:
+        best_title = self._evidence_title(source)
         return {
-            "title": self._evidence_title(source),
+            "title": best_title,
+            "source_title": best_title,
+            "name": best_title,
             "url": self._safe_text(source.get("url"), ""),
             "source_type": self._safe_text(source.get("source_type"), "source"),
             "region_match": self._safe_text(source.get("region_match"), "unknown"),
@@ -2053,6 +2056,21 @@ class FactCheckerAgent:
             self._safe_text(claim.get("category"), "general"): claim
             for claim in fallback_claims
         }
+        fallback_by_id = {
+            self._safe_text(claim.get("claim_id"), ""): claim
+            for claim in fallback_claims
+            if self._safe_text(claim.get("claim_id"), "")
+        }
+        fallback_by_path = {
+            self._safe_text(claim.get("path"), ""): claim
+            for claim in fallback_claims
+            if self._safe_text(claim.get("path"), "")
+        }
+        fallback_by_text = {
+            " ".join(self._safe_text(claim.get("claim"), "").casefold().split()): claim
+            for claim in fallback_claims
+            if self._safe_text(claim.get("claim"), "")
+        }
 
         repaired_claims: List[Dict[str, Any]] = []
         seen_categories = set()
@@ -2062,14 +2080,29 @@ class FactCheckerAgent:
                 claim.get("category"),
                 "general",
             )
+            claim_id = self._safe_text(claim.get("claim_id"), "")
+            path = self._safe_text(claim.get("path"), "")
+            text_key = " ".join(
+                self._safe_text(claim.get("claim"), "").casefold().split()
+            )
+            fallback_match = (
+                fallback_by_id.get(claim_id)
+                or fallback_by_path.get(path)
+                or fallback_by_text.get(text_key)
+                or fallback_by_category.get(category)
+            )
 
-            if not claim.get("claim"):
-                replacement = fallback_by_category.get(category)
-                if replacement:
-                    claim = deepcopy(replacement)
+            if not claim.get("claim") and fallback_match:
+                claim = deepcopy(fallback_match)
 
             if not claim.get("claim"):
                 continue
+
+            # Domain sanitization may preserve only a URL and discard the
+            # human-readable title. Evidence is deterministic and already
+            # validated upstream, so restore the complete fallback cards.
+            if fallback_match and fallback_match.get("evidence"):
+                claim["evidence"] = deepcopy(fallback_match["evidence"])
 
             claim["public_status"] = self._public_status_label(
                 self._safe_text(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from typing import Any, Iterable
@@ -109,6 +110,43 @@ class EvidenceLedger:
         "fdatabot.com",
         "www.fdatabot.com",
     }
+
+    SEMANTIC_STOPWORDS = {
+        "avec", "dans", "pour", "plus", "moins", "cette", "cela", "comme",
+        "ainsi", "afin", "entre", "sans", "sous", "vers", "leur", "leurs",
+        "notre", "votre", "une", "des", "les", "aux", "sur", "est", "sont",
+        "etre", "peut", "doit", "ajouter", "integrer", "developper",
+        "envisager", "permettre", "faciliter", "reduire", "solution",
+        "projet", "produit", "systeme", "technologie", "agriculture",
+        "agricole", "agricoles", "robot", "robots", "intelligente",
+        "intelligent", "tunisie", "tunisien", "tunisienne", "using", "with",
+        "from", "into", "that", "this", "these", "those", "their", "about",
+        "could", "should", "would", "allow", "enable", "develop", "integrate",
+        "add", "solution", "project", "product", "system", "technology",
+        "agriculture", "agricultural", "robot", "robots", "tunisia",
+    }
+
+    SOLUTION_CONCEPT_GROUPS: tuple[set[str], ...] = (
+        {
+            "recharge", "charging", "charge", "induction", "solaire",
+            "solar", "photovoltaic", "photovoltaïque", "station",
+        },
+        {
+            "pulverisation", "pulvérisation", "spraying", "spray",
+            "pesticide", "traitement", "intrants",
+        },
+        {
+            "crda", "commissariat", "ministere", "ministère",
+            "partenariat", "partnership", "institutionnel", "institutional",
+        },
+        {
+            "maintenance", "maintain", "support", "reparation", "réparation",
+        },
+        {
+            "lorawan", "connectivite", "connectivité", "wifi", "4g", "5g",
+            "telemetrie", "télémétrie",
+        },
+    )
 
     def build(self, analysis_data: dict[str, Any]) -> dict[str, Any]:
         data = analysis_data or {}
@@ -454,6 +492,23 @@ class EvidenceLedger:
             ]
 
         claim_text = self._text(spec.value)
+
+        if spec.category == "solution_hypothesis":
+            compatible = self._filter_semantically_compatible_sources(
+                claim_text,
+                compatible,
+                strict=True,
+            )
+        elif (
+            spec.path.startswith("market_study.market_trends[")
+            or spec.path.startswith("market_study.demand_drivers[")
+        ):
+            compatible = self._filter_semantically_compatible_sources(
+                claim_text,
+                compatible,
+                strict=False,
+            )
+
         precise = bool(self.PRECISE_NUMBER_RE.search(claim_text))
         internal_estimate = spec.path.startswith("financial_estimation.")
 
@@ -709,6 +764,99 @@ class EvidenceLedger:
             categories.append("pricing")
 
         return self._unique(categories)
+
+    @classmethod
+    def _normalize_semantic_text(cls, value: Any) -> str:
+        raw = unicodedata.normalize("NFKD", str(value or ""))
+        without_accents = "".join(
+            character
+            for character in raw
+            if not unicodedata.combining(character)
+        )
+        return " ".join(without_accents.casefold().split())
+
+    @classmethod
+    def _semantic_tokens(cls, value: Any) -> set[str]:
+        normalized = cls._normalize_semantic_text(value)
+        return {
+            token
+            for token in re.findall(r"[a-z0-9]{3,}", normalized)
+            if token not in cls.SEMANTIC_STOPWORDS
+        }
+
+    @classmethod
+    def _source_semantic_blob(cls, source: dict[str, Any]) -> str:
+        return cls._normalize_semantic_text(
+            " ".join(
+                str(source.get(key) or "")
+                for key in (
+                    "title",
+                    "snippet",
+                    "extracted_text_preview",
+                    "why_relevant",
+                    "source_type",
+                    "source_role",
+                    "canonical_category",
+                )
+            )
+        )
+
+    @classmethod
+    def _filter_semantically_compatible_sources(
+        cls,
+        claim_text: str,
+        sources: list[dict[str, Any]],
+        *,
+        strict: bool,
+    ) -> list[dict[str, Any]]:
+        """Keep evidence that addresses the precise claim, not only its broad category.
+
+        A technology benchmark does not automatically support every proposed
+        feature. Likewise, a generic market article does not automatically
+        support every trend. Distinctive claim concepts must be visible in the
+        source title, snippet, extracted preview or relevance explanation.
+        """
+
+        claim_normalized = cls._normalize_semantic_text(claim_text)
+        claim_tokens = cls._semantic_tokens(claim_text)
+        active_groups = [
+            {
+                cls._normalize_semantic_text(term)
+                for term in group
+                if cls._normalize_semantic_text(term)
+            }
+            for group in cls.SOLUTION_CONCEPT_GROUPS
+            if any(
+                cls._normalize_semantic_text(term) in claim_normalized
+                for term in group
+            )
+        ]
+
+        compatible: list[dict[str, Any]] = []
+        for source in sources:
+            source_blob = cls._source_semantic_blob(source)
+            source_tokens = cls._semantic_tokens(source_blob)
+
+            if active_groups and not all(
+                any(term in source_blob for term in group)
+                for group in active_groups
+            ):
+                continue
+
+            overlap = claim_tokens & source_tokens
+            has_distinctive_overlap = any(
+                len(token) >= 8 for token in overlap
+            )
+
+            if active_groups:
+                compatible.append(source)
+                continue
+
+            minimum_overlap = 2 if strict else 1
+            if len(overlap) >= minimum_overlap or has_distinctive_overlap:
+                compatible.append(source)
+
+        return cls._dedupe_sources(compatible)
 
     def _source_supports_numbers(
         self,
