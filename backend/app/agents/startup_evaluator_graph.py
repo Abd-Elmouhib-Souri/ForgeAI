@@ -18,6 +18,7 @@
 
 import logging
 import re
+import unicodedata
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 import warnings
@@ -1460,7 +1461,7 @@ class StartupEvaluatorGraph:
 
         Important :
         - financial_estimation est maintenant déterministe et sans LLM ;
-        - competitive_analysis possède dï¿½jï¿½ son propre strict relevance gate ;
+        - competitive_analysis possède déjà son propre strict relevance gate ;
         - donc le graph ne doit plus relogger de faux positifs pour ces rôles ;
         - les autres agents restent contrôlés par le sanitizer context-aware.
         """
@@ -1728,7 +1729,7 @@ class StartupEvaluatorGraph:
             "medicine stock",
             "stock medicine",
             "stock medicines",
-            "stock mï¿½dicaments",
+            "stock médicaments",
             "stock medicaments",
             "pharmasoft",
             "infopharma",
@@ -1770,27 +1771,23 @@ class StartupEvaluatorGraph:
             "doctor",
             "patient",
             "hospital",
-            "mï¿½decin",
+            "médecin",
             "medecin",
             "clinique",
-            "santï¿½",
+            "santé",
             "sante",
         }
 
         return any(marker in allowed_context for marker in healthcare_markers)
 
     def _normalize_contamination_text(self, value: Any) -> str:
-        text = str(value or "").lower()
-        text = text.replace("ï¿½", "'")
-        text = text.replace("ï¿½", "e")
-        text = text.replace("ï¿½", "e")
-        text = text.replace("ï¿½", "e")
-        text = text.replace("ï¿½", "a")
-        text = text.replace("ï¿½", "u")
-        text = text.replace("ï¿½", "c")
-        text = re.sub(r"\s+", " ", text).strip()
-
-        return text
+        text = str(value or "").replace("’", "'").lower()
+        text = "".join(
+            char
+            for char in unicodedata.normalize("NFKD", text)
+            if not unicodedata.combining(char)
+        )
+        return re.sub(r"\s+", " ", text).strip()
 
     def _is_empty_value(self, value: Any) -> bool:
         if value is None:

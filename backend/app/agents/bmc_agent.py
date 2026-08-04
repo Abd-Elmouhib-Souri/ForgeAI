@@ -1,833 +1,465 @@
-﻿# ============================================================
-# backend/app/agents/bmc_agent.py
-# ============================================================
-#
-# BMCAgent V5.0
-# Deterministic + Context-Locked + Language-Locked
-#
-# Objectifs :
-# - supprimer l'appel IA pour le Business Model Canvas ;
-# - réduire les quotas Gemini/Groq ;
-# - empêcher les anciennes contaminations de démo ;
-# - produire un BMC professionnel, stable et lié au projet réel ;
-# - respecter output_language fr/en ;
-# - ne jamais casser le pipeline Startup Evaluator ;
-# - garder les champs compatibles avec le rapport actuel.
-# ============================================================
-
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List
 
 from app.services.domain_integrity_guard import normalize_output_language
 
 
 class BMCAgent:
-    DEMO_OFFTOPIC_TERMS = {
-        "pharmacy delivery",
-        "medicine delivery",
-        "medicine stock",
-        "stock medicine",
-        "stock medicines",
-        "stock médicaments",
-        "stock medicaments",
-        "pharmasoft",
-        "infopharma",
-        "medstock",
-        "super app",
-        "orange max it",
-        "crypto trading",
-        "stock trading",
-        "forex trading",
-        "tiktok growth",
-        "tiktok analytics",
-        "food delivery",
-        "restaurant delivery",
-        "agrobot",
-        "greenhouse robot",
-        "robot agricole",
-        "network cell info lite",
-        "opera web browser",
-        "free ai short video generator",
-        "chrome web store skillbridge",
-    }
+    """Deterministic Business Model Canvas based on the canonical context."""
+
+    FORMAT = "bmc_v6_archetype_aware"
 
     async def run(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        output_language = normalize_output_language(state.get("output_language", "fr"))
-
+        language = normalize_output_language(state.get("output_language", "fr"))
         try:
             context = self._context(state)
-
-            result = self._build_bmc(
-                context=context,
-                output_language=output_language,
-            )
-
-            return self._final_public_sanitize(
-                data=result,
-                context=context,
-                output_language=output_language,
-            )
-
+            if context["project_archetype"] == "two_sided_marketplace":
+                result = self._marketplace_canvas(context, language)
+            elif context["project_archetype"] == "hardware_iot":
+                result = self._hardware_canvas(context, language)
+            else:
+                result = self._digital_canvas(context, language)
+            return self._finalize(result, context, language)
         except Exception:
-            return self._fallback(output_language)
+            return self._fallback(language)
 
-    # ========================================================
-    # Deterministic BMC builder
-    # ========================================================
+    # ------------------------------------------------------------------
+    # Canvas builders
+    # ------------------------------------------------------------------
 
-    def _build_bmc(
-        self,
-        *,
-        context: Dict[str, str],
-        output_language: str,
-    ) -> Dict[str, Any]:
-        title = context["title"]
+    def _hardware_canvas(self, context: Dict[str, Any], language: str) -> Dict[str, Any]:
+        users = context["target_user_list"]
+        actors = context["actors"]
+        primary = actors.get("field_operator") or actors.get("primary_user") or self._first(users)
+        payer = actors.get("payer") or context["economic_buyer"] or primary
+        maintainer = actors.get("technical_maintainer") or actors.get("operator_or_partner")
+        if not maintainer:
+            maintainer = "Technical maintainer or deployment partner" if language == "en" else "Responsable technique ou partenaire de déploiement"
+
+        workflow = self._core_action(context, language)
+        workflows = self._specific_workflows(context, language)
+        metrics = context["success_metrics"]
+        constraints = context["constraints"] or context["risk_dimensions"]
         sector = context["sector"]
         region = context["region"]
-        target_users = context["target_users"]
-        problem = context["problem"]
-        solution = context["solution"]
-        business_model = context["business_model"]
-        mvp_scope = context["mvp_scope"]
+        model = context["business_model"]
 
-        if output_language == "en":
-            customer_segments = [
-                f"Primary early adopters: {target_users}.",
-                f"Small organizations or professionals in {region} that repeatedly face the problem: {problem}.",
-                "Decision-makers who directly feel the operational cost of the current workflow.",
-                "Users willing to test a focused MVP before adopting a full platform.",
-            ]
-
-            value_propositions = [
-                f"{title} helps {target_users} solve a concrete operational problem: {problem}.",
-                "The product reduces manual work, fragmented tracking and repetitive coordination tasks.",
-                "The MVP focuses on one practical workflow instead of a broad generic platform.",
-                f"The solution is specialized for {sector} and adapted to the first market in {region}.",
-            ]
-
+        if language == "en":
+            segments = self._unique([
+                *[f"Operational user: {item}." for item in users[:4]],
+                f"Economic buyer: {payer}.",
+                f"Maintenance or deployment role: {maintainer}.",
+            ])
+            values = self._unique([
+                f"Automate or improve the field workflow: {workflow}.",
+                f"Detect and report operational anomalies earlier than the current process: {context['problem']}.",
+                "Provide a measurable, repeatable inspection result with alerts and traceability.",
+                "Reduce manual inspection effort only when the pilot proves accuracy, availability and acceptable maintenance.",
+            ])
             channels = [
-                "Direct outreach to the first target organizations.",
-                "Field interviews with decision-makers and operational users.",
-                "Pilot partnerships with a small number of early adopters.",
-                "Referrals from satisfied pilot users.",
-                "Simple demo page explaining the core workflow and measurable benefit.",
+                "On-site demonstrations in representative operating conditions",
+                "Paid pilots with a small number of launch customers",
+                f"Direct B2B sales to organizations in {sector or 'the target sector'}",
+                "Industry associations, cooperatives and technical integrators",
+                "Referrals based on measured pilot outcomes",
             ]
-
-            customer_relationships = [
-                "High-touch onboarding during the first pilot phase.",
-                "Direct feedback loops with early users.",
-                "Support focused on helping users complete the core workflow quickly.",
-                "Continuous improvement based on usage and adoption data.",
+            relationships = [
+                "Guided installation and operator training",
+                "Preventive and corrective maintenance contract",
+                "Performance dashboard and periodic pilot review",
+                "Technical support with incident, recovery and replacement procedures",
             ]
-
-            revenue_streams = [
-                "Pilot fee for early validation when possible.",
-                "Monthly subscription adapted to the size of the target user.",
-                "Tiered pricing based on usage, number of users, or active records.",
-                "Optional setup or onboarding fee for organizations that need support.",
+            revenues = self._unique([
+                model,
+                "Robot lease or paid deployment",
+                "Hardware sale with installation",
+                "Maintenance and support contract",
+                "Recurring dashboard, alerts or analytics subscription",
+            ])
+            resources = [
+                "Validated mechanical and electronic design",
+                "Firmware, navigation, AI models and dashboard software",
+                "Domain-specific training and validation dataset",
+                "Field test results and acceptance criteria",
+                "Bill of materials, suppliers and maintenance documentation",
             ]
-
-            key_resources = [
-                "A simple and reliable MVP covering the core workflow.",
-                "User feedback from interviews and pilots.",
-                "Clear understanding of the target segment and its budget limits.",
-                "Product documentation and onboarding material.",
-                "Basic analytics to measure usage, retention and workflow completion.",
+            activities = self._unique([
+                *workflows,
+                "Prototype integration and field validation",
+                "Reliability, safety, recovery and environmental testing",
+                "Dataset collection, annotation and model evaluation",
+                "Manufacturing, installation and deployment quality control",
+                "Maintenance, incident analysis and product iteration",
+            ])
+            partners = self._hardware_partners(context, language)
+            costs = [
+                "Components, chassis, power system and assembly",
+                "Camera, sensors, edge computing and connectivity",
+                "Firmware, AI, dashboard and data infrastructure",
+                "Testing, installation, training and pilot operations",
+                "Maintenance, spare parts, warranty reserve and support",
+                "Certification or safety work when required",
             ]
-
-            key_activities = [
-                "Validate the problem with real target users.",
-                "Build and maintain the MVP scope.",
-                "Run pilots and collect usage feedback.",
-                "Improve onboarding and reduce friction.",
-                "Test pricing and willingness to pay.",
-            ]
-
-            key_partnerships = [
-                f"Pilot partners in {region}.",
-                f"Professionals or organizations active in {sector}.",
-                "Early adopters who can provide feedback and referrals.",
-                "Technical partners only if they reduce delivery cost or speed up validation.",
-            ]
-
-            cost_structure = [
-                "MVP development and maintenance.",
-                "Hosting, database and basic infrastructure.",
-                "Customer support and onboarding during pilots.",
-                "Prospection, interviews and pilot acquisition.",
-                "Product improvements based on real user feedback.",
-            ]
-
             summary = (
-                f"The Business Model Canvas for {title} should remain focused on a narrow first segment: {target_users}. "
-                f"The model is strongest if the MVP proves that solving '{problem}' creates enough value to support {business_model}."
+                f"{context['title']} is a hardware/IoT business. Its model becomes credible only when one deployment reliably performs "
+                f"'{workflow}', creates measurable value for {primary or 'the field operator'} and remains maintainable at a viable total cost."
             )
-
-            business_model_note = (
-                f"The recommended model is to start with pilots, then move toward {business_model} only after adoption and willingness to pay are validated."
-            )
-
-            validation_priorities = [
-                "Confirm that the target users face the problem frequently.",
-                "Confirm that the MVP scope is enough to create value.",
-                "Measure weekly usage during a pilot.",
-                "Test willingness to pay with real pricing conversations.",
-                "Identify the smallest paid feature that users understand immediately.",
-            ]
-
-            risk_note = (
-                "The main business risk is building too many features before proving that the first segment will adopt and pay."
-            )
-
+            note = f"The current revenue hypothesis is {model}. Compare sale, lease and service-bundle offers with the real budget owner."
+            priorities = self._unique([
+                "Confirm the economic buyer and purchasing process",
+                "Measure the current manual baseline and the value created by the robot",
+                "Validate deployed unit cost and maintenance burden",
+                *metrics,
+                *constraints,
+            ])
+            risk_note = "The main risk is a functional prototype whose reliability, maintenance burden or deployed cost prevents repeated adoption."
         else:
-            customer_segments = [
-                f"Premiers adoptants principaux : {target_users}.",
-                f"Petites organisations ou professionnels en {region} qui rencontrent souvent ce problème : {problem}.",
-                "Décideurs qui ressentent directement le coût opérationnel du flux actuel.",
-                "Utilisateurs prêts à tester un MVP ciblé avant d’adopter une plateforme complète.",
-            ]
-
-            value_propositions = [
-                f"{title} aide {target_users} à résoudre un problème opérationnel concret : {problem}.",
-                "Le produit réduit le travail manuel, le suivi dispersé et les tâches répétitives de coordination.",
-                "Le MVP se concentre sur un flux pratique au lieu d’une plateforme générique trop large.",
-                f"La solution est spécialisée pour {sector} et adaptée au premier marché en {region}.",
-            ]
-
+            segments = self._unique([
+                *[f"Utilisateur opérationnel : {item}." for item in users[:4]],
+                f"Acheteur économique : {payer}.",
+                f"Maintenance ou déploiement : {maintainer}.",
+            ])
+            values = self._unique([
+                f"Automatiser ou améliorer le workflow terrain : {workflow}.",
+                f"Détecter et signaler les anomalies plus tôt que le processus actuel : {context['problem']}.",
+                "Fournir un résultat d’inspection mesurable et répétable avec alertes et traçabilité.",
+                "Réduire l’effort d’inspection manuelle seulement si le pilote prouve précision, disponibilité et maintenance acceptable.",
+            ])
             channels = [
-                "Prospection directe auprès des premières organisations ciblées.",
-                "Entretiens terrain avec les décideurs et utilisateurs opérationnels.",
-                "Partenariats pilotes avec un petit nombre de premiers adoptants.",
-                "Recommandations par les premiers utilisateurs satisfaits.",
-                "Page de démonstration simple expliquant le flux principal et le bénéfice mesurable.",
+                "Démonstrations sur site dans des conditions représentatives",
+                "Pilotes payants avec un nombre limité de clients de lancement",
+                f"Vente B2B directe aux organisations du secteur {sector or 'ciblé'}",
+                "Associations professionnelles, coopératives et intégrateurs techniques",
+                "Recommandations fondées sur les résultats mesurés du pilote",
             ]
-
-            customer_relationships = [
-                "Onboarding accompagné pendant la première phase pilote.",
-                "Boucles de feedback directes avec les premiers utilisateurs.",
-                "Support centré sur la réussite rapide du flux principal.",
-                "Amélioration continue basée sur l’usage réel et les données d’adoption.",
+            relationships = [
+                "Installation accompagnée et formation des opérateurs",
+                "Contrat de maintenance préventive et corrective",
+                "Tableau de bord de performance et revues périodiques du pilote",
+                "Support technique avec procédures d’incident, reprise et remplacement",
             ]
-
-            revenue_streams = [
-                "Frais de pilote lorsque c’est possible.",
-                "Abonnement mensuel adapté à la taille de la cible.",
-                "Tarification par niveau selon l’usage, le nombre d’utilisateurs ou les dossiers actifs.",
-                "Frais optionnels de configuration ou d’accompagnement pour les organisations qui en ont besoin.",
+            revenues = self._unique([
+                model,
+                "Location du robot ou déploiement pilote payant",
+                "Vente du matériel avec installation",
+                "Contrat de maintenance et support",
+                "Abonnement au tableau de bord, aux alertes ou aux analyses",
+            ])
+            resources = [
+                "Conception mécanique et électronique validée",
+                "Firmware, navigation, modèles IA et logiciel du tableau de bord",
+                "Jeu de données métier pour entraînement et validation",
+                "Résultats d’essais terrain et critères d’acceptation",
+                "Nomenclature, fournisseurs et documentation de maintenance",
             ]
-
-            key_resources = [
-                "Un MVP simple et fiable couvrant le flux principal.",
-                "Feedback utilisateur provenant des entretiens et pilotes.",
-                "Compréhension claire du segment cible et de ses limites budgétaires.",
-                "Documentation produit et support d’onboarding.",
-                "Analytics basiques pour mesurer l’usage, la rétention et la complétion du flux.",
+            activities = self._unique([
+                *workflows,
+                "Intégration du prototype et validation terrain",
+                "Tests de fiabilité, sécurité, reprise et environnement",
+                "Collecte, annotation et évaluation des données",
+                "Fabrication, installation et contrôle qualité du déploiement",
+                "Maintenance, analyse des incidents et itérations produit",
+            ])
+            partners = self._hardware_partners(context, language)
+            costs = [
+                "Composants, châssis, alimentation et assemblage",
+                "Caméra, capteurs, calcul embarqué et connectivité",
+                "Firmware, IA, tableau de bord et infrastructure de données",
+                "Essais, installation, formation et opérations du pilote",
+                "Maintenance, pièces de rechange, réserve de garantie et support",
+                "Certification ou sécurité lorsque nécessaire",
             ]
-
-            key_activities = [
-                "Valider le problème avec de vrais utilisateurs ciblés.",
-                "Construire et maintenir le périmètre MVP.",
-                "Lancer des pilotes et collecter les retours d’usage.",
-                "Améliorer l’onboarding et réduire les frictions.",
-                "Tester le prix et la volonté de payer.",
-            ]
-
-            key_partnerships = [
-                f"Partenaires pilotes en {region}.",
-                f"Professionnels ou organisations actifs dans {sector}.",
-                "Premiers adoptants capables de donner du feedback et des recommandations.",
-                "Partenaires techniques seulement s’ils réduisent le coût ou accélèrent la validation.",
-            ]
-
-            cost_structure = [
-                "Développement et maintenance du MVP.",
-                "Hébergement, base de données et infrastructure basique.",
-                "Support client et onboarding pendant les pilotes.",
-                "Prospection, entretiens et acquisition de pilotes.",
-                "Améliorations produit basées sur les retours utilisateurs réels.",
-            ]
-
             summary = (
-                f"Le Business Model Canvas de {title} doit rester concentré sur un premier segment étroit : {target_users}. "
-                f"Le modèle devient solide si le MVP prouve que résoudre « {problem} » crée assez de valeur pour soutenir {business_model}."
+                f"{context['title']} est un modèle matériel/IoT. Il devient crédible lorsqu’un déploiement réalise de façon fiable "
+                f"« {workflow} », crée une valeur mesurable pour {primary or 'l’opérateur terrain'} et reste maintenable à un coût total viable."
             )
+            note = f"L’hypothèse de revenus actuelle est : {model}. Comparer vente, location et offre groupée avec le véritable détenteur du budget."
+            priorities = self._unique([
+                "Confirmer l’acheteur économique et le processus d’achat",
+                "Mesurer la situation manuelle actuelle et la valeur créée par le robot",
+                "Valider le coût unitaire déployé et la charge de maintenance",
+                *metrics,
+                *constraints,
+            ])
+            risk_note = "Le risque principal est un prototype fonctionnel dont la fiabilité, la maintenance ou le coût déployé bloque l’adoption répétée."
 
-            business_model_note = (
-                f"Le modèle recommandé est de commencer par des pilotes, puis d’évoluer vers {business_model} seulement après validation de l’adoption et de la volonté de payer."
-            )
+        return self._result(
+            segments=segments,
+            values=values,
+            channels=channels,
+            relationships=relationships,
+            revenues=revenues,
+            resources=resources,
+            activities=activities,
+            partners=partners,
+            costs=costs,
+            summary=summary,
+            note=note,
+            priorities=priorities,
+            risk_note=risk_note,
+            risk_level="high",
+        )
 
-            validation_priorities = [
-                "Confirmer que les utilisateurs ciblés rencontrent souvent le problème.",
-                "Confirmer que le périmètre MVP suffit à créer de la valeur.",
-                "Mesurer l’usage hebdomadaire pendant un pilote.",
-                "Tester la volonté de payer avec de vraies discussions de prix.",
-                "Identifier la plus petite fonctionnalité payante immédiatement compréhensible.",
-            ]
+    def _marketplace_canvas(self, context: Dict[str, Any], language: str) -> Dict[str, Any]:
+        actors = context["actors"]
+        users = context["target_user_list"]
+        demand = actors.get("demand_side") or actors.get("primary_user") or self._first(users)
+        supply = actors.get("supply_side") or (users[1] if len(users) > 1 else "")
+        operator = actors.get("operator_or_partner") or (users[2] if len(users) > 2 else "")
+        payer = actors.get("payer") or context["economic_buyer"] or demand
+        core = self._core_action(context, language)
+        model = context["business_model"]
+        region = context["region"]
 
-            risk_note = (
-                "Le principal risque business est de construire trop de fonctionnalités avant de prouver que le premier segment adopte et paie."
-            )
+        if language == "en":
+            segments = [f"Demand side: {demand}.", f"Supply side: {supply or 'service providers'}.", f"Platform or ecosystem operator: {operator or 'marketplace operator'}.", f"Paying participant: {payer}."]
+            values = [f"For {demand}: complete {core} with reliable availability and confirmation.", f"For {supply or 'providers'}: receive relevant demand with transparent economics.", "For the operator: improve liquidity, quality, trust and incident handling.", f"Solve the launch-market problem: {context['problem']}."]
+            channels = ["Focused launch by geography, segment and time window", "Direct supply recruitment and onboarding", "Local digital acquisition and partnerships", "Referral after completed transactions"]
+            relationships = ["Real-time status and support", "Identity, trust, rating and dispute mechanisms", "Supply onboarding and operational communication"]
+            revenues = self._unique([model, "Commission or service fee per completed transaction", "Professional provider plan after liquidity is proven"])
+            resources = ["Matching and transaction infrastructure", "Active demand and supply in the same place and time", "Trust, safety, support and compliance processes", "Liquidity and contribution analytics"]
+            activities = ["Recruit and activate both sides", "Operate matching, cancellations and incidents", "Measure completion, repeat use and unit economics", "Validate local regulation and partner responsibilities"]
+            partners = [f"Local supply and ecosystem partners in {region or 'the launch market'}", "Payment, identity, mapping and communication providers", "Regulatory or professional stakeholders when required"]
+            costs = ["Product and matching infrastructure", "Supply acquisition and incentives", "Support, trust and safety", "Payment, mapping, messaging and compliance"]
+            summary = f"{context['title']} is a two-sided marketplace. It must prove simultaneous demand, supply, trust and positive economics around {core}."
+            note = f"The revenue hypothesis is {model}; measure it after incentives, support, payment and compliance costs."
+            priorities = context["evidence_needs"] or ["Demand frequency", "Supply availability", "Transaction completion", "Repeat use", "Contribution margin"]
+            risk_note = "The main risk is liquidity failure: demand and supply may not be active in the same place and time."
+        else:
+            segments = [f"Côté demande : {demand}.", f"Côté offre : {supply or 'prestataires'}.", f"Opérateur de plateforme ou écosystème : {operator or 'opérateur de marketplace'}.", f"Participant payeur : {payer}."]
+            values = [f"Pour {demand} : réaliser {core} avec disponibilité et confirmation fiables.", f"Pour {supply or 'les prestataires'} : recevoir une demande pertinente avec une économie transparente.", "Pour l’opérateur : améliorer liquidité, qualité, confiance et gestion des incidents.", f"Résoudre le problème du marché de lancement : {context['problem']}."]
+            channels = ["Lancement concentré par zone, segment et plage horaire", "Recrutement et onboarding directs du côté offre", "Acquisition numérique locale et partenariats", "Recommandation après les transactions réussies"]
+            relationships = ["Suivi et support en temps réel", "Identité, confiance, notation et gestion des litiges", "Onboarding et communication opérationnelle du côté offre"]
+            revenues = self._unique([model, "Commission ou frais de service par transaction terminée", "Offre professionnelle après preuve de liquidité"])
+            resources = ["Infrastructure de mise en relation et transaction", "Demande et offre actives au même endroit et au même moment", "Processus de confiance, sécurité, support et conformité", "Analytics de liquidité et contribution"]
+            activities = ["Recruter et activer les deux côtés", "Opérer mise en relation, annulations et incidents", "Mesurer réalisation, répétition et économie unitaire", "Valider la réglementation locale et les responsabilités"]
+            partners = [f"Partenaires locaux côté offre et écosystème en {region or 'marché de lancement'}", "Prestataires de paiement, identité, cartographie et communication", "Acteurs réglementaires ou professionnels si nécessaire"]
+            costs = ["Produit et infrastructure de mise en relation", "Acquisition et incitations côté offre", "Support, confiance et sécurité", "Paiement, cartographie, messagerie et conformité"]
+            summary = f"{context['title']} est une marketplace à deux côtés. Elle doit prouver simultanément demande, offre, confiance et économie positive autour de {core}."
+            note = f"L’hypothèse de revenus est {model}; la mesurer après incitations, support, paiement et conformité."
+            priorities = context["evidence_needs"] or ["Fréquence de la demande", "Disponibilité de l’offre", "Réalisation de la transaction", "Usage répété", "Marge contributive"]
+            risk_note = "Le risque principal est l’échec de liquidité : demande et offre peuvent ne pas être actives au même endroit et au même moment."
 
-        customer_segments = self._unique(customer_segments)
-        value_propositions = self._unique(value_propositions)
-        channels = self._unique(channels)
-        customer_relationships = self._unique(customer_relationships)
-        revenue_streams = self._unique(revenue_streams)
-        key_resources = self._unique(key_resources)
-        key_activities = self._unique(key_activities)
-        key_partnerships = self._unique(key_partnerships)
-        cost_structure = self._unique(cost_structure)
-        validation_priorities = self._unique(validation_priorities)
+        return self._result(segments=segments, values=values, channels=channels, relationships=relationships, revenues=revenues, resources=resources, activities=activities, partners=partners, costs=costs, summary=summary, note=note, priorities=priorities, risk_note=risk_note, risk_level="high")
 
+    def _digital_canvas(self, context: Dict[str, Any], language: str) -> Dict[str, Any]:
+        users = context["target_user_list"]
+        primary = self._first(users) or ("Primary user" if language == "en" else "Utilisateur principal")
+        payer = context["actors"].get("payer") or context["economic_buyer"] or primary
+        core = self._core_action(context, language)
+        model = context["business_model"]
+        region = context["region"]
+        regulated = context["project_archetype"] == "regulated_service"
+
+        if language == "en":
+            segments = self._unique([*[f"Target user: {item}." for item in users[:5]], f"Paying customer: {payer}."])
+            values = [f"Help {primary} complete {core} with less friction.", f"Solve the stated problem: {context['problem']}.", f"Deliver the proposed mechanism: {context['solution']}.", "Make the result measurable through activation, successful completion and repeat use."]
+            channels = ["Direct outreach to the narrow launch segment", "Targeted digital acquisition", "Pilot partnerships", "Referral after successful use"]
+            relationships = ["Clear onboarding", "In-product guidance and support", "Status, recovery and feedback loops", "Privacy and trust controls" if regulated else "Usage feedback and continuous improvement"]
+            revenues = self._unique([model, "Paid pilot or setup fee", "Subscription or usage fee after repeat value is proven"])
+            resources = ["Reliable core product", "User and workflow analytics", "Operational support and documentation", "Validated domain data and integrations where required"]
+            activities = ["Validate the core action", "Improve activation, conversion and retention", "Operate support and recovery", "Test pricing and willingness to pay"]
+            partners = [f"Relevant launch and distribution partners in {region or 'the target market'}", "Payment, identity, infrastructure or domain providers as required"]
+            costs = ["Product development", "Cloud and third-party services", "Acquisition and onboarding", "Operations, support and compliance"]
+            summary = f"{context['title']} must prove that users complete and repeat {core}, and that the payer accepts {model}."
+            note = "The model remains a hypothesis until conversion, retention and delivery cost are measured."
+            priorities = context["evidence_needs"] or ["Successful core action", "Repeat use", "Paid conversion", "Delivery cost", "Retention"]
+            risk_note = "The main risk is weak repeat value or acquisition and delivery costs above revenue."
+        else:
+            segments = self._unique([*[f"Utilisateur cible : {item}." for item in users[:5]], f"Client payeur : {payer}."])
+            values = [f"Aider {primary} à réaliser {core} avec moins de friction.", f"Résoudre le problème déclaré : {context['problem']}.", f"Livrer le mécanisme proposé : {context['solution']}.", "Rendre le résultat mesurable par activation, réalisation réussie et usage répété."]
+            channels = ["Prospection directe du segment de lancement", "Acquisition numérique ciblée", "Partenariats pilotes", "Recommandation après un usage réussi"]
+            relationships = ["Onboarding clair", "Guidage dans le produit et support", "Statut, reprise et boucles de feedback", "Contrôles de confidentialité et confiance" if regulated else "Feedback d’usage et amélioration continue"]
+            revenues = self._unique([model, "Pilote payant ou frais de configuration", "Abonnement ou frais d’usage après preuve de valeur répétée"])
+            resources = ["Produit principal fiable", "Analytics utilisateurs et workflow", "Support opérationnel et documentation", "Données métier et intégrations validées si nécessaires"]
+            activities = ["Valider l’action principale", "Améliorer activation, conversion et rétention", "Opérer support et reprise", "Tester le prix et la volonté de payer"]
+            partners = [f"Partenaires de lancement et distribution en {region or 'marché cible'}", "Prestataires de paiement, identité, infrastructure ou métier selon le besoin"]
+            costs = ["Développement produit", "Cloud et services tiers", "Acquisition et onboarding", "Opérations, support et conformité"]
+            summary = f"{context['title']} doit prouver que les utilisateurs réalisent et répètent {core}, et que le payeur accepte {model}."
+            note = "Le modèle reste une hypothèse tant que conversion, rétention et coût de réalisation ne sont pas mesurés."
+            priorities = context["evidence_needs"] or ["Action principale réussie", "Usage répété", "Conversion payante", "Coût de réalisation", "Rétention"]
+            risk_note = "Le risque principal est une faible valeur répétée ou des coûts d’acquisition et de réalisation supérieurs aux revenus."
+
+        return self._result(segments=segments, values=values, channels=channels, relationships=relationships, revenues=revenues, resources=resources, activities=activities, partners=partners, costs=costs, summary=summary, note=note, priorities=priorities, risk_note=risk_note, risk_level="high" if regulated else "medium")
+
+    # ------------------------------------------------------------------
+    # Contract and context
+    # ------------------------------------------------------------------
+
+    def _result(self, *, segments: List[str], values: List[str], channels: List[str], relationships: List[str], revenues: List[str], resources: List[str], activities: List[str], partners: List[str], costs: List[str], summary: str, note: str, priorities: List[str], risk_note: str, risk_level: str) -> Dict[str, Any]:
+        segments = self._unique(segments); values = self._unique(values); channels = self._unique(channels)
+        relationships = self._unique(relationships); revenues = self._unique(revenues); resources = self._unique(resources)
+        activities = self._unique(activities); partners = self._unique(partners); costs = self._unique(costs)
         return {
-            "format": "bmc_v5_context_locked_deterministic",
+            "format": self.FORMAT,
             "status": "completed",
             "summary": summary,
-
-            # Standard Business Model Canvas blocks
-            "customer_segments": customer_segments,
-            "value_propositions": value_propositions,
+            "customer_segments": segments,
+            "value_propositions": values,
             "channels": channels,
-            "customer_relationships": customer_relationships,
-            "revenue_streams": revenue_streams,
-            "key_resources": key_resources,
-            "key_activities": key_activities,
-            "key_partnerships": key_partnerships,
-            "cost_structure": cost_structure,
-
-            # Aliases compatibles avec différents frontends
-            "value_proposition": value_propositions,
-            "key_partners": key_partnerships,
-            "costs": cost_structure,
-            "customers": customer_segments,
-            "relationships": customer_relationships,
-            "revenues": revenue_streams,
-
-            "business_model_note": business_model_note,
-            "validation_priorities": validation_priorities,
+            "customer_relationships": relationships,
+            "revenue_streams": revenues,
+            "key_resources": resources,
+            "key_activities": activities,
+            "key_partnerships": partners,
+            "cost_structure": costs,
+            "value_proposition": values,
+            "key_partners": partners,
+            "costs": costs,
+            "customers": segments,
+            "relationships": relationships,
+            "revenues": revenues,
+            "business_model_note": note,
+            "validation_priorities": self._unique(priorities),
             "risk_note": risk_note,
-
             "canvas": {
-                "customer_segments": customer_segments,
-                "value_propositions": value_propositions,
+                "customer_segments": segments,
+                "value_propositions": values,
                 "channels": channels,
-                "customer_relationships": customer_relationships,
-                "revenue_streams": revenue_streams,
-                "key_resources": key_resources,
-                "key_activities": key_activities,
-                "key_partnerships": key_partnerships,
-                "cost_structure": cost_structure,
+                "customer_relationships": relationships,
+                "revenue_streams": revenues,
+                "key_resources": resources,
+                "key_activities": activities,
+                "key_partnerships": partners,
+                "cost_structure": costs,
             },
-
-            "risk_level": "medium",
+            "risk_level": risk_level,
             "confidence_level": "medium",
             "manual_review_required": True,
             "fallback_used": False,
             "error_handled": False,
             "context_locked": True,
-            "output_language": output_language,
-            "project_context_used": {
-                "title": title,
-                "sector": sector,
-                "region": region,
-                "target_users": target_users,
-                "problem": problem,
-                "solution": solution,
-                "business_model": business_model,
-                "mvp_scope": mvp_scope,
-            },
         }
 
-    # ========================================================
-    # Context extraction
-    # ========================================================
-
-    def _context(self, state: Dict[str, Any]) -> Dict[str, str]:
-        analysis_data = state.get("analysis_data") or {}
-        project_context = state.get("project_context") or {}
-
-        project_intelligence = (
-            state.get("project_intelligence")
-            or analysis_data.get("project_intelligence")
-            or project_context.get("project_intelligence")
-            or {}
-        )
-
-        structured = (
-            state.get("structured_project_context")
-            or analysis_data.get("structured_project_context")
-            or project_context.get("structured_project_context")
-            or project_intelligence.get("structured_project_context")
-            or {}
-        )
-
-        title = self._safe_text(
-            structured.get("project_name")
-            or structured.get("title")
-            or project_context.get("project_name")
-            or project_context.get("title")
-            or state.get("title"),
-            "Project",
-        )
-
-        description = self._safe_text(
-            structured.get("description")
-            or project_context.get("description")
-            or state.get("description"),
-            "",
-        )
-
-        sector = self._safe_text(
-            structured.get("sector")
-            or structured.get("industry")
-            or project_context.get("sector")
-            or project_context.get("industry")
-            or state.get("industry"),
-            "target sector",
-        )
-
-        region = self._safe_text(
-            structured.get("target_region")
-            or structured.get("market_region")
-            or project_context.get("target_region")
-            or project_context.get("market_region")
-            or state.get("region"),
-            "target region",
-        )
-
-        target_users = self._readable_list(
-            structured.get("target_users")
-            or project_context.get("target_users")
-            or project_context.get("target_market")
-            or "target users"
-        )
-
-        problem = self._safe_text(
-            structured.get("problem")
-            or structured.get("core_problem")
-            or structured.get("main_problem")
-            or structured.get("pain_point")
-            or project_context.get("problem")
-            or project_context.get("core_problem")
-            or project_context.get("main_problem"),
-            "the identified operational problem",
-        )
-
-        solution = self._safe_text(
-            structured.get("solution")
-            or structured.get("solution_type")
-            or structured.get("value_proposition")
-            or project_context.get("solution")
-            or project_context.get("solution_type"),
-            "the proposed solution",
-        )
-
-        business_model = self._safe_text(
-            structured.get("business_model")
-            or project_context.get("business_model"),
-            "subscription or pilot-based business model",
-        )
-
-        mvp_scope = self._safe_text(
-            structured.get("mvp_scope")
-            or project_context.get("mvp_scope"),
-            "a reduced MVP focused on the core workflow",
-        )
-
-        context = {
-            "title": title,
-            "description": description,
-            "sector": sector,
-            "region": region,
-            "target_users": target_users,
-            "problem": problem,
-            "solution": solution,
-            "business_model": business_model,
-            "mvp_scope": mvp_scope,
+    def _finalize(self, result: Dict[str, Any], context: Dict[str, Any], language: str) -> Dict[str, Any]:
+        result["output_language"] = language
+        result["project_context_used"] = {
+            "title": context["title"], "sector": context["sector"], "region": context["region"],
+            "target_users": context["target_user_list"], "problem": context["problem"], "solution": context["solution"],
+            "business_model": context["business_model"], "mvp_scope": context["mvp_scope"],
+            "project_archetype": context["project_archetype"], "priority_workflows": context["priority_workflows"],
+            "success_metrics": context["success_metrics"], "constraints": context["constraints"],
         }
+        return self._clean_object(result)
 
-        allowed_context = self._allowed_context(context)
-
+    def _context(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        analysis = state.get("analysis_data") or {}; project_context = state.get("project_context") or {}
+        intelligence = state.get("project_intelligence") or analysis.get("project_intelligence") or project_context.get("project_intelligence") or {}
+        structured = state.get("structured_project_context") or analysis.get("structured_project_context") or project_context.get("structured_project_context") or intelligence.get("structured_project_context") or {}
+        canonical = self._canonical_packet(state, analysis, project_context)
+        users = self._list(structured.get("target_users") or canonical.get("actors") or project_context.get("target_users"))
+        actors = structured.get("actors") or project_context.get("actors") or {}
+        if not isinstance(actors, dict): actors = {}
+        actors = dict(actors)
+        actors.setdefault("target_users", users)
         return {
-            key: self._sanitize_text(value, allowed_context=allowed_context)
-            for key, value in context.items()
+            "title": self._text(structured.get("project_name") or structured.get("title") or canonical.get("project_name") or project_context.get("title") or state.get("title"), "Project"),
+            "sector": self._text(structured.get("sector") or structured.get("industry") or canonical.get("domain_label") or project_context.get("industry") or state.get("industry")),
+            "region": self._text(structured.get("target_region") or structured.get("market_region") or canonical.get("target_region") or project_context.get("market_region") or state.get("region")),
+            "target_user_list": users,
+            "target_users": ", ".join(users),
+            "economic_buyer": self._text(structured.get("economic_buyer") or canonical.get("payer") or actors.get("payer")),
+            "problem": self._packet_text(structured.get("problem") or structured.get("core_problem") or canonical.get("problem") or project_context.get("problem"), "the identified problem"),
+            "solution": self._packet_text(structured.get("solution") or canonical.get("solution") or project_context.get("solution"), "the proposed solution"),
+            "business_model": self._text(structured.get("business_model") or self._first(self._list(canonical.get("business_model_hypotheses"))) or project_context.get("business_model"), "Business model to validate"),
+            "mvp_scope": ", ".join(self._list(structured.get("mvp_scope") or canonical.get("mvp_scope") or project_context.get("mvp_scope"))),
+            "project_archetype": self._text(structured.get("project_archetype") or canonical.get("project_archetype") or project_context.get("project_archetype"), "generic_digital_product"),
+            "validation_unit": self._packet_text(structured.get("validation_unit") or canonical.get("validation_unit")),
+            "actors": actors,
+            "priority_workflows": self._list(structured.get("priority_workflows") or structured.get("priority_workflow") or canonical.get("priority_workflow")),
+            "success_metrics": self._list(structured.get("success_metrics") or canonical.get("success_metrics")),
+            "constraints": self._list(structured.get("constraints") or canonical.get("constraints")),
+            "risk_dimensions": self._list(structured.get("risk_dimensions") or project_context.get("risk_dimensions")),
+            "evidence_needs": self._list(structured.get("evidence_needs") or project_context.get("evidence_needs")),
         }
 
-    # ========================================================
-    # Sanitization
-    # ========================================================
+    def _canonical_packet(self, state: Dict[str, Any], analysis: Dict[str, Any], project_context: Dict[str, Any]) -> Dict[str, Any]:
+        readiness = analysis.get("idea_readiness") or {}
+        for value in (state.get("project_context_packet"), state.get("canonical_context"), analysis.get("project_context_packet"), analysis.get("canonical_context"), analysis.get("context_packet"), readiness.get("context_packet"), readiness.get("project_context_packet"), project_context.get("canonical_context")):
+            if isinstance(value, dict): return value
+        return {}
 
-    def _final_public_sanitize(
-        self,
-        *,
-        data: Dict[str, Any],
-        context: Dict[str, str],
-        output_language: str,
-    ) -> Dict[str, Any]:
-        allowed_context = self._allowed_context(context)
-
-        sanitized = self._sanitize_object(
-            value=data,
-            allowed_context=allowed_context,
-        )
-
-        if not isinstance(sanitized, dict):
-            return self._fallback(output_language)
-
-        sanitized.setdefault("format", "bmc_v5_context_locked_deterministic")
-        sanitized.setdefault("status", "completed")
-        sanitized.setdefault("risk_level", "medium")
-        sanitized.setdefault("confidence_level", "medium")
-        sanitized.setdefault("manual_review_required", True)
-        sanitized.setdefault("fallback_used", False)
-        sanitized.setdefault("error_handled", False)
-        sanitized.setdefault("context_locked", True)
-        sanitized.setdefault("output_language", output_language)
-
-        sanitized.pop("internal_error", None)
-        sanitized.pop("raw_data_backup", None)
-        sanitized.pop("raw_response", None)
-        sanitized.pop("debug", None)
-
-        return sanitized
-
-    def _sanitize_object(self, *, value: Any, allowed_context: str) -> Any:
-        if isinstance(value, dict):
-            cleaned: Dict[str, Any] = {}
-
-            for key, item in value.items():
-                clean_key = str(key or "").strip()
-
-                if not clean_key:
-                    continue
-
-                if clean_key in {
-                    "debug",
-                    "raw_data",
-                    "raw_response",
-                    "raw_data_backup",
-                    "raw_data_backup_hidden",
-                    "internal_error",
-                }:
-                    continue
-
-                cleaned_item = self._sanitize_object(
-                    value=item,
-                    allowed_context=allowed_context,
-                )
-
-                if self._is_empty(cleaned_item):
-                    continue
-
-                cleaned[clean_key] = cleaned_item
-
-            return cleaned
-
-        if isinstance(value, list):
-            cleaned_list: List[Any] = []
-
-            for item in value:
-                cleaned_item = self._sanitize_object(
-                    value=item,
-                    allowed_context=allowed_context,
-                )
-
-                if self._is_empty(cleaned_item):
-                    continue
-
-                cleaned_list.append(cleaned_item)
-
-            return cleaned_list
-
-        if value is None:
-            return None
-
-        if isinstance(value, bool):
-            return value
-
-        if isinstance(value, (int, float)):
-            return value
-
-        return self._sanitize_text(value, allowed_context=allowed_context)
-
-    def _sanitize_text(self, value: Any, *, allowed_context: str) -> str:
-        text = str(value or "").strip()
-        text = re.sub(r"\s+", " ", text)
-
-        normalized_allowed_context = self._normalize(allowed_context)
-
-        for forbidden in self.DEMO_OFFTOPIC_TERMS:
-            normalized_forbidden = self._normalize(forbidden)
-
-            if normalized_forbidden and normalized_forbidden in normalized_allowed_context:
-                continue
-
-            text = re.sub(
-                re.escape(forbidden),
-                "",
-                text,
-                flags=re.IGNORECASE,
-            )
-
-        return text[:1500].strip()
-
-    def _allowed_context(self, context: Dict[str, str]) -> str:
-        return self._normalize(
-            " ".join(str(value or "") for value in context.values())
-        )
-
-    # ========================================================
-    # Emergency fallback
-    # ========================================================
-
-    def _fallback(self, output_language: str) -> Dict[str, Any]:
-        if output_language == "en":
-            customer_segments = [
-                "Early adopters with a repeated operational problem.",
-                "Small teams or organizations willing to test a focused MVP.",
-            ]
-            value_propositions = [
-                "A simple product that improves one core workflow.",
-                "Reduced manual work and better operational visibility.",
-            ]
-            channels = [
-                "Direct outreach.",
-                "Pilot partnerships.",
-                "Referrals from early users.",
-            ]
-            customer_relationships = [
-                "Guided onboarding.",
-                "Direct feedback loops.",
-            ]
-            revenue_streams = [
-                "Pilot fee.",
-                "Monthly subscription after validation.",
-            ]
-            key_resources = [
-                "Focused MVP.",
-                "User feedback.",
-                "Basic infrastructure.",
-            ]
-            key_activities = [
-                "Problem validation.",
-                "MVP development.",
-                "Pilot testing.",
-            ]
-            key_partnerships = [
-                "Pilot users.",
-                "Relevant local partners.",
-            ]
-            cost_structure = [
-                "Development and maintenance.",
-                "Hosting and infrastructure.",
-                "Customer support and onboarding.",
-            ]
-
-            return {
-                "format": "bmc_v5_emergency_fallback",
-                "status": "completed",
-                "summary": "Business Model Canvas completed with a safe fallback. The project should validate its first segment, MVP scope and willingness to pay before scaling.",
-                "customer_segments": customer_segments,
-                "value_propositions": value_propositions,
-                "channels": channels,
-                "customer_relationships": customer_relationships,
-                "revenue_streams": revenue_streams,
-                "key_resources": key_resources,
-                "key_activities": key_activities,
-                "key_partnerships": key_partnerships,
-                "cost_structure": cost_structure,
-                "value_proposition": value_propositions,
-                "key_partners": key_partnerships,
-                "costs": cost_structure,
-                "canvas": {
-                    "customer_segments": customer_segments,
-                    "value_propositions": value_propositions,
-                    "channels": channels,
-                    "customer_relationships": customer_relationships,
-                    "revenue_streams": revenue_streams,
-                    "key_resources": key_resources,
-                    "key_activities": key_activities,
-                    "key_partnerships": key_partnerships,
-                    "cost_structure": cost_structure,
-                },
-                "risk_level": "medium",
-                "confidence_level": "low",
-                "manual_review_required": True,
-                "fallback_used": True,
-                "error_handled": True,
-                "context_locked": True,
-                "output_language": output_language,
-            }
-
-        customer_segments = [
-            "Premiers adoptants avec un problème opérationnel répété.",
-            "Petites équipes ou organisations prêtes à tester un MVP ciblé.",
-        ]
-        value_propositions = [
-            "Un produit simple qui améliore un flux principal.",
-            "Réduction du travail manuel et meilleure visibilité opérationnelle.",
-        ]
-        channels = [
-            "Prospection directe.",
-            "Partenariats pilotes.",
-            "Recommandations par les premiers utilisateurs.",
-        ]
-        customer_relationships = [
-            "Onboarding accompagné.",
-            "Boucles de feedback directes.",
-        ]
-        revenue_streams = [
-            "Frais de pilote.",
-            "Abonnement mensuel après validation.",
-        ]
-        key_resources = [
-            "MVP ciblé.",
-            "Feedback utilisateur.",
-            "Infrastructure basique.",
-        ]
-        key_activities = [
-            "Validation du problème.",
-            "Développement du MVP.",
-            "Tests pilotes.",
-        ]
-        key_partnerships = [
-            "Utilisateurs pilotes.",
-            "Partenaires locaux pertinents.",
-        ]
-        cost_structure = [
-            "Développement et maintenance.",
-            "Hébergement et infrastructure.",
-            "Support client et onboarding.",
-        ]
-
-        return {
-            "format": "bmc_v5_emergency_fallback",
-            "status": "completed",
-            "summary": "Business Model Canvas complété avec un fallback sécurisé. Le projet doit valider son premier segment, son périmètre MVP et la volonté de payer avant le passage à l’échelle.",
-            "customer_segments": customer_segments,
-            "value_propositions": value_propositions,
-            "channels": channels,
-            "customer_relationships": customer_relationships,
-            "revenue_streams": revenue_streams,
-            "key_resources": key_resources,
-            "key_activities": key_activities,
-            "key_partnerships": key_partnerships,
-            "cost_structure": cost_structure,
-            "value_proposition": value_propositions,
-            "key_partners": key_partnerships,
-            "costs": cost_structure,
-            "canvas": {
-                "customer_segments": customer_segments,
-                "value_propositions": value_propositions,
-                "channels": channels,
-                "customer_relationships": customer_relationships,
-                "revenue_streams": revenue_streams,
-                "key_resources": key_resources,
-                "key_activities": key_activities,
-                "key_partnerships": key_partnerships,
-                "cost_structure": cost_structure,
-            },
-            "risk_level": "medium",
-            "confidence_level": "low",
-            "manual_review_required": True,
-            "fallback_used": True,
-            "error_handled": True,
-            "context_locked": True,
-            "output_language": output_language,
-        }
-
-    # ========================================================
+    # ------------------------------------------------------------------
     # Helpers
-    # ========================================================
+    # ------------------------------------------------------------------
 
-    def _safe_text(self, value: Any, fallback: str = "") -> str:
-        if value is None:
+    def _hardware_partners(self, context: Dict[str, Any], language: str) -> List[str]:
+        sector = context["sector"].lower()
+        region = context["region"]
+        if language == "en":
+            values = ["Component, battery and enclosure suppliers", "Pilot sites and operational users", "Manufacturing, integration or maintenance partners", "Connectivity or cloud providers when required"]
+            if any(term in sector for term in ("agri", "farm", "agriculture")): values.extend(["Agricultural cooperatives, greenhouse operators and nurseries", "Agronomists or crop-protection specialists for validation"])
+            if region: values.append(f"Local technical and distribution partners in {region}")
+        else:
+            values = ["Fournisseurs de composants, batteries et boîtiers", "Sites pilotes et utilisateurs opérationnels", "Partenaires de fabrication, intégration ou maintenance", "Fournisseurs de connectivité ou cloud si nécessaires"]
+            if any(term in sector for term in ("agri", "agriculture")): values.extend(["Coopératives agricoles, exploitants de serres et pépinières", "Agronomes ou spécialistes phytosanitaires pour la validation"])
+            if region: values.append(f"Partenaires techniques et distributeurs locaux en {region}")
+        return self._unique(values)
+
+    def _core_action(self, context: Dict[str, Any], language: str) -> str:
+        generic = {"core action", "core workflow", "réaliser l’opération terrain principale", "main field operation"}
+        for value in context["priority_workflows"]:
+            if value and value.lower() not in generic: return value
+        if context["validation_unit"]: return context["validation_unit"]
+        if context["mvp_scope"]: return context["mvp_scope"]
+        return "réaliser l’action principale" if language != "en" else "complete the core action"
+
+    def _specific_workflows(self, context: Dict[str, Any], language: str) -> List[str]:
+        values = [item for item in context["priority_workflows"] if item and "opération terrain principale" not in item.lower() and "core action" not in item.lower()]
+        return values or [self._core_action(context, language)]
+
+    def _packet_text(self, value: Any, fallback: str = "") -> str:
+        if isinstance(value, dict):
+            for key in ("pain", "mechanism", "core_value", "action", "result", "output", "value"):
+                if value.get(key): return self._text(value[key], fallback)
             return fallback
+        return self._text(value, fallback)
 
-        clean = str(value).strip()
+    def _clean_object(self, value: Any) -> Any:
+        if isinstance(value, dict): return {str(k): self._clean_object(v) for k, v in value.items() if v not in (None, "", [], {})}
+        if isinstance(value, list): return [self._clean_object(v) for v in value if v not in (None, "", [], {})]
+        if isinstance(value, str): return re.sub(r"\s+", " ", value).strip()
+        return value
 
+    def _fallback(self, language: str) -> Dict[str, Any]:
+        fr = language != "en"
+        labels = ["Segment utilisateur principal", "Acheteur économique"] if fr else ["Primary user segment", "Economic buyer"]
+        values = ["Résoudre un workflow principal mesurable"] if fr else ["Solve one measurable core workflow"]
+        result = self._result(segments=labels, values=values, channels=["Prospection directe" if fr else "Direct outreach"], relationships=["Onboarding accompagné" if fr else "Guided onboarding"], revenues=["Pilote payant" if fr else "Paid pilot"], resources=["MVP ciblé" if fr else "Focused MVP"], activities=["Validation terrain" if fr else "Field validation"], partners=["Partenaires pilotes" if fr else "Pilot partners"], costs=["Développement, pilote et support" if fr else "Development, pilot and support"], summary="Canvas prudent à compléter avec le contexte projet." if fr else "Cautious canvas to complete with project context.", note="Le modèle doit être validé." if fr else "The model must be validated.", priorities=["Entretiens et pilote" if fr else "Interviews and pilot"], risk_note="Preuves insuffisantes." if fr else "Insufficient evidence.", risk_level="medium")
+        result.update({"output_language": language, "fallback_used": True, "error_handled": True, "confidence_level": "low"})
+        return result
+
+    def _text(self, value: Any, fallback: str = "") -> str:
+        if value is None: return fallback
+        clean = re.sub(r"\s+", " ", str(value)).strip()
         return clean or fallback
 
-    def _safe_list(self, value: Any) -> List[str]:
-        if value is None:
-            return []
-
-        if isinstance(value, list):
-            result: List[str] = []
-
-            for item in value:
-                if item is None:
-                    continue
-
-                clean = str(item).strip()
-
-                if clean:
-                    result.append(clean)
-
-            return result
-
-        if isinstance(value, str):
-            clean = value.strip()
-            return [clean] if clean else []
-
-        clean = str(value).strip()
-
-        return [clean] if clean else []
-
-    def _readable_list(self, value: Any) -> str:
-        items = self._safe_list(value)
-
-        if not items:
-            return "target users"
-
-        return ", ".join(items[:6])
-
-    def _normalize(self, value: Any) -> str:
-        text = str(value or "").lower()
-        text = text.replace("’", "'")
-        text = text.replace("é", "e")
-        text = text.replace("è", "e")
-        text = text.replace("ê", "e")
-        text = text.replace("à", "a")
-        text = text.replace("ù", "u")
-        text = text.replace("ç", "c")
-        text = re.sub(r"\s+", " ", text).strip()
-
-        return text
-
-    def _is_empty(self, value: Any) -> bool:
-        if value is None:
-            return True
-
-        if isinstance(value, str):
-            return value.strip() == ""
-
-        if isinstance(value, list):
-            return len(value) == 0
-
+    def _list(self, value: Any) -> List[str]:
+        if value is None: return []
         if isinstance(value, dict):
-            return len(value) == 0
+            if any(key in value for key in ("action", "pain", "mechanism", "value", "name")): return [self._packet_text(value)]
+            result: List[str] = []
+            for item in value.values(): result.extend(self._list(item))
+            return self._unique(result)
+        if isinstance(value, (list, tuple, set)):
+            result: List[str] = []
+            for item in value: result.extend(self._list(item))
+            return self._unique(result)
+        text = self._text(value)
+        return [text] if text else []
 
-        return False
+    def _first(self, values: Any) -> str:
+        items = self._list(values)
+        return items[0] if items else ""
 
-    def _unique(self, values: List[str]) -> List[str]:
-        result: List[str] = []
-        seen = set()
-
+    def _unique(self, values: Iterable[Any]) -> List[str]:
+        result: List[str] = []; seen = set()
         for value in values:
-            clean = str(value or "").strip()
-
-            if not clean:
-                continue
-
-            key = clean.lower()
-
-            if key in seen:
-                continue
-
-            seen.add(key)
-            result.append(clean)
-
+            clean = self._text(value)
+            if not clean: continue
+            key = clean.casefold()
+            if key in seen: continue
+            seen.add(key); result.append(clean)
         return result

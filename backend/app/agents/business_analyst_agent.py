@@ -1,3 +1,4 @@
+import json
 import logging
 from typing import Any, Dict
 
@@ -26,7 +27,12 @@ class AIBusinessAnalystAgent(BaseAgent):
     """
 
     def _get_region(self, input_data: Dict[str, Any]) -> str:
-        return input_data.get("region") or input_data.get("market_region") or "Tunisie"
+        return str(
+            input_data.get("region")
+            or input_data.get("market_region")
+            or input_data.get("target_region")
+            or ""
+        ).strip()
 
     def _get_output_language(self, input_data: Dict[str, Any]) -> str:
         return normalize_output_language(input_data.get("output_language", "fr"))
@@ -103,7 +109,7 @@ class AIBusinessAnalystAgent(BaseAgent):
 
             title = input_data.get("title", "")
             description = input_data.get("description", "")
-            industry = input_data.get("industry", "Non spécifié")
+            industry = input_data.get("industry") or "Non spécifié"
             region = self._get_region(input_data)
 
             web_description = f"{title}. {description}".strip()
@@ -148,10 +154,22 @@ class AIBusinessAnalystAgent(BaseAgent):
         local_market_context: str,
     ) -> str:
         language = self._get_output_language(input_data)
-        title = input_data.get("title", "Non spécifié")
-        description = input_data.get("description", "Non spécifiée")
-        industry = input_data.get("industry", "Non spécifié")
+        title = input_data.get("title") or "Non spécifié"
+        description = input_data.get("description") or "Non spécifiée"
+        industry = input_data.get("industry") or "Non spécifié"
         region = self._get_region(input_data)
+        structured_context = (
+            input_data.get("structured_project_context")
+            or (input_data.get("analysis_data") or {}).get("structured_project_context")
+            or (input_data.get("project_context") or {}).get("structured_project_context")
+            or {}
+        )
+        structured_context_json = json.dumps(
+            structured_context,
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        )
 
         if language == "en":
             return f"""
@@ -170,7 +188,10 @@ PROJECT INPUT:
 Title: {title}
 Description: {description}
 Industry provided by the user: {industry}
-Target region: {region}
+Target region: {region or "Not specified"}
+
+CANONICAL STRUCTURED PROJECT CONTEXT:
+{structured_context_json}
 
 GLOBAL STATIC RAG CONTEXT:
 {global_market_context}
@@ -185,6 +206,9 @@ CONTEXT USAGE RULES:
 - Never invent local data if local sources are weak.
 - Never reuse examples from another project.
 - Stay strictly linked to the user's project input.
+- The canonical structured context is authoritative for actors, problem, solution, workflows, MVP scope, metrics and constraints.
+- Never replace a specific workflow with a generic phrase such as "complete the core action".
+- Keep MVP scope separate from success metrics and constraints.
 
 SCORING RULES:
 - innovation_score must be an integer from 1 to 10.
@@ -225,7 +249,10 @@ INPUT PROJET :
 Titre : {title}
 Description : {description}
 Secteur indiqué par l'utilisateur : {industry}
-Région cible : {region}
+Région cible : {region or "Non définie"}
+
+CONTEXTE PROJET STRUCTURÉ CANONIQUE :
+{structured_context_json}
 
 CONTEXTE RAG STATIQUE GLOBAL :
 {global_market_context}
@@ -240,6 +267,9 @@ RÈGLES D’UTILISATION DU CONTEXTE :
 - N’invente jamais de données locales si les sources locales sont faibles.
 - Ne réutilise jamais des exemples d’un autre projet.
 - Reste strictement lié à l’input du projet utilisateur.
+- Le contexte structuré canonique est prioritaire pour les acteurs, le problème, la solution, les workflows, le MVP, les métriques et les contraintes.
+- Ne remplace jamais un workflow précis par une phrase générique comme « réaliser l’opération terrain principale ».
+- Sépare strictement le périmètre MVP, les métriques de réussite et les contraintes.
 
 RÈGLES DE SCORING :
 - innovation_score doit être un entier entre 1 et 10.
@@ -331,9 +361,31 @@ FORMAT JSON ATTENDU :
         if not isinstance(result.get("sources_used"), list):
             result["sources_used"] = []
 
+        local_market_candidates = []
+        local_market_sources = []
         for source in local_rag_result.get("sources") or []:
-            if isinstance(source, dict) and source.get("url"):
-                result["sources_used"].append(str(source["url"]))
+            if not isinstance(source, dict) or not source.get("url"):
+                continue
+            result["sources_used"].append(str(source["url"]))
+
+            # Preserve every non-rejected local candidate for one final
+            # canonical re-evaluation. LocalMarketSearch intentionally accepts
+            # useful internal evidence for RAG; filtering only public_display
+            # here disconnected valid local pages from CompetitiveAnalysis.
+            if not bool(source.get("rejected")):
+                local_market_candidates.append(dict(source))
+
+            if (
+                bool(source.get("public_display"))
+                and not bool(source.get("internal_only"))
+                and not bool(source.get("rejected"))
+            ):
+                local_market_sources.append(dict(source))
+
+        # Internal hand-off only. The public sanitizer removes both keys after
+        # CompetitiveAnalysis has built the canonical ledger.
+        result["local_market_candidates"] = local_market_candidates
+        result["local_market_sources"] = local_market_sources
 
         if not result["sources_used"]:
             result["sources_used"] = (
@@ -341,6 +393,24 @@ FORMAT JSON ATTENDU :
                 if language == "en"
                 else ["Contexte RAG statique global", "Contexte web local dynamique"]
             )
+
+        structured = (
+            input_data.get("structured_project_context")
+            or (input_data.get("analysis_data") or {}).get("structured_project_context")
+            or project_context.get("structured_project_context")
+            or {}
+        )
+        if isinstance(structured, dict):
+            result["target_region"] = structured.get("target_region") or region
+            result["problem"] = structured.get("problem") or result.get("problem")
+            result["target_users"] = structured.get("target_users") or result.get("target_users")
+            result["project_archetype"] = structured.get("project_archetype")
+            result["priority_workflows"] = structured.get("priority_workflows") or []
+            result["mvp_scope"] = structured.get("mvp_scope") or ""
+            result["success_metrics"] = structured.get("success_metrics") or []
+            result["constraints"] = structured.get("constraints") or []
+            result["business_model"] = structured.get("business_model") or ""
+            result["solution"] = structured.get("solution") or result.get("solution")
 
         validation = domain_integrity_guard.validate_object(
             data=result,
