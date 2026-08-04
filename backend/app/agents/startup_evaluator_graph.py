@@ -20,6 +20,7 @@ import logging
 import re
 import unicodedata
 from typing import Any, Awaitable, Callable, Dict, Optional
+from urllib.parse import urlparse
 
 import warnings
 
@@ -1026,13 +1027,31 @@ class StartupEvaluatorGraph:
         )
 
     async def market_study_node(self, state: StartupEvaluatorState) -> StartupEvaluatorState:
-        return await self._run_agent_step(
+        new_state = await self._run_agent_step(
             state=state,
             step_name="market_study",
             result_key="market_study",
             progress=32,
             agent=self.market_study_agent,
         )
+
+        analysis_data = dict(new_state.get("analysis_data") or {})
+        market_study = analysis_data.get("market_study")
+
+        if isinstance(market_study, dict):
+            enriched_market = self._enrich_market_study_from_evidence(
+                market_study=dict(market_study),
+                analysis_data=analysis_data,
+                output_language=str(new_state.get("output_language") or "fr"),
+            )
+            analysis_data["market_study"] = enriched_market
+            new_state = {**new_state, "analysis_data": analysis_data}
+
+            # _run_agent_step already emitted a callback. Emit the enriched
+            # evidence-aware payload as the authoritative market-study state.
+            await self._notify_step_complete(new_state)
+
+        return new_state
 
     async def swot_node(self, state: StartupEvaluatorState) -> StartupEvaluatorState:
         return await self._run_agent_step(
@@ -1061,13 +1080,308 @@ class StartupEvaluatorGraph:
             agent=self.competitive_analysis_agent,
         )
         analysis_data = dict(new_state.get("analysis_data") or {})
+        analysis_data = self._normalize_public_source_quality(analysis_data)
+
         ledger = evidence_ledger.build(analysis_data)
         analysis_data["evidence_ledger"] = ledger
-        analysis_data["evidence_confidence"] = ledger.get("confidence_by_category") or {}
-        analysis_data["overall_evidence_confidence"] = (
-            analysis_data["evidence_confidence"].get("overall_evidence_confidence") or "low"
+        analysis_data["evidence_confidence"] = (
+            ledger.get("confidence_by_category") or {}
         )
-        return {**new_state, "analysis_data": analysis_data}
+        analysis_data["overall_evidence_confidence"] = (
+            analysis_data["evidence_confidence"].get(
+                "overall_evidence_confidence"
+            )
+            or "low"
+        )
+
+        enriched_state: StartupEvaluatorState = {
+            **new_state,
+            "analysis_data": analysis_data,
+        }
+        await self._notify_step_complete(enriched_state)
+        return enriched_state
+
+    def _normalize_public_source_quality(
+        self,
+        analysis_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Attach methodology-aware quality without changing source roles."""
+        data = dict(analysis_data or {})
+        source_keys = {
+            "sources",
+            "public_sources",
+            "local_competitor_sources",
+            "regional_competitor_sources",
+            "international_benchmark_sources",
+            "technology_provider_sources",
+            "adjacent_solution_sources",
+            "market_context_sources",
+            "market_sources",
+            "local_direct_competitors",
+            "local_adjacent_solutions",
+            "regional_competitors",
+            "international_benchmarks",
+            "technology_providers",
+        }
+
+        for section_name in ("competitive_analysis", "forgecrawler"):
+            section = data.get(section_name)
+            if not isinstance(section, dict):
+                continue
+
+            normalized_section = dict(section)
+            for key in source_keys:
+                rows = normalized_section.get(key)
+                if not isinstance(rows, list):
+                    continue
+                normalized_section[key] = [
+                    self._source_with_quality(row)
+                    for row in rows
+                    if isinstance(row, dict)
+                ]
+            data[section_name] = normalized_section
+
+        return data
+
+    def _source_with_quality(self, source: Dict[str, Any]) -> Dict[str, Any]:
+        row = dict(source)
+        explicit_quality = str(
+            row.get("evidence_quality")
+            or row.get("methodology_quality")
+            or ""
+        ).strip().lower()
+
+        try:
+            domain = urlparse(str(row.get("url") or "")).netloc.lower()
+        except Exception:
+            domain = ""
+
+        source_type = str(row.get("source_type") or "").strip().lower()
+        source_role = str(row.get("source_role") or "").strip().lower()
+        low_methodology_domains = {
+            "scribd.com",
+            "www.scribd.com",
+            "marketsandmarkets.com",
+            "www.marketsandmarkets.com",
+            "marketresearchfuture.com",
+            "www.marketresearchfuture.com",
+            "snsinsider.com",
+            "www.snsinsider.com",
+            "rootsanalysis.com",
+            "www.rootsanalysis.com",
+            "ensun.io",
+            "www.ensun.io",
+            "fdatabot.com",
+            "www.fdatabot.com",
+        }
+
+        if explicit_quality in {"low", "medium", "high"}:
+            quality = explicit_quality
+        elif domain in low_methodology_domains:
+            quality = "low"
+        elif source_type in {"regulation", "official_evidence"}:
+            quality = "high"
+        elif domain.endswith(".gov") or domain.endswith(".edu"):
+            quality = "high"
+        elif domain.endswith(".org") or source_role == "official_evidence":
+            quality = "medium"
+        elif source_type in {
+            "technology_benchmark",
+            "adjacent_solution",
+            "competitor",
+            "pricing_page",
+        }:
+            quality = "medium"
+        else:
+            quality = "low"
+
+        methodology_blob = " ".join(
+            str(row.get(key) or "")
+            for key in ("title", "snippet", "extracted_text_preview")
+        ).lower()
+        negative_methodology_markers = (
+            "without visible methodology",
+            "methodology not visible",
+            "methodology unavailable",
+            "méthodologie non visible",
+            "méthodologie absente",
+            "méthodologie indisponible",
+        )
+        methodology_visible = bool(row.get("methodology_visible"))
+        if not methodology_visible and not any(
+            marker in methodology_blob for marker in negative_methodology_markers
+        ):
+            methodology_visible = any(
+                marker in methodology_blob
+                for marker in (
+                    "methodology",
+                    "méthodologie",
+                    "sample size",
+                    "échantillon",
+                    "official statistics",
+                    "statistiques officielles",
+                )
+            )
+
+        row["evidence_quality"] = quality
+        row["methodology_visible"] = methodology_visible
+
+        # Confidence on a public card describes evidence strength, not only
+        # semantic relevance. Commercial report pages and document hosts stay
+        # low even when their topic match is acceptable.
+        if quality == "low":
+            row["confidence"] = "low"
+        elif quality == "high":
+            row["confidence"] = "high"
+        elif str(row.get("confidence") or "").lower() not in {
+            "low",
+            "medium",
+            "high",
+        }:
+            row["confidence"] = "medium"
+
+        return row
+
+    def _enrich_market_study_from_evidence(
+        self,
+        *,
+        market_study: Dict[str, Any],
+        analysis_data: Dict[str, Any],
+        output_language: str,
+    ) -> Dict[str, Any]:
+        """Fill evidence-aware local feasibility and cautious trend signals."""
+        language = normalize_output_language(output_language)
+        ledger = analysis_data.get("evidence_ledger")
+        if not isinstance(ledger, dict):
+            ledger = evidence_ledger.build(analysis_data)
+
+        sources = [
+            dict(item)
+            for item in (ledger.get("source_index") or {}).values()
+            if isinstance(item, dict)
+        ]
+
+        local_sources = [
+            source
+            for source in sources
+            if str(source.get("region_match") or "").lower() == "local"
+            and set(source.get("evidence_categories") or [])
+            & {
+                "regional_context",
+                "sector_context",
+                "local_market_signal",
+                "market_demand",
+                "market_demand_claim",
+                "solution_benchmark",
+            }
+        ]
+        technology_sources = [
+            source
+            for source in sources
+            if set(source.get("evidence_categories") or [])
+            & {"technology_benchmark", "solution_benchmark"}
+        ]
+        market_sources = [
+            source
+            for source in sources
+            if set(source.get("evidence_categories") or [])
+            & {
+                "market_size",
+                "market_size_claim",
+                "market_demand",
+                "market_demand_claim",
+                "sector_context",
+            }
+        ]
+
+        if language == "en":
+            local_signal = (
+                "Retained local sources provide sector and ecosystem signals, "
+                "but they do not yet prove active demand, budget availability "
+                "or willingness to pay."
+                if local_sources
+                else "No compatible local evidence currently confirms demand, "
+                "adoption or willingness to pay; local feasibility requires "
+                "official data and field interviews."
+            )
+            trend_candidates = []
+            if technology_sources:
+                trend_candidates.append(
+                    "Retained technology benchmarks show that related automation, "
+                    "sensing or analysis workflows exist; transfer to the target "
+                    "region and use case remains to be tested."
+                )
+            if market_sources:
+                trend_candidates.append(
+                    "Retained market pages are secondary market signals. Their "
+                    "figures and methodologies must be checked before being used "
+                    "for an investment decision."
+                )
+        else:
+            local_signal = (
+                "Les sources locales retenues constituent des signaux de contexte "
+                "sectoriel et d’écosystème, mais elles ne prouvent pas encore une "
+                "demande active, un budget disponible ni la volonté de payer."
+                if local_sources
+                else "Aucune preuve locale compatible ne confirme actuellement la "
+                "demande, l’adoption ou la volonté de payer ; la faisabilité locale "
+                "doit être validée par des données officielles et des entretiens terrain."
+            )
+            trend_candidates = []
+            if technology_sources:
+                trend_candidates.append(
+                    "Les benchmarks technologiques retenus montrent l’existence de "
+                    "workflows proches d’automatisation, de capteurs ou d’analyse ; "
+                    "leur transférabilité au cas d’usage et à la région cible reste à tester."
+                )
+            if market_sources:
+                trend_candidates.append(
+                    "Les pages de marché retenues sont des signaux secondaires. "
+                    "Leurs chiffres et leurs méthodologies doivent être vérifiés "
+                    "avant toute décision d’investissement."
+                )
+
+        def missing(value: Any) -> bool:
+            if value is None:
+                return True
+            if isinstance(value, str):
+                return value.strip() in {"", "—", "-", "n/a", "N/A"}
+            if isinstance(value, list):
+                return not [item for item in value if str(item or "").strip()]
+            return False
+
+        if missing(market_study.get("local_feasibility")):
+            market_study["local_feasibility"] = local_signal
+        if missing(market_study.get("local_context")):
+            market_study["local_context"] = local_signal
+
+        existing_trends = market_study.get("market_trends") or market_study.get("trends")
+        if missing(existing_trends):
+            market_study["market_trends"] = trend_candidates or [
+                (
+                    "No market trend is sufficiently supported by the retained evidence."
+                    if language == "en"
+                    else "Aucune tendance de marché n’est suffisamment soutenue par les preuves retenues."
+                )
+            ]
+        market_study["trends"] = list(market_study.get("market_trends") or [])
+        market_study["evidence_basis"] = [
+            {
+                "source_id": source.get("source_id"),
+                "title": source.get("title"),
+                "region_match": source.get("region_match"),
+                "source_type": source.get("source_type"),
+                "evidence_quality": source.get("evidence_quality"),
+            }
+            for source in sources[:8]
+        ]
+        market_study["local_evidence_status"] = (
+            "signal_only" if local_sources else "unverified"
+        )
+        market_study["market_evidence_status"] = (
+            "secondary_signals" if market_sources else "unverified"
+        )
+        return market_study
 
     async def financial_estimation_node(self, state: StartupEvaluatorState) -> StartupEvaluatorState:
         return await self._run_agent_step(

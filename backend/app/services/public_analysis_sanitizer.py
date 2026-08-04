@@ -1,5 +1,6 @@
 from app.services.evidence_ledger import evidence_ledger
 from copy import deepcopy
+import re
 from typing import Any, Dict, List, Optional
 
 from app.services.domain_integrity_guard import (
@@ -34,6 +35,9 @@ TECHNICAL_KEYS_TO_HIDE = {
     "partial_completion",
     "local_market_sources",
     "local_market_candidates",
+    "local_market_handoff_meta",
+    "retained_for_reclassification",
+    "initial_gate_decision",
 
     # Internal context / guard packets - never public
     "startup_evaluator_meta",
@@ -93,7 +97,12 @@ PUBLIC_SOURCE_SECTION_FIELDS = {
         "regional_competitor_sources",
         "international_benchmark_sources",
         "market_context_sources",
+        "technology_provider_sources",
+        "adjacent_solution_sources",
         "source_quality",
+        "search_coverage",
+        "source_relevance_confidence",
+        "overall_evidence_confidence",
         "no_verified_relevant_source_found",
         "no_source_message",
         "limitations",
@@ -116,6 +125,12 @@ PUBLIC_SOURCE_SECTION_FIELDS = {
         "regional_competitor_sources",
         "international_benchmark_sources",
         "market_context_sources",
+        "technology_provider_sources",
+        "adjacent_solution_sources",
+        "source_quality",
+        "search_coverage",
+        "source_relevance_confidence",
+        "overall_evidence_confidence",
         "local_direct_competitors",
         "local_adjacent_solutions",
         "regional_competitors",
@@ -168,8 +183,8 @@ MOJIBAKE_TEXT_REPLACEMENTS = {
     "â€™": "’",
     "â€˜": "‘",
     "â€œ": "“",
-    "â€": "”",
-    "â€”": "—",
+    "Ã¢â‚¬Â": "â€",
+    "Ã¢â‚¬â€": "â€”",
     "â€“": "–",
     "â€¦": "…",
     "Ã€": "À",
@@ -180,8 +195,8 @@ MOJIBAKE_TEXT_REPLACEMENTS = {
     "ÃŠ": "Ê",
     "Ã‹": "Ë",
     "ÃŽ": "Î",
-    "ÃÏ": "Ï",
-    "Ã”": "Ô",
+    "ÃƒÃ": "Ã",
+    "Ãƒâ€": "Ã”",
     "Ã™": "Ù",
     "Ã›": "Û",
     "Ãœ": "Ü",
@@ -202,7 +217,7 @@ MOJIBAKE_TEXT_REPLACEMENTS = {
     "Ã¼": "ü",
     "Å“": "œ",
     "Å’": "Œ",
-    "Â ": " ",
+    "Ã‚ ": " ",
 }
 
 
@@ -370,6 +385,11 @@ def sanitize_analysis_data_for_public(
     if isinstance(persona_builder_snapshot, dict):
         data["persona_builder"] = persona_builder_snapshot
 
+    # Restored deterministic contracts must pass through the same UTF-8 and
+    # public-language cleanup as the rest of the report.
+    data = _sanitize_recursive(data, context)
+    data = _final_language_pass(data, language)
+
     return data
 
 
@@ -461,6 +481,21 @@ def _clean_public_text(text: str, project_context: Dict[str, Any]) -> str:
 
     for old, new in language_replacements.items():
         cleaned = cleaned.replace(old, new)
+
+    # Normalize common technology names that are often split by language
+    # models or PDF/text extraction. This is presentation-only cleanup.
+    token_patterns = (
+        (r"\bIo\s+T\b", "IoT"),
+        (r"\bLo\s*Ra\s*WAN\b", "LoRaWAN"),
+        (r"\bLo\s*RaWAN\b", "LoRaWAN"),
+        (r"\b4\s+G\b", "4G"),
+        (r"\b5\s+G\b", "5G"),
+        (r"\bWi[ -]?Fi\b", "Wi-Fi"),
+    )
+    for pattern, replacement in token_patterns:
+        cleaned = re.sub(pattern, replacement, cleaned, flags=re.IGNORECASE)
+
+    cleaned = re.sub(r"[ \t]+", " ", cleaned).strip()
 
     technical_error_markers = [
         "search failed",
@@ -581,6 +616,12 @@ def _sanitize_external_sources(
         "regional_competitor_sources",
         "international_benchmark_sources",
         "market_context_sources",
+        "technology_provider_sources",
+        "adjacent_solution_sources",
+        "source_quality",
+        "search_coverage",
+        "source_relevance_confidence",
+        "overall_evidence_confidence",
     ]:
         group = forgecrawler.get(group_key)
 
@@ -714,10 +755,16 @@ def _sanitize_public_source(
         "snippet",
         "extracted_text_preview",
         "source_type",
+        "source_role",
+        "canonical_category",
         "region_match",
         "is_direct_competitor",
         "why_relevant",
         "confidence",
+        "public_confidence",
+        "evidence_quality",
+        "methodology_visible",
+        "evidence_categories",
         "pricing_found",
         "source_relevance_score",
         "public_display",
@@ -787,6 +834,12 @@ def _sanitize_competitive_analysis(
         "regional_competitors",
         "international_benchmarks",
         "market_context_sources",
+        "technology_provider_sources",
+        "adjacent_solution_sources",
+        "source_quality",
+        "search_coverage",
+        "source_relevance_confidence",
+        "overall_evidence_confidence",
     ]:
         group = competitive.get(group_key)
 
@@ -1029,19 +1082,29 @@ def _final_language_pass(value: Any, language: str) -> Any:
 
 
 def _repair_mojibake_text(value: str) -> str:
-    """
-    Répare les séquences UTF-8 courantes affichées comme du texte mojibake.
-
-    Cette fonction est volontairement déterministe et limitée à des séquences
-    connues. Elle ne transforme pas arbitrairement le contenu métier.
-    """
+    """Repair common single- and double-decoded UTF-8 sequences safely."""
     repaired = str(value or "")
+
+    def marker_score(text: str) -> int:
+        markers = ("Ã", "Â", "â€", "â€™", "â€œ", "â€˜", "â€“", "â€”", "ï¿½")
+        return sum(text.count(marker) for marker in markers)
+
+    for _ in range(3):
+        candidates = [repaired]
+        for encoding in ("cp1252", "latin1"):
+            try:
+                candidates.append(repaired.encode(encoding).decode("utf-8"))
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                continue
+        best = min(candidates, key=lambda item: (marker_score(item), item.count("�")))
+        if marker_score(best) >= marker_score(repaired):
+            break
+        repaired = best
 
     for broken, correct in MOJIBAKE_TEXT_REPLACEMENTS.items():
         repaired = repaired.replace(broken, correct)
 
     return repaired
-
 
 def _snapshot_public_context_gate_sections(
     data: Dict[str, Any],

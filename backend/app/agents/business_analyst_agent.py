@@ -361,31 +361,73 @@ FORMAT JSON ATTENDU :
         if not isinstance(result.get("sources_used"), list):
             result["sources_used"] = []
 
-        local_market_candidates = []
-        local_market_sources = []
-        for source in local_rag_result.get("sources") or []:
-            if not isinstance(source, dict) or not source.get("url"):
+        preserved_local_candidates: list[Dict[str, Any]] = []
+        preserved_local_sources: list[Dict[str, Any]] = []
+        seen_local_urls: set[str] = set()
+
+        local_buckets = (
+            local_rag_result.get("sources"),
+            local_rag_result.get("candidates"),
+            local_rag_result.get("local_market_candidates"),
+        )
+
+        for bucket in local_buckets:
+            if not isinstance(bucket, list):
                 continue
-            result["sources_used"].append(str(source["url"]))
 
-            # Preserve every non-rejected local candidate for one final
-            # canonical re-evaluation. LocalMarketSearch intentionally accepts
-            # useful internal evidence for RAG; filtering only public_display
-            # here disconnected valid local pages from CompetitiveAnalysis.
-            if not bool(source.get("rejected")):
-                local_market_candidates.append(dict(source))
+            for source in bucket:
+                if not isinstance(source, dict) or not source.get("url"):
+                    continue
 
-            if (
-                bool(source.get("public_display"))
-                and not bool(source.get("internal_only"))
-                and not bool(source.get("rejected"))
-            ):
-                local_market_sources.append(dict(source))
+                source_copy = dict(source)
+                source_url = str(source_copy.get("url") or "").strip()
+                normalized_url = source_url.lower().rstrip("/")
 
-        # Internal hand-off only. The public sanitizer removes both keys after
-        # CompetitiveAnalysis has built the canonical ledger.
-        result["local_market_candidates"] = local_market_candidates
-        result["local_market_sources"] = local_market_sources
+                if not normalized_url or normalized_url in seen_local_urls:
+                    continue
+
+                seen_local_urls.add(normalized_url)
+                result["sources_used"].append(source_url)
+
+                source_status = str(
+                    source_copy.get("status")
+                    or source_copy.get("decision_status")
+                    or ""
+                ).strip().lower()
+                retained_for_reclassification = bool(
+                    source_copy.get("retained_for_reclassification")
+                    or source_status in {
+                        "candidate",
+                        "reclassify",
+                        "retained",
+                        "internal_candidate",
+                    }
+                )
+                hard_rejected = bool(source_copy.get("hard_rejected"))
+                source_is_not_rejected = False
+                if not bool(source.get("rejected")):
+                    source_is_not_rejected = True
+
+                # A local candidate may be inconclusive at the first gate and
+                # still be useful for one final classification with the full
+                # Project Intelligence packet. Only explicit hard rejections
+                # are removed from this internal hand-off.
+                if not hard_rejected and (
+                    retained_for_reclassification
+                    or source_is_not_rejected
+                ):
+                    source_copy["retained_for_reclassification"] = True
+                    source_copy["origin"] = (
+                        source_copy.get("origin") or "local_market_search"
+                    )
+                    preserved_local_candidates.append(source_copy)
+
+                if (
+                    bool(source_copy.get("public_display"))
+                    and not bool(source_copy.get("internal_only"))
+                    and not bool(source_copy.get("rejected"))
+                ):
+                    preserved_local_sources.append(source_copy)
 
         if not result["sources_used"]:
             result["sources_used"] = (
@@ -418,10 +460,35 @@ FORMAT JSON ATTENDU :
         )
 
         if not validation["is_valid"]:
-            result = domain_integrity_guard.sanitize_object(
+            sanitized = domain_integrity_guard.sanitize_object(
                 data=result,
                 project_context=project_context,
             )
+            result = sanitized if isinstance(sanitized, dict) else result
+
+        # These two lists are an internal pipeline channel, not public report
+        # content. DomainIntegrityGuard may legitimately remove unknown keys,
+        # therefore the hand-off is restored only after its validation pass.
+        result = dict(result or {})
+        # Compatibility aliases keep the established hand-off contract while
+        # preserving the lists across DomainIntegrityGuard.
+        local_market_candidates = preserved_local_candidates
+        local_market_sources = preserved_local_sources
+        result["local_market_candidates"] = local_market_candidates
+        result["local_market_sources"] = local_market_sources
+        result["local_market_handoff_meta"] = {
+            "origin": "local_market_search",
+            "candidate_count": len(preserved_local_candidates),
+            "public_count": len(preserved_local_sources),
+            "reclassification_required": bool(preserved_local_candidates),
+        }
+
+        logger.info(
+            "[AIBusinessAnalystAgent][LocalCandidateHandoff] "
+            "candidates=%s | public=%s",
+            len(preserved_local_candidates),
+            len(preserved_local_sources),
+        )
 
         return result
 

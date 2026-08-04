@@ -2,7 +2,7 @@
 # backend/app/agents/fact_checker_agent.py
 # ============================================================
 #
-# FactCheckerAgent V4 — Professional Fallback + Context Locked
+# FactCheckerAgent V6 — Claim-Compatible Evidence + Context Locked
 #
 # Objectifs :
 # - ne jamais casser le pipeline Startup Evaluator ;
@@ -14,24 +14,104 @@
 # - signaler clairement les hypothèses, limites et validations terrain.
 # ============================================================
 
+from copy import deepcopy
+import logging
 from typing import Any, Dict, List, Set
+from urllib.parse import urlparse
 
 from app.services.domain_integrity_guard import (
     domain_integrity_guard,
     normalize_output_language,
 )
 from app.services.project_context_builder import project_context_builder
+from app.services.evidence_ledger import evidence_ledger
+
+
+logger = logging.getLogger(__name__)
 
 
 class FactCheckerAgent:
+    """
+    Fact checker déterministe et conservateur.
+
+    Les sources déjà validées par ForgeCrawler, SourceRelevanceGate et
+    CompetitiveAnalysisAgent sont conservées. Le Fact Checker ne refait pas
+    une troisième classification métier susceptible de supprimer ces sources.
+    """
+
+    PUBLIC_SOURCE_PATHS = (
+        ("competitive_analysis", "sources"),
+        ("competitive_analysis", "public_sources"),
+        ("competitive_analysis", "local_competitor_sources"),
+        ("competitive_analysis", "regional_competitor_sources"),
+        ("competitive_analysis", "international_benchmark_sources"),
+        ("competitive_analysis", "market_context_sources"),
+        ("competitive_analysis", "market_sources"),
+        ("forgecrawler", "sources"),
+        ("forgecrawler", "public_sources"),
+        ("forgecrawler", "local_competitor_sources"),
+        ("forgecrawler", "regional_competitor_sources"),
+        ("forgecrawler", "international_benchmark_sources"),
+        ("forgecrawler", "market_context_sources"),
+        ("forgecrawler", "market_sources"),
+    )
+
+    PUBLIC_CARD_PATHS = (
+        ("competitive_analysis", "local_direct_competitors"),
+        ("competitive_analysis", "local_adjacent_solutions"),
+        ("competitive_analysis", "regional_competitors"),
+        ("competitive_analysis", "international_benchmarks"),
+        ("competitive_analysis", "verified_competitors"),
+        ("competitive_analysis", "local_competitors"),
+    )
+
+    COMPETITOR_SOURCE_TYPES = {
+        "competitor",
+        "direct_competitor",
+        "probable_direct_competitor",
+        "pricing_page",
+        "adjacent_solution",
+        "technology_benchmark",
+        "technology_provider",
+    }
+
+    MARKET_SOURCE_TYPES = {
+        "market_article",
+        "market_evidence",
+        "local_market_signal",
+        "regulation",
+        "directory",
+    }
+
+    MARKET_SIZE_CATEGORIES = {"market_size", "market_size_claim"}
+    MARKET_DEMAND_CATEGORIES = {
+        "market_demand",
+        "market_demand_claim",
+        "local_market_signal",
+        "regional_context",
+        "sector_context",
+    }
+    PROBLEM_CATEGORIES = {"problem_context", "workflow_context", "current_alternatives"}
+    SOLUTION_CATEGORIES = {
+        "solution_benchmark",
+        "competitor_product",
+        "technology_benchmark",
+        "technology_provider",
+    }
+    PRICING_CATEGORIES = {"pricing", "pricing_signal"}
+    REGULATION_CATEGORIES = {"regulation", "regulatory_evidence"}
+
+
     async def run(self, state: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Main entry point used by Startup Evaluator graph.
+        Point d'entrée principal du Startup Evaluator.
 
-        Important:
-        - This method must never raise an exception.
-        - If fact checking cannot be fully completed, it returns a professional fallback report.
-        - The final report remains complete without pretending that weak claims are verified.
+        Garanties :
+        - ne lève jamais d'exception vers le graphe ;
+        - n'invente jamais de source ;
+        - conserve les sources publiques déjà validées en amont ;
+        - ne retourne jamais une affirmation vide ;
+        - reste lié au contexte du projet et à la langue demandée.
         """
         language = normalize_output_language(state.get("output_language", "fr"))
 
@@ -52,17 +132,41 @@ class FactCheckerAgent:
                 language=language,
             )
 
+            result = self._repair_public_report(
+                result=result,
+                fallback=result,
+                language=language,
+            )
+
             result["output_language"] = language
             result["context_locked"] = True
             result["error_handled"] = False
 
+            logger.info(
+                "[FactCheckerAgent][AUDIT] total_sources=%s | relevant_sources=%s | claims=%s",
+                result.get("source_count", 0),
+                result.get("relevant_source_count", 0),
+                len(result.get("claims") or []),
+            )
+
             return result
 
         except Exception as exc:
-            return self._build_fallback_fact_check_report(
+            logger.exception(
+                "[FactCheckerAgent] Safe fallback used | error=%s",
+                str(exc),
+            )
+
+            fallback = self._build_fallback_fact_check_report(
                 state=state,
                 language=language,
                 error_message=str(exc),
+            )
+
+            return self._repair_public_report(
+                result=fallback,
+                fallback=fallback,
+                language=language,
             )
 
     # ========================================================
@@ -104,7 +208,7 @@ class FactCheckerAgent:
                 or state.get("region")
                 or state.get("target_region")
                 or project.get("market_region")
-                or "Tunisie"
+                or ""
             ),
             output_language=str(state.get("output_language") or "fr"),
             analysis_data=state.get("analysis_data") or {},
@@ -142,7 +246,7 @@ class FactCheckerAgent:
             or state.get("region")
             or state.get("target_region")
             or (state.get("project") or {}).get("market_region"),
-            "Tunisie",
+            "",
         )
 
         target_market = self._safe_text(
@@ -225,6 +329,18 @@ class FactCheckerAgent:
         project_context: Dict[str, Any],
         language: str,
     ) -> Dict[str, Any]:
+        """
+        Construit le rapport à partir des sources publiques canoniques.
+
+        Une source internationale de benchmark ne prouve pas :
+        - la taille du marché tunisien ;
+        - l'existence d'un concurrent local ;
+        - la volonté de payer ;
+        - la viabilité financière.
+
+        Chaque affirmation reçoit donc uniquement les preuves correspondant
+        réellement à sa catégorie.
+        """
         source_count = len(profile["sources"])
 
         relevant_sources = self._filter_relevant_sources(
@@ -233,25 +349,54 @@ class FactCheckerAgent:
         )
 
         relevant_source_count = len(relevant_sources)
+        evidence_groups = self._build_evidence_groups(relevant_sources)
 
-        confidence_level = self._confidence_level(
+        evidence_confidence = self._evidence_confidence(
             source_count=source_count,
             relevant_source_count=relevant_source_count,
+            evidence_groups=evidence_groups,
             profile=profile,
         )
+        confidence_level = evidence_confidence["overall_evidence_confidence"]
 
-        claims = self._build_claims(
+        base_claims = self._build_claims(
             profile=profile,
-            relevant_sources=relevant_sources,
+            evidence_groups=evidence_groups,
             language=language,
         )
+        claim_registry = evidence_ledger.build(analysis_data)
+        registry_claims = self._claims_from_registry(
+            registry=claim_registry,
+            language=language,
+        )
+        claims = self._merge_claim_sets(base_claims, registry_claims)
+        claims = self._clean_claims(claims)
 
         source_summary = {
             "total_sources": source_count,
-            "sources_with_url": source_count,
-            "verified_competitors": self._count_verified_competitors(analysis_data),
+            "sources_with_url": sum(
+                1 for source in profile["sources"] if source.get("url")
+            ),
+            "verified_competitors": len(evidence_groups["local_competitors"]),
             "relevant_sources": relevant_source_count,
+            "local_competitor_sources": len(
+                evidence_groups["local_competitors"]
+            ),
+            "regional_benchmarks": len(
+                evidence_groups["regional_benchmarks"]
+            ),
+            "international_benchmarks": len(
+                evidence_groups["international_benchmarks"]
+            ),
+            "market_evidence": len(evidence_groups["market_evidence"]),
+            "market_size_evidence": len(evidence_groups["market_size_evidence"]),
+            "market_demand_evidence": len(evidence_groups["market_demand_evidence"]),
+            "problem_evidence": len(evidence_groups["problem_evidence"]),
+            "solution_evidence": len(evidence_groups["solution_evidence"]),
+            "pricing_evidence": len(evidence_groups["pricing_evidence"]),
+            "local_adjacent_solutions": len(evidence_groups["local_adjacent_solutions"]),
             "source_confidence": confidence_level,
+            "evidence_confidence": evidence_confidence,
         }
 
         warnings = self._warnings(
@@ -275,24 +420,25 @@ class FactCheckerAgent:
 
         if language == "en":
             summary = (
-                f"Fact checking for {profile['title']} is based on the available analysis "
-                f"and {relevant_source_count} relevant retained source(s). Claims without reliable sources "
-                "must be treated as hypotheses and validated through field research."
+                f"Fact checking for {profile['title']} is based on the available "
+                f"analysis and {relevant_source_count} relevant retained source(s). "
+                "Only claims directly supported by the corresponding evidence category "
+                "are marked as sourced. Other claims remain estimates or require field validation."
             )
-
-            method = "context_locked_source_review"
+            method = "canonical_validated_source_review"
 
         else:
             summary = (
-                f"La vérification factuelle de {profile['title']} repose sur l’analyse disponible "
-                f"et {relevant_source_count} source(s) pertinente(s) retenue(s). Les affirmations sans sources fiables "
-                "doivent rester des hypothèses à valider sur le terrain."
+                f"La vérification factuelle de {profile['title']} repose sur l'analyse "
+                f"disponible et {relevant_source_count} source(s) pertinente(s) retenue(s). "
+                "Seules les affirmations directement soutenues par la catégorie de preuve "
+                "correspondante sont marquées comme sourcées. Les autres restent des "
+                "estimations ou nécessitent une validation terrain."
             )
-
-            method = "verification_sources_contextuelles"
+            method = "verification_sources_canoniques_validees"
 
         return {
-            "format": "fact_checker_v4_professional_context_locked",
+            "format": "fact_checker_v6_claim_compatible_evidence",
             "status": "completed",
             "method": method,
             "summary": summary,
@@ -301,11 +447,29 @@ class FactCheckerAgent:
             "context_locked": True,
             "confidence_level": confidence_level,
             "global_confidence": confidence_level,
+            "evidence_confidence": evidence_confidence,
             "source_count": source_count,
             "relevant_source_count": relevant_source_count,
             "source_summary": source_summary,
+            "claim_registry_format": claim_registry.get("format"),
+            "claim_registry_schema_version": claim_registry.get("schema_version"),
+            "claim_coverage": {
+                "total": len(claims),
+                "section_specific": len(registry_claims),
+                "sourced": sum(1 for claim in claims if claim.get("status") == "sourced"),
+                "estimated": sum(1 for claim in claims if claim.get("status") == "estimated"),
+                "requires_validation": sum(
+                    1
+                    for claim in claims
+                    if claim.get("status") in {"field_validation_required", "not_confirmed"}
+                ),
+            },
             "claims": claims,
-            "claims_to_verify": [claim["claim"] for claim in claims],
+            "claims_to_verify": [
+                claim["claim"]
+                for claim in claims
+                if claim.get("claim")
+            ],
             "supported_claims": self._supported_claims(
                 profile=profile,
                 relevant_sources=relevant_sources,
@@ -320,7 +484,10 @@ class FactCheckerAgent:
             "recommended_next_checks": recommended_validation,
             "recommended_validation": recommended_validation,
             "limitations": limitations,
-            "retained_sources": relevant_sources[:8],
+            "retained_sources": [
+                self._compact_evidence(source)
+                for source in relevant_sources[:8]
+            ],
             "error_handled": False,
         }
 
@@ -331,97 +498,378 @@ class FactCheckerAgent:
     def _build_claims(
         self,
         profile: Dict[str, Any],
-        relevant_sources: List[Dict[str, Any]],
+        evidence_groups: Dict[str, List[Dict[str, Any]]],
         language: str,
     ) -> List[Dict[str, Any]]:
-        has_sources = len(relevant_sources) > 0
+        """Build claims only from evidence compatible with each claim type."""
+        problem_evidence = evidence_groups["problem_evidence"]
+        solution_evidence = evidence_groups["solution_evidence"]
+        market_size_evidence = evidence_groups["market_size_evidence"]
+        market_demand_evidence = evidence_groups["market_demand_evidence"]
+        local_competitors = evidence_groups["local_competitors"]
+        local_adjacent = evidence_groups["local_adjacent_solutions"]
+        regional_benchmarks = evidence_groups["regional_benchmarks"]
+        international_benchmarks = evidence_groups["international_benchmarks"]
+
+        # A market-size claim is sourced only when quantitative evidence and
+        # a demand/adoption signal both have visible or institutionally credible
+        # methodology. Commercial report landing pages remain signals to verify.
+        qualified_market_size = [
+            source
+            for source in market_size_evidence
+            if self._is_qualified_market_evidence(source)
+        ]
+        qualified_market_demand = [
+            source
+            for source in market_demand_evidence
+            if self._is_qualified_market_evidence(source)
+        ]
+        market_is_sourced = bool(
+            qualified_market_size and qualified_market_demand
+        )
+
+        if local_competitors:
+            competition_status = "sourced"
+            competition_confidence = "high" if len(local_competitors) >= 2 else "medium"
+            competition_evidence = local_competitors[:3]
+            if language == "en":
+                competition_claim = (
+                    f"{len(local_competitors)} verified direct local competitor source(s) "
+                    f"were retained for {profile['title']} in {profile['region']}."
+                )
+            else:
+                competition_claim = (
+                    f"{len(local_competitors)} source(s) de concurrent direct local vérifié "
+                    f"ont été retenues pour {profile['title']} dans {profile['region']}."
+                )
+        else:
+            comparison_sources = local_adjacent + regional_benchmarks + international_benchmarks
+            if comparison_sources:
+                competition_status = "sourced"
+                competition_confidence = "medium"
+                competition_evidence = comparison_sources[:3]
+                if language == "en":
+                    competition_claim = (
+                        f"{len(comparison_sources)} adjacent or benchmark source(s) were retained "
+                        f"for {profile['title']}, but no verified direct local competitor was "
+                        f"established in {profile['region']}."
+                    )
+                else:
+                    competition_claim = (
+                        f"{len(comparison_sources)} source(s) adjacente(s) ou de benchmark ont été "
+                        f"retenues pour {profile['title']}, mais aucun concurrent direct local "
+                        f"vérifié n'a été établi dans {profile['region']}."
+                    )
+            else:
+                competition_status = "not_confirmed"
+                competition_confidence = "low"
+                competition_evidence = []
+                if language == "en":
+                    competition_claim = (
+                        f"Direct local competition and close alternatives for {profile['title']} "
+                        f"in {profile['region']} are not confirmed."
+                    )
+                else:
+                    competition_claim = (
+                        f"La concurrence directe locale et les alternatives proches de "
+                        f"{profile['title']} dans {profile['region']} ne sont pas confirmées."
+                    )
 
         if language == "en":
-            return [
+            problem_status = "sourced" if problem_evidence else "field_validation_required"
+            market_claim = (
+                f"Quantitative market evidence and demand signals support the market opportunity "
+                f"for {profile['title']}."
+                if market_is_sourced
+                else f"The market size and demand for {profile['title']} are not sufficiently "
+                     "verified to justify execution without field validation."
+            )
+            claims = [
                 self._claim(
                     claim=f"The problem described for {profile['title']} is relevant to the target users.",
                     category="problem",
-                    status="field_validation_required",
-                    confidence="medium",
-                    correction="Validate the problem with real target users before product development.",
+                    status=problem_status,
+                    confidence="medium" if problem_evidence else "low",
+                    correction="Validate frequency, severity and urgency with real target users.",
                     language=language,
+                    evidence=problem_evidence[:3],
                 ),
                 self._claim(
                     claim=f"The proposed solution can solve the stated problem for {profile['title']}.",
                     category="solution",
                     status="estimated",
-                    confidence="medium",
-                    correction="Test a reduced MVP with real users before building the complete product.",
+                    confidence="medium" if solution_evidence else "low",
+                    correction="Test a reduced MVP with real users; comparable products prove feasibility, not product-market fit.",
                     language=language,
+                    evidence=solution_evidence[:3],
                 ),
                 self._claim(
-                    claim=f"The market opportunity for {profile['title']} is large enough to justify execution.",
+                    claim=market_claim,
                     category="market_size",
-                    status="sourced" if has_sources else "field_validation_required",
-                    confidence="medium" if has_sources else "low",
-                    correction="Confirm market size using reliable sector, regional or customer data.",
+                    status="sourced" if market_is_sourced else "field_validation_required",
+                    confidence="medium" if market_is_sourced else "low",
+                    correction="Confirm addressable market size, active demand and reachable customer count with category-compatible data.",
                     language=language,
+                    evidence=(
+                        qualified_market_size + qualified_market_demand
+                        if market_is_sourced
+                        else market_size_evidence + market_demand_evidence
+                    )[:3],
                 ),
                 self._claim(
-                    claim=f"The competition and alternatives in {profile['region']} are correctly identified.",
+                    claim=competition_claim,
                     category="local_competition",
-                    status="sourced" if has_sources else "not_confirmed",
-                    confidence="medium" if has_sources else "low",
-                    correction="Manually verify direct and indirect competitors before final positioning.",
+                    status=competition_status,
+                    confidence=competition_confidence,
+                    correction="Manually verify product functionality, customer segment, geography and current alternatives.",
                     language=language,
+                    evidence=competition_evidence,
                 ),
                 self._claim(
                     claim=f"The financial assumptions for {profile['title']} are realistic.",
                     category="finance",
                     status="field_validation_required",
                     confidence="low",
-                    correction="Confirm MVP cost, pricing, margins and willingness to pay with real data.",
+                    correction="Confirm MVP cost, pricing, margins, acquisition cost and willingness to pay with real data.",
                     language=language,
                 ),
             ]
+        else:
+            problem_status = "sourced" if problem_evidence else "field_validation_required"
+            market_claim = (
+                f"Des données quantitatives de marché et des signaux de demande soutiennent "
+                f"l'opportunité de marché de {profile['title']}."
+                if market_is_sourced
+                else f"La taille du marché et la demande pour {profile['title']} ne sont pas "
+                     "suffisamment vérifiées pour justifier l'exécution sans validation terrain."
+            )
+            claims = [
+                self._claim(
+                    claim=f"Le problème décrit pour {profile['title']} est pertinent pour les utilisateurs cibles.",
+                    category="problem",
+                    status=problem_status,
+                    confidence="medium" if problem_evidence else "low",
+                    correction="Valider la fréquence, la gravité et l'urgence avec de vrais utilisateurs cibles.",
+                    language=language,
+                    evidence=problem_evidence[:3],
+                ),
+                self._claim(
+                    claim=f"La solution proposée peut résoudre le problème décrit pour {profile['title']}.",
+                    category="solution",
+                    status="estimated",
+                    confidence="medium" if solution_evidence else "low",
+                    correction="Tester un MVP réduit ; des produits comparables prouvent la faisabilité, pas l'adéquation produit-marché.",
+                    language=language,
+                    evidence=solution_evidence[:3],
+                ),
+                self._claim(
+                    claim=market_claim,
+                    category="market_size",
+                    status="sourced" if market_is_sourced else "field_validation_required",
+                    confidence="medium" if market_is_sourced else "low",
+                    correction="Confirmer le marché adressable, la demande active et le nombre de clients atteignables avec des données compatibles.",
+                    language=language,
+                    evidence=(
+                        qualified_market_size + qualified_market_demand
+                        if market_is_sourced
+                        else market_size_evidence + market_demand_evidence
+                    )[:3],
+                ),
+                self._claim(
+                    claim=competition_claim,
+                    category="local_competition",
+                    status=competition_status,
+                    confidence=competition_confidence,
+                    correction="Vérifier manuellement les fonctionnalités, la cible, la zone géographique et les alternatives utilisées.",
+                    language=language,
+                    evidence=competition_evidence,
+                ),
+                self._claim(
+                    claim=f"Les hypothèses financières de {profile['title']} sont réalistes.",
+                    category="finance",
+                    status="field_validation_required",
+                    confidence="low",
+                    correction="Confirmer le coût MVP, le prix, les marges, le coût d'acquisition et la volonté de payer.",
+                    language=language,
+                ),
+            ]
+        return self._clean_claims(claims)
 
-        return [
-            self._claim(
-                claim=f"Le problème décrit pour {profile['title']} est pertinent pour les utilisateurs cibles.",
-                category="problem",
-                status="field_validation_required",
-                confidence="medium",
-                correction="Valider le problème avec de vrais utilisateurs cibles avant le développement.",
+    def _claims_from_registry(
+        self,
+        *,
+        registry: Dict[str, Any],
+        language: str,
+    ) -> List[Dict[str, Any]]:
+        """Convert the canonical claim registry into public fact-check cards."""
+        source_index = registry.get("source_index") or {}
+        if not isinstance(source_index, dict):
+            source_index = {}
+
+        results: List[Dict[str, Any]] = []
+        for item in registry.get("claims") or []:
+            if not isinstance(item, dict):
+                continue
+            claim_text = self._safe_text(item.get("claim"), "")
+            if not claim_text:
+                continue
+
+            path = self._safe_text(item.get("path"), "")
+            # The five broad claims are already represented by the base report;
+            # registry rows add the concrete claims from generated sections.
+            if path in {"problem", "proposed_solution"}:
+                continue
+
+            raw_status = self._safe_text(item.get("status"), "not_confirmed")
+            status = {
+                "sourced": "sourced",
+                "estimated": "estimated",
+                "hypothesis": "estimated",
+                "not_confirmed": "field_validation_required",
+                "field_validation_required": "field_validation_required",
+                "rejected": "not_confirmed",
+            }.get(raw_status, "field_validation_required")
+            confidence = self._safe_text(item.get("confidence"), "low").lower()
+            if confidence not in {"low", "medium", "high"}:
+                confidence = "low"
+
+            evidence: List[Dict[str, Any]] = []
+            for source_id in item.get("source_ids") or []:
+                source = source_index.get(source_id)
+                if isinstance(source, dict) and source.get("url"):
+                    evidence.append(dict(source))
+
+            correction = self._registry_correction(
+                path=path,
+                category=self._safe_text(item.get("category"), "general"),
+                status=status,
                 language=language,
-            ),
-            self._claim(
-                claim=f"La solution proposée peut résoudre le problème décrit pour {profile['title']}.",
-                category="solution",
-                status="estimated",
-                confidence="medium",
-                correction="Tester un MVP réduit avec de vrais utilisateurs avant de construire le produit complet.",
+            )
+            card = self._claim(
+                claim=claim_text,
+                category=self._safe_text(item.get("category"), "general"),
+                status=status,
+                confidence=confidence,
+                correction=correction,
                 language=language,
-            ),
-            self._claim(
-                claim=f"L’opportunité de marché pour {profile['title']} est suffisante pour justifier l’exécution.",
-                category="market_size",
-                status="sourced" if has_sources else "field_validation_required",
-                confidence="medium" if has_sources else "low",
-                correction="Confirmer la taille du marché avec des données sectorielles, régionales ou terrain fiables.",
-                language=language,
-            ),
-            self._claim(
-                claim=f"La concurrence et les alternatives dans la région {profile['region']} sont correctement identifiées.",
-                category="local_competition",
-                status="sourced" if has_sources else "not_confirmed",
-                confidence="medium" if has_sources else "low",
-                correction="Vérifier manuellement les concurrents directs et indirects avant le positionnement final.",
-                language=language,
-            ),
-            self._claim(
-                claim=f"Les hypothèses financières de {profile['title']} sont réalistes.",
-                category="finance",
-                status="field_validation_required",
-                confidence="low",
-                correction="Confirmer le coût MVP, le prix, les marges et la volonté de payer avec des données réelles.",
-                language=language,
-            ),
-        ]
+                evidence=evidence,
+            )
+            card.update(
+                {
+                    "claim_id": self._safe_text(item.get("claim_id"), ""),
+                    "path": path,
+                    "is_quantitative": bool(item.get("is_quantitative")),
+                    "evidence_quality": self._safe_text(
+                        item.get("evidence_quality"),
+                        "low",
+                    ),
+                }
+            )
+            results.append(card)
+
+        # Keep enough detail for the report without flooding the UI.
+        priority_prefixes = (
+            "market_study.",
+            "financial_estimation.",
+            "competitive_analysis.",
+            "improvement_suggestions[",
+        )
+        results.sort(
+            key=lambda claim: (
+                0 if str(claim.get("path") or "").startswith(priority_prefixes) else 1,
+                0 if claim.get("is_quantitative") else 1,
+                str(claim.get("path") or ""),
+            )
+        )
+        return results[:15]
+
+    def _registry_correction(
+        self,
+        *,
+        path: str,
+        category: str,
+        status: str,
+        language: str,
+    ) -> str:
+        if status == "sourced":
+            return (
+                "Vérifier la méthodologie, la date et la compatibilité géographique de la source."
+                if language != "en"
+                else "Check the source methodology, date and geographic compatibility."
+            )
+
+        normalized = f"{path} {category}".lower()
+        if "financial" in normalized or "finance" in normalized or "pricing" in normalized:
+            return (
+                "Confirmer cette estimation avec des devis, coûts unitaires, hypothèses et tests de prix documentés."
+                if language != "en"
+                else "Confirm this estimate with quotes, unit costs, documented assumptions and pricing tests."
+            )
+        if "local" in normalized or "market" in normalized:
+            return (
+                "Valider ce signal avec une source locale officielle ou indépendante et des entretiens terrain."
+                if language != "en"
+                else "Validate this signal with an official or independent local source and field interviews."
+            )
+        if "technology" in normalized or "solution" in normalized:
+            return (
+                "Un benchmark prouve une possibilité technique, pas l’adoption ni la performance du projet ; tester le MVP."
+                if language != "en"
+                else "A benchmark shows technical possibility, not project adoption or performance; test the MVP."
+            )
+        return (
+            "Traiter cette affirmation comme une hypothèse jusqu’à validation directe."
+            if language != "en"
+            else "Treat this claim as a hypothesis until directly validated."
+        )
+
+    def _merge_claim_sets(
+        self,
+        base_claims: List[Dict[str, Any]],
+        registry_claims: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        merged: List[Dict[str, Any]] = []
+        seen = set()
+        for item in list(base_claims or []) + list(registry_claims or []):
+            if not isinstance(item, dict):
+                continue
+            text = self._safe_text(item.get("claim"), "")
+            if not text:
+                continue
+            key = " ".join(text.casefold().split())
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+        return merged
+
+    def _is_qualified_market_evidence(
+        self,
+        source: Dict[str, Any],
+    ) -> bool:
+        quality = self._safe_text(
+            source.get("evidence_quality"),
+            "",
+        ).lower()
+        if quality == "high":
+            return True
+        if quality == "medium" and bool(source.get("methodology_visible")):
+            return True
+
+        source_type = self._safe_text(source.get("source_type"), "").lower()
+        if source_type in {"regulation", "official_evidence"}:
+            return True
+
+        try:
+            domain = urlparse(self._safe_text(source.get("url"), "")).netloc.lower()
+        except Exception:
+            domain = ""
+        if domain.endswith(".gov") or domain.endswith(".edu"):
+            return True
+        if domain.endswith(".org") and bool(source.get("methodology_visible")):
+            return True
+
+        return False
 
     def _claim(
         self,
@@ -431,16 +879,28 @@ class FactCheckerAgent:
         confidence: str,
         correction: str,
         language: str,
+        evidence: List[Dict[str, Any]] | None = None,
     ) -> Dict[str, Any]:
+        clean_claim = self._safe_text(claim, "")
+        clean_correction = self._safe_text(correction, "")
+
         return {
-            "claim": claim,
-            "category": category,
-            "status": status,
+            "claim": clean_claim,
+            "category": self._safe_text(category, "general"),
+            "status": self._safe_text(status, "not_confirmed"),
             "public_status": self._public_status_label(status, language),
-            "confidence": confidence,
-            "public_confidence": self._public_confidence_label(confidence, language),
-            "evidence": [],
-            "correction": correction,
+            "confidence": self._safe_text(confidence, "low"),
+            "public_confidence": self._public_confidence_label(
+                confidence,
+                language,
+            ),
+            "evidence": [
+                self._compact_evidence(source)
+                for source in self._deduplicate_source_list(
+                    [item for item in (evidence or []) if isinstance(item, dict)]
+                )[:3]
+            ],
+            "correction": clean_correction,
         }
 
     # ========================================================
@@ -456,23 +916,73 @@ class FactCheckerAgent:
         if not relevant_sources:
             if language == "en":
                 return [
-                    f"No strong claim about {profile['title']} should be considered fully verified without relevant sources."
+                    f"No strong claim about {profile['title']} should be considered "
+                    "fully verified without relevant sources."
                 ]
 
             return [
-                f"Aucune affirmation forte sur {profile['title']} ne doit être considérée comme totalement vérifiée sans source pertinente."
+                f"Aucune affirmation forte sur {profile['title']} ne doit être "
+                "considérée comme totalement vérifiée sans source pertinente."
             ]
+
+        groups = self._build_evidence_groups(relevant_sources)
+
+        supported: List[str] = []
+
+        if groups["local_competitors"]:
+            if language == "en":
+                supported.append(
+                    f"{len(groups['local_competitors'])} local competitor or close "
+                    "solution source(s) were retained."
+                )
+            else:
+                supported.append(
+                    f"{len(groups['local_competitors'])} source(s) de concurrent "
+                    "ou de solution proche locale ont été retenues."
+                )
+
+        benchmark_count = (
+            len(groups["regional_benchmarks"])
+            + len(groups["international_benchmarks"])
+        )
+
+        if benchmark_count:
+            if language == "en":
+                supported.append(
+                    f"{benchmark_count} regional or international benchmark "
+                    "source(s) were retained."
+                )
+            else:
+                supported.append(
+                    f"{benchmark_count} source(s) de benchmark régional ou "
+                    "international ont été retenues."
+                )
+
+        if groups["market_size_evidence"]:
+            if language == "en":
+                supported.append(
+                    f"{len(groups['market_size_evidence'])} market evidence source(s) "
+                    "were retained."
+                )
+            else:
+                supported.append(
+                    f"{len(groups['market_size_evidence'])} source(s) de preuve marché "
+                    "ont été retenues."
+                )
 
         if language == "en":
-            return [
-                f"{len(relevant_sources)} retained source(s) are sufficiently related to the project context.",
-                "Some claims can be discussed cautiously when supported by retained sources, but field validation remains required.",
-            ]
+            supported.append(
+                "Retained sources support only the claims matching their evidence "
+                "category; field validation remains required."
+            )
+        else:
+            supported.append(
+                "Les sources retenues soutiennent uniquement les affirmations "
+                "correspondant à leur catégorie de preuve ; une validation terrain "
+                "reste nécessaire."
+            )
 
-        return [
-            f"{len(relevant_sources)} source(s) retenue(s) sont suffisamment reliées au contexte du projet.",
-            "Certaines affirmations peuvent être discutées prudemment lorsqu’elles sont soutenues par des sources retenues, mais une validation terrain reste nécessaire.",
-        ]
+        return self._unique(supported)
 
     def _uncertain_claims(
         self,
@@ -516,6 +1026,7 @@ class FactCheckerAgent:
         language: str,
     ) -> List[str]:
         warnings: List[str] = []
+        groups = self._build_evidence_groups(relevant_sources)
 
         if language == "en":
             if source_count == 0:
@@ -525,7 +1036,19 @@ class FactCheckerAgent:
 
             if source_count > 0 and not relevant_sources:
                 warnings.append(
-                    f"Sources exist, but none are sufficiently linked to the context of {profile['title']}."
+                    f"Sources exist, but none can be used as a retained public "
+                    f"evidence source for {profile['title']}."
+                )
+
+            if relevant_sources and not groups["local_competitors"]:
+                warnings.append(
+                    "No verified direct local competitor was established. "
+                    "Regional or international benchmarks do not prove local competition."
+                )
+
+            if not groups["market_size_evidence"]:
+                warnings.append(
+                    "No retained market-evidence source directly supports the market-size claim."
                 )
 
             if profile["crawler_confidence"] == "low":
@@ -535,37 +1058,62 @@ class FactCheckerAgent:
                 warnings.append("Competitive analysis must be manually verified.")
 
             if profile["financial_risk_level"] == "high":
-                warnings.append("Financial risk is high and requires cost/pricing testing.")
+                warnings.append(
+                    "Financial risk is high and requires cost and pricing testing."
+                )
 
             if not warnings:
                 warnings.append(
-                    "No automatic blocking signal was detected, but field validation remains required."
+                    "No automatic blocking signal was detected, but field validation "
+                    "remains required."
                 )
 
             return self._unique(warnings)
 
         if source_count == 0:
             warnings.append(
-                f"Aucune source externe n’est disponible pour vérifier {profile['title']}."
+                f"Aucune source externe n'est disponible pour vérifier "
+                f"{profile['title']}."
             )
 
         if source_count > 0 and not relevant_sources:
             warnings.append(
-                f"Des sources existent, mais aucune n’est suffisamment reliée au contexte de {profile['title']}."
+                f"Des sources existent, mais aucune ne peut être utilisée comme "
+                f"preuve publique retenue pour {profile['title']}."
+            )
+
+        if relevant_sources and not groups["local_competitors"]:
+            warnings.append(
+                "Aucun concurrent local direct vérifié n'a été établi. "
+                "Les benchmarks régionaux ou internationaux ne prouvent pas "
+                "la concurrence locale."
+            )
+
+        if not groups["market_size_evidence"]:
+            warnings.append(
+                "Aucune source de preuve marché retenue ne soutient directement "
+                "l'affirmation sur la taille du marché."
             )
 
         if profile["crawler_confidence"] == "low":
-            warnings.append("La confiance des sources web dynamiques est faible.")
+            warnings.append(
+                "La confiance des sources web dynamiques est faible."
+            )
 
         if profile["competitive_confidence"] == "low":
-            warnings.append("L’analyse concurrentielle doit être vérifiée manuellement.")
+            warnings.append(
+                "L'analyse concurrentielle doit être vérifiée manuellement."
+            )
 
         if profile["financial_risk_level"] == "high":
-            warnings.append("Le risque financier est élevé et nécessite un test coût/prix.")
+            warnings.append(
+                "Le risque financier est élevé et nécessite un test coût/prix."
+            )
 
         if not warnings:
             warnings.append(
-                "Aucun signal bloquant automatique n’a été détecté, mais une validation terrain reste obligatoire."
+                "Aucun signal bloquant automatique n'a été détecté, mais une "
+                "validation terrain reste obligatoire."
             )
 
         return self._unique(warnings)
@@ -599,33 +1147,66 @@ class FactCheckerAgent:
         relevant_sources: List[Dict[str, Any]],
         language: str,
     ) -> List[str]:
+        groups = self._build_evidence_groups(relevant_sources)
+
         if language == "en":
             limitations = [
                 "This fact-checking report does not replace field validation.",
-                "Market size, pricing, competitor positioning and willingness to pay must be confirmed manually.",
+                "Market size, pricing, competitor positioning and willingness to "
+                "pay must be confirmed with category-appropriate evidence.",
             ]
 
             if source_count == 0:
-                limitations.append("No external source was available for automatic verification.")
+                limitations.append(
+                    "No external source was available for automatic verification."
+                )
 
             if source_count > 0 and not relevant_sources:
                 limitations.append(
-                    "External sources were found, but none passed the contextual relevance filter."
+                    "External sources were found, but no public validated source "
+                    "could be retained by the Fact Checker."
+                )
+
+            if relevant_sources and not groups["local_competitors"]:
+                limitations.append(
+                    "Retained benchmarks do not establish the existence or absence "
+                    "of direct local competitors."
+                )
+
+            if not groups["market_size_evidence"]:
+                limitations.append(
+                    "No retained source directly validates market size."
                 )
 
             return self._unique(limitations)
 
         limitations = [
             "Cette vérification factuelle ne remplace pas une validation terrain.",
-            "La taille du marché, le prix, le positionnement concurrentiel et la volonté de payer doivent être confirmés manuellement.",
+            "La taille du marché, le prix, le positionnement concurrentiel et la "
+            "volonté de payer doivent être confirmés avec des preuves adaptées "
+            "à chaque catégorie.",
         ]
 
         if source_count == 0:
-            limitations.append("Aucune source externe n’était disponible pour la vérification automatique.")
+            limitations.append(
+                "Aucune source externe n'était disponible pour la vérification automatique."
+            )
 
         if source_count > 0 and not relevant_sources:
             limitations.append(
-                "Des sources externes ont été trouvées, mais aucune n’a passé le filtre de pertinence contextuelle."
+                "Des sources externes ont été trouvées, mais aucune source publique "
+                "validée n'a pu être retenue par le Fact Checker."
+            )
+
+        if relevant_sources and not groups["local_competitors"]:
+            limitations.append(
+                "Les benchmarks retenus n'établissent ni l'existence ni l'absence "
+                "de concurrents locaux directs."
+            )
+
+        if not groups["market_size_evidence"]:
+            limitations.append(
+                "Aucune source retenue ne valide directement la taille du marché."
             )
 
         return self._unique(limitations)
@@ -807,60 +1388,81 @@ class FactCheckerAgent:
     # Source collection / filtering
     # ========================================================
 
-    def _collect_sources(self, data: Any) -> List[Dict[str, Any]]:
-        sources: List[Dict[str, Any]] = []
-        seen: Set[str] = set()
+    def _collect_sources(self, analysis_data: Any) -> List[Dict[str, Any]]:
+        """
+        Collecte uniquement les sources issues des contrats publics connus.
 
-        def walk(value: Any) -> None:
-            if isinstance(value, dict):
-                url = value.get("url") or value.get("source_url")
+        L'ancien parcours récursif de tout analysis_data pouvait :
+        - collecter des URLs qui n'étaient pas des sources ;
+        - perdre matched_strong_terms et les indicateurs métier ;
+        - dédupliquer trop tôt une source enrichie au profit d'une carte pauvre.
 
-                if url:
-                    key = str(url).strip().lower()
+        La nouvelle version privilégie les tableaux canoniques.
+        """
+        if not isinstance(analysis_data, dict):
+            return []
 
-                    if key and key not in seen:
-                        seen.add(key)
-                        sources.append(
-                            {
-                                "title": self._safe_text(
-                                    value.get("title") or value.get("name"),
-                                    "Source",
-                                ),
-                                "url": str(url),
-                                "snippet": self._safe_text(
-                                    value.get("snippet")
-                                    or value.get("evidence")
-                                    or value.get("why_relevant")
-                                    or value.get("extracted_text_preview"),
-                                    "",
-                                ),
-                                "source_type": self._safe_text(
-                                    value.get("source_type"),
-                                    "",
-                                ),
-                                "region_match": self._safe_text(
-                                    value.get("region_match"),
-                                    "",
-                                ),
-                                "matched_project_terms": self._safe_list(
-                                    value.get("matched_project_terms")
-                                    or value.get("matched_terms")
-                                ),
-                                "confidence": self._safe_text(
-                                    value.get("confidence"),
-                                    "",
-                                ),
-                            }
-                        )
+        collected: Dict[str, Dict[str, Any]] = {}
 
-                for item in value.values():
-                    walk(item)
+        for path in self.PUBLIC_SOURCE_PATHS:
+            for item in self._get_nested_list(analysis_data, path):
+                normalized = self._normalize_source(
+                    item=item,
+                    source_path=".".join(path),
+                    upstream_validated=True,
+                )
 
-            elif isinstance(value, list):
-                for item in value:
-                    walk(item)
+                if not normalized:
+                    continue
 
-        walk(data)
+                signature = self._source_signature(normalized)
+                existing = collected.get(signature)
+
+                if existing is None:
+                    collected[signature] = normalized
+                else:
+                    collected[signature] = self._merge_source_records(
+                        existing,
+                        normalized,
+                    )
+
+        # Cartes concurrentielles : fallback seulement.
+        for path in self.PUBLIC_CARD_PATHS:
+            for item in self._get_nested_list(analysis_data, path):
+                normalized = self._normalize_source(
+                    item=item,
+                    source_path=".".join(path),
+                    upstream_validated=True,
+                )
+
+                if not normalized:
+                    continue
+
+                signature = self._source_signature(normalized)
+                existing = collected.get(signature)
+
+                if existing is None:
+                    collected[signature] = normalized
+                else:
+                    collected[signature] = self._merge_source_records(
+                        existing,
+                        normalized,
+                    )
+
+        sources = list(collected.values())
+        sources.sort(
+            key=lambda source: float(
+                source.get("source_relevance_score") or 0
+            ),
+            reverse=True,
+        )
+
+        logger.info(
+            "[FactCheckerAgent][SourceCollection] canonical_sources=%s | titles=%s",
+            len(sources),
+            [source.get("title") for source in sources[:8]],
+        )
+
         return sources
 
     def _filter_relevant_sources(
@@ -868,47 +1470,117 @@ class FactCheckerAgent:
         sources: List[Dict[str, Any]],
         project_context: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
+        """
+        Conserve les sources publiques déjà validées en amont.
+
+        Important :
+        le Fact Checker ne rappelle pas domain_integrity_guard.filter_sources()
+        sur les sources canoniques. Ce second filtrage était la cause du passage
+        de 1 source retenue à 0 source pertinente.
+        """
         if not sources:
             return []
 
-        try:
-            filtered = domain_integrity_guard.filter_sources(
-                sources=sources,
-                project_context=project_context,
-                min_overlap=1,
-            )
-        except Exception:
-            filtered = sources
-
         context_terms = self._context_terms(project_context)
-
         cleaned: List[Dict[str, Any]] = []
         seen_urls: Set[str] = set()
 
-        for source in filtered:
-            score = self._source_relevance_score(source, context_terms)
-
-            if score < 0.20:
+        for source in sources:
+            if not isinstance(source, dict):
                 continue
 
-            url = str(source.get("url") or "").strip().lower()
-
-            if url and url in seen_urls:
+            if source.get("rejected") is True:
                 continue
 
-            if url:
-                seen_urls.add(url)
+            if source.get("internal_only") is True:
+                continue
 
-            cleaned_source = {
-                **source,
-                "source_relevance_score": round(score, 2),
-            }
+            if (
+                "public_display" in source
+                and source.get("public_display") is False
+            ):
+                continue
 
-            cleaned.append(cleaned_source)
+            source_type = self._safe_text(
+                source.get("source_type"),
+                "",
+            ).lower()
+
+            if source_type == "irrelevant":
+                continue
+
+            url = self._safe_text(source.get("url"), "")
+
+            if not self._valid_http_url(url):
+                continue
+
+            normalized_url = url.lower()
+
+            if normalized_url in seen_urls:
+                continue
+
+            upstream_score = self._safe_float(
+                source.get("source_relevance_score"),
+                0.0,
+            )
+            deterministic_score = self._source_relevance_score(
+                source,
+                context_terms,
+            )
+
+            if source.get("upstream_validated") is True:
+                # La décision de publication a déjà été prise en amont.
+                final_score = max(
+                    upstream_score,
+                    deterministic_score,
+                    0.20,
+                )
+            else:
+                # Compatibilité avec d'anciennes structures non validées.
+                try:
+                    legacy_filtered = domain_integrity_guard.filter_sources(
+                        sources=[source],
+                        project_context=project_context,
+                        min_overlap=1,
+                    )
+                except Exception:
+                    legacy_filtered = [source]
+
+                if not legacy_filtered:
+                    continue
+
+                final_score = max(
+                    upstream_score,
+                    deterministic_score,
+                )
+
+                if final_score < 0.20:
+                    continue
+
+            seen_urls.add(normalized_url)
+
+            cleaned.append(
+                {
+                    **source,
+                    "source_relevance_score": round(
+                        max(0.0, min(1.0, final_score)),
+                        2,
+                    ),
+                }
+            )
 
         cleaned.sort(
-            key=lambda item: float(item.get("source_relevance_score") or 0),
+            key=lambda item: float(
+                item.get("source_relevance_score") or 0
+            ),
             reverse=True,
+        )
+
+        logger.info(
+            "[FactCheckerAgent][SourceFilter] input=%s | relevant=%s | titles=%s",
+            len(sources),
+            len(cleaned),
+            [source.get("title") for source in cleaned[:8]],
         )
 
         return cleaned
@@ -918,18 +1590,37 @@ class FactCheckerAgent:
         source: Dict[str, Any],
         context_terms: List[str],
     ) -> float:
+        """
+        Score secondaire utilisé pour l'audit et les anciennes structures.
+
+        Le score validé en amont reste prioritaire pour les sources canoniques.
+        """
+        upstream_score = self._safe_float(
+            source.get("source_relevance_score"),
+            0.0,
+        )
+
         if not context_terms:
-            return 0.30
+            return max(upstream_score, 0.30)
 
         title = self._safe_text(source.get("title"), "")
-        snippet = self._safe_text(source.get("snippet"), "")
+        snippet = self._safe_text(
+            source.get("snippet")
+            or source.get("why_relevant"),
+            "",
+        )
         source_type = self._safe_text(source.get("source_type"), "")
-        matched_terms = self._safe_list(source.get("matched_project_terms"))
+        matched_terms = self._safe_list(
+            source.get("matched_project_terms")
+            or source.get("matched_strong_terms")
+        )
 
-        source_text = f"{title} {snippet} {source_type} {' '.join(matched_terms)}".lower()
+        source_text = (
+            f"{title} {snippet} {source_type} {' '.join(matched_terms)}"
+        ).lower()
 
         if not source_text.strip():
-            return 0.0
+            return upstream_score
 
         weak_terms = {
             "app",
@@ -946,10 +1637,15 @@ class FactCheckerAgent:
             "website",
             "dashboard",
             "management",
+            "software",
+            "saas",
             "create",
             "help",
             "short",
             "lite",
+            "market",
+            "industry",
+            "product",
         }
 
         strong_matches = 0
@@ -988,10 +1684,13 @@ class FactCheckerAgent:
         if source.get("url"):
             score += 0.05
 
-        if source.get("snippet"):
+        if source.get("snippet") or source.get("why_relevant"):
             score += 0.05
 
-        return max(0.0, min(1.0, score))
+        return max(
+            upstream_score,
+            max(0.0, min(1.0, score)),
+        )
 
     def _context_terms(self, project_context: Dict[str, Any]) -> List[str]:
         raw_values: List[Any] = [
@@ -1032,6 +1731,486 @@ class FactCheckerAgent:
 
         return self._unique(expanded)[:40]
 
+
+    def _build_evidence_groups(
+        self,
+        sources: List[Dict[str, Any]],
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        groups: Dict[str, List[Dict[str, Any]]] = {
+            "local_competitors": [],
+            "local_adjacent_solutions": [],
+            "regional_benchmarks": [],
+            "international_benchmarks": [],
+            "market_size_evidence": [],
+            "market_demand_evidence": [],
+            "problem_evidence": [],
+            "solution_evidence": [],
+            "pricing_evidence": [],
+            "regulatory_evidence": [],
+            "sector_context": [],
+            "market_evidence": [],
+            "other_relevant": [],
+        }
+
+        for source in sources:
+            source_type = self._safe_text(source.get("source_type"), "").lower()
+            source_role = self._safe_text(source.get("source_role"), "").lower()
+            canonical = self._safe_text(source.get("canonical_category"), "").lower()
+            region = self._safe_text(source.get("region_match"), "unknown").lower()
+            categories = {
+                self._safe_text(value, "").lower()
+                for value in self._safe_list(source.get("evidence_categories"))
+                if self._safe_text(value, "")
+            }
+
+            role_blob = " ".join((source_type, source_role, canonical))
+            if "technology" in role_blob:
+                categories.update({"technology_benchmark", "solution_benchmark"})
+            if "adjacent" in role_blob:
+                categories.add("solution_benchmark")
+            if "market" in role_blob:
+                categories.add("sector_context")
+            if "local_market" in role_blob:
+                categories.add("local_market_signal")
+            if "direct_competitor" in role_blob:
+                categories.add("competitor_product")
+            if source.get("pricing_found"):
+                categories.add("pricing")
+
+            if not categories:
+                title_reason = self._safe_text(
+                    f"{source.get('title', '')} {source.get('why_relevant', '')} {source.get('snippet', '')}",
+                    "",
+                ).lower()
+                if source.get("is_direct_competitor") is True:
+                    categories.update({"competitor_product", "solution_benchmark"})
+                if source_type == "pricing_page":
+                    categories.add("pricing")
+                if source_type == "regulation":
+                    categories.add("regulation")
+                if source_type in {"market_article", "market_evidence"}:
+                    categories.add("sector_context")
+                    if any(term in title_reason for term in ("market size", "cagr", "forecast", "taille du marché", "taille du marche")):
+                        categories.add("market_size_claim")
+                    if any(term in title_reason for term in ("survey", "adoption", "demand", "preference", "enquête", "enquete", "demande")):
+                        categories.add("market_demand_claim")
+                    if any(term in title_reason for term in ("challenge", "disease", "problem", "risk", "maladie", "problème", "probleme")):
+                        categories.add("problem_context")
+
+            direct = bool(source.get("is_direct_competitor")) or "direct_competitor" in role_blob
+            product_like = (
+                source_type in self.COMPETITOR_SOURCE_TYPES
+                or bool(categories & self.SOLUTION_CATEGORIES)
+            )
+            if direct and region == "local":
+                groups["local_competitors"].append(source)
+            elif product_like and categories & self.SOLUTION_CATEGORIES:
+                if region == "local":
+                    groups["local_adjacent_solutions"].append(source)
+                elif region == "regional":
+                    groups["regional_benchmarks"].append(source)
+                else:
+                    groups["international_benchmarks"].append(source)
+
+            if categories & self.MARKET_SIZE_CATEGORIES:
+                groups["market_size_evidence"].append(source)
+            if categories & self.MARKET_DEMAND_CATEGORIES:
+                groups["market_demand_evidence"].append(source)
+            if categories & self.PROBLEM_CATEGORIES:
+                groups["problem_evidence"].append(source)
+            if categories & self.SOLUTION_CATEGORIES:
+                groups["solution_evidence"].append(source)
+            if categories & self.PRICING_CATEGORIES:
+                groups["pricing_evidence"].append(source)
+            if categories & self.REGULATION_CATEGORIES:
+                groups["regulatory_evidence"].append(source)
+            if categories & {"sector_context", "regional_context", "local_market_signal"}:
+                groups["sector_context"].append(source)
+
+            if categories & (
+                self.MARKET_SIZE_CATEGORIES
+                | self.MARKET_DEMAND_CATEGORIES
+                | {"sector_context", "regional_context", "local_market_signal"}
+            ):
+                groups["market_evidence"].append(source)
+            if not categories:
+                groups["other_relevant"].append(source)
+
+        for key, values in groups.items():
+            groups[key] = self._deduplicate_source_list(values)
+        return groups
+
+    def _deduplicate_source_list(
+        self,
+        sources: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        result: List[Dict[str, Any]] = []
+        seen = set()
+        for source in sources:
+            key = self._source_signature(source)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            result.append(source)
+        return result
+
+    def _compact_evidence(
+        self,
+        source: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        return {
+            "title": self._safe_text(source.get("title"), "Source"),
+            "url": self._safe_text(source.get("url"), ""),
+            "source_type": self._safe_text(source.get("source_type"), "source"),
+            "region_match": self._safe_text(source.get("region_match"), "unknown"),
+            "confidence": self._safe_text(source.get("confidence"), "low"),
+            "evidence_quality": self._safe_text(source.get("evidence_quality"), "low"),
+            "methodology_visible": bool(source.get("methodology_visible")),
+            "source_role": self._safe_text(source.get("source_role"), ""),
+            "canonical_category": self._safe_text(source.get("canonical_category"), ""),
+            "source_relevance_score": round(
+                self._safe_float(source.get("source_relevance_score"), 0.0),
+                2,
+            ),
+            "why_relevant": self._safe_text(
+                source.get("why_relevant") or source.get("snippet"),
+                "",
+            ),
+            "evidence_categories": self._safe_list(source.get("evidence_categories")),
+            "is_direct_competitor": bool(source.get("is_direct_competitor")),
+        }
+
+    def _clean_claims(
+        self,
+        claims: Any,
+    ) -> List[Dict[str, Any]]:
+        if not isinstance(claims, list):
+            return []
+
+        cleaned: List[Dict[str, Any]] = []
+        seen = set()
+
+        for item in claims:
+            if not isinstance(item, dict):
+                continue
+
+            claim_text = self._safe_text(
+                item.get("claim"),
+                "",
+            )
+
+            # Une affirmation vide ne doit jamais atteindre le frontend.
+            if not claim_text:
+                continue
+
+            key = claim_text.lower()
+
+            if key in seen:
+                continue
+
+            seen.add(key)
+
+            evidence = item.get("evidence")
+            clean_evidence = []
+
+            if isinstance(evidence, list):
+                for source in evidence:
+                    if not isinstance(source, dict):
+                        continue
+
+                    compact = self._compact_evidence(source)
+
+                    if compact.get("url"):
+                        clean_evidence.append(compact)
+
+            cleaned.append(
+                {
+                    **item,
+                    "claim": claim_text,
+                    "category": self._safe_text(
+                        item.get("category"),
+                        "general",
+                    ),
+                    "status": self._safe_text(
+                        item.get("status"),
+                        "not_confirmed",
+                    ),
+                    "confidence": self._safe_text(
+                        item.get("confidence"),
+                        "low",
+                    ),
+                    "correction": self._safe_text(
+                        item.get("correction"),
+                        "",
+                    ),
+                    "evidence": clean_evidence[:3],
+                }
+            )
+
+        return cleaned
+
+    def _repair_public_report(
+        self,
+        result: Dict[str, Any],
+        fallback: Dict[str, Any],
+        language: str,
+    ) -> Dict[str, Any]:
+        """
+        Répare le contrat public après un éventuel sanitizer générique.
+
+        Champs restaurés depuis le rapport déterministe :
+        - sources publiques validées ;
+        - source_summary et compteurs ;
+        - affirmation manquante ou vidée ;
+        - labels publics nécessaires au frontend.
+        """
+        result = dict(result or {})
+        fallback = dict(fallback or {})
+
+        fallback_claims = self._clean_claims(
+            fallback.get("claims")
+        )
+        result_claims = self._clean_claims(
+            result.get("claims")
+        )
+
+        fallback_by_category = {
+            self._safe_text(claim.get("category"), "general"): claim
+            for claim in fallback_claims
+        }
+
+        repaired_claims: List[Dict[str, Any]] = []
+        seen_categories = set()
+
+        for claim in result_claims:
+            category = self._safe_text(
+                claim.get("category"),
+                "general",
+            )
+
+            if not claim.get("claim"):
+                replacement = fallback_by_category.get(category)
+                if replacement:
+                    claim = deepcopy(replacement)
+
+            if not claim.get("claim"):
+                continue
+
+            claim["public_status"] = self._public_status_label(
+                self._safe_text(
+                    claim.get("status"),
+                    "not_confirmed",
+                ),
+                language,
+            )
+            claim["public_confidence"] = self._public_confidence_label(
+                self._safe_text(
+                    claim.get("confidence"),
+                    "low",
+                ),
+                language,
+            )
+
+            repaired_claims.append(claim)
+            seen_categories.add(category)
+
+        for fallback_claim in fallback_claims:
+            category = self._safe_text(
+                fallback_claim.get("category"),
+                "general",
+            )
+
+            if category in seen_categories:
+                continue
+
+            repaired_claims.append(deepcopy(fallback_claim))
+            seen_categories.add(category)
+
+        repaired_claims = self._clean_claims(repaired_claims)
+
+        result["claims"] = repaired_claims
+        result["claims_to_verify"] = [
+            claim["claim"]
+            for claim in repaired_claims
+            if claim.get("claim")
+        ]
+
+        # Les sources canoniques sont déjà validées en amont.
+        for key in (
+            "source_count",
+            "relevant_source_count",
+            "source_summary",
+            "retained_sources",
+        ):
+            if key in fallback:
+                result[key] = deepcopy(fallback[key])
+
+        for key in (
+            "format",
+            "status",
+            "method",
+            "summary",
+            "fact_check_summary",
+            "confidence_level",
+            "global_confidence",
+            "supported_claims",
+            "uncertain_claims",
+            "warnings",
+            "red_flags",
+            "recommended_next_checks",
+            "recommended_validation",
+            "limitations",
+        ):
+            current = result.get(key)
+
+            if current in (None, "", [], {}):
+                result[key] = deepcopy(fallback.get(key))
+
+        result["output_language"] = language
+        result["context_locked"] = True
+
+        return result
+
+    def _get_nested_list(
+        self,
+        data: Dict[str, Any],
+        path: tuple[str, str],
+    ) -> List[Any]:
+        first = data.get(path[0])
+
+        if not isinstance(first, dict):
+            return []
+
+        value = first.get(path[1])
+
+        return value if isinstance(value, list) else []
+
+    def _normalize_source(
+        self,
+        *,
+        item: Any,
+        source_path: str,
+        upstream_validated: bool,
+    ) -> Dict[str, Any]:
+        if not isinstance(item, dict):
+            return {}
+        url = self._safe_text(item.get("url") or item.get("source_url"), "")
+        if not self._valid_http_url(url):
+            return {}
+        if item.get("rejected") is True or item.get("internal_only") is True:
+            return {}
+        if "public_display" in item and item.get("public_display") is False:
+            return {}
+
+        matched_terms = self._safe_list(
+            item.get("matched_strong_terms")
+            or item.get("matched_project_terms")
+            or item.get("matched_terms")
+        )
+        return {
+            "title": self._safe_text(item.get("title") or item.get("name"), "Source"),
+            "url": url,
+            "snippet": self._safe_text(
+                item.get("snippet") or item.get("evidence")
+                or item.get("why_relevant") or item.get("extracted_text_preview"),
+                "",
+            ),
+            "why_relevant": self._safe_text(item.get("why_relevant") or item.get("evidence"), ""),
+            "source_type": self._safe_text(item.get("source_type"), "source").lower(),
+            "source_role": self._safe_text(item.get("source_role"), "").lower(),
+            "canonical_category": self._safe_text(item.get("canonical_category"), "").lower(),
+            "region_match": self._safe_text(item.get("region_match") or item.get("region"), "unknown").lower(),
+            "matched_project_terms": matched_terms,
+            "matched_strong_terms": matched_terms,
+            "matched_domain_terms": self._safe_list(item.get("matched_domain_terms")),
+            "matched_target_terms": self._safe_list(item.get("matched_target_terms")),
+            "matched_use_case_terms": self._safe_list(item.get("matched_use_case_terms")),
+            "matched_solution_terms": self._safe_list(item.get("matched_solution_terms")),
+            "product_evidence_signals": self._safe_list(item.get("product_evidence_signals")),
+            "market_evidence_signals": self._safe_list(item.get("market_evidence_signals")),
+            "evidence_categories": self._safe_list(item.get("evidence_categories")),
+            "confidence": self._safe_text(item.get("confidence"), "low").lower(),
+            "evidence_quality": self._safe_text(item.get("evidence_quality"), "low").lower(),
+            "methodology_visible": bool(item.get("methodology_visible")),
+            "source_relevance_score": self._safe_float(item.get("source_relevance_score"), 0.0),
+            "public_display": item.get("public_display", True),
+            "is_direct_competitor": bool(item.get("is_direct_competitor")),
+            "same_or_close_target_user": bool(item.get("same_or_close_target_user")),
+            "same_or_close_use_case": bool(item.get("same_or_close_use_case")),
+            "same_or_close_solution_category": bool(item.get("same_or_close_solution_category")),
+            "clear_contextual_link": bool(item.get("clear_contextual_link")),
+            "pricing_found": bool(item.get("pricing_found")),
+            "upstream_validated": upstream_validated,
+            "upstream_source_path": source_path,
+        }
+
+    def _merge_source_records(
+        self,
+        first: Dict[str, Any],
+        second: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        merged = dict(first)
+        list_fields = {
+            "matched_project_terms", "matched_strong_terms", "matched_domain_terms",
+            "matched_target_terms", "matched_use_case_terms", "matched_solution_terms",
+            "product_evidence_signals", "market_evidence_signals", "evidence_categories",
+        }
+        boolean_fields = {
+            "is_direct_competitor", "same_or_close_target_user",
+            "same_or_close_use_case", "same_or_close_solution_category",
+            "clear_contextual_link", "pricing_found", "upstream_validated",
+        }
+        for key, value in second.items():
+            current = merged.get(key)
+            if key in list_fields:
+                merged[key] = self._unique(self._safe_list(current) + self._safe_list(value))
+            elif key == "source_relevance_score":
+                merged[key] = max(self._safe_float(current, 0.0), self._safe_float(value, 0.0))
+            elif key in boolean_fields:
+                merged[key] = bool(current) or bool(value)
+            elif current in (None, "", [], {}, "source", "unknown", "low") and value not in (None, "", [], {}):
+                merged[key] = value
+        return merged
+
+    def _source_signature(
+        self,
+        source: Dict[str, Any],
+    ) -> str:
+        url = self._safe_text(
+            source.get("url"),
+            "",
+        ).lower()
+
+        if url:
+            return url
+
+        return self._safe_text(
+            source.get("title"),
+            "source",
+        ).lower()
+
+    def _valid_http_url(self, value: Any) -> bool:
+        try:
+            parsed = urlparse(
+                self._safe_text(value, "")
+            )
+            return (
+                parsed.scheme in {"http", "https"}
+                and bool(parsed.netloc)
+            )
+        except Exception:
+            return False
+
+    def _safe_float(
+        self,
+        value: Any,
+        fallback: float = 0.0,
+    ) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return fallback
+
     # ========================================================
     # Confidence / labels / validation
     # ========================================================
@@ -1041,54 +2220,87 @@ class FactCheckerAgent:
         source_count: int = 0,
         relevant_source_count: int = 0,
         profile: Dict[str, Any] | None = None,
+        evidence_groups: Dict[str, List[Dict[str, Any]]] | None = None,
         **kwargs: Any,
     ) -> str:
-        """
-        Conservative confidence calculation.
+        """Backward-compatible wrapper around category-aware confidence."""
+        return self._evidence_confidence(
+            source_count=source_count,
+            relevant_source_count=relevant_source_count,
+            evidence_groups=evidence_groups or {},
+            profile=profile or {},
+        )["overall_evidence_confidence"]
 
-        This method fixes the previous runtime bug.
-        It accepts the exact arguments used by _build_fact_check_report.
-        """
-        try:
-            profile = profile or {}
+    def _evidence_confidence(
+        self,
+        *,
+        source_count: int,
+        relevant_source_count: int,
+        evidence_groups: Dict[str, List[Dict[str, Any]]],
+        profile: Dict[str, Any] | None = None,
+    ) -> Dict[str, str]:
+        profile = profile or {}
 
-            score = 0
+        local_count = len(evidence_groups.get("local_competitors") or [])
+        solution_count = len(evidence_groups.get("solution_evidence") or [])
+        market_size_count = len(evidence_groups.get("market_size_evidence") or [])
+        demand_count = len(evidence_groups.get("market_demand_evidence") or [])
+        problem_count = len(evidence_groups.get("problem_evidence") or [])
+        pricing_count = len(evidence_groups.get("pricing_evidence") or [])
 
-            if source_count >= 8:
-                score += 2
-            elif source_count >= 3:
-                score += 1
+        discovery = "high" if relevant_source_count >= 6 else (
+            "medium" if relevant_source_count >= 2 else "low"
+        )
+        solution = "high" if solution_count >= 3 else (
+            "medium" if solution_count >= 1 else "low"
+        )
+        local = "high" if local_count >= 2 else (
+            "medium" if local_count == 1 else "low"
+        )
+        market_size = "high" if market_size_count >= 2 else (
+            "medium" if market_size_count == 1 else "low"
+        )
+        market_demand = "high" if demand_count >= 2 else (
+            "medium" if demand_count == 1 else "low"
+        )
+        problem = "high" if problem_count >= 2 else (
+            "medium" if problem_count == 1 else "low"
+        )
+        pricing = "high" if pricing_count >= 2 else (
+            "medium" if pricing_count == 1 else "low"
+        )
 
-            if relevant_source_count >= 5:
-                score += 4
-            elif relevant_source_count >= 2:
-                score += 3
-            elif relevant_source_count >= 1:
-                score += 1
+        if (
+            market_size in {"medium", "high"}
+            and market_demand in {"medium", "high"}
+            and (local in {"medium", "high"} or solution == "high")
+        ):
+            overall = "high"
+        elif (
+            relevant_source_count >= 2
+            and solution in {"medium", "high"}
+        ) or (
+            market_size in {"medium", "high"}
+            and market_demand in {"medium", "high"}
+        ):
+            overall = "medium"
+        else:
+            overall = "low"
 
-            if str(profile.get("crawler_confidence") or "").lower() == "high":
-                score += 2
-            elif str(profile.get("crawler_confidence") or "").lower() == "medium":
-                score += 1
+        # An upstream low data-confidence signal prevents an overall High.
+        if str(profile.get("data_confidence") or "").lower() == "low" and overall == "high":
+            overall = "medium"
 
-            if str(profile.get("competitive_confidence") or "").lower() == "high":
-                score += 2
-            elif str(profile.get("competitive_confidence") or "").lower() == "medium":
-                score += 1
-
-            if str(profile.get("data_confidence") or "").lower() == "low":
-                score -= 1
-
-            if score >= 6:
-                return "high"
-
-            if score >= 3:
-                return "medium"
-
-            return "low"
-
-        except Exception:
-            return "low"
+        return {
+            "discovery_confidence": discovery,
+            "solution_benchmark_confidence": solution,
+            "local_competition_confidence": local,
+            "market_size_confidence": market_size,
+            "market_demand_confidence": market_demand,
+            "problem_evidence_confidence": problem,
+            "pricing_confidence": pricing,
+            "overall_evidence_confidence": overall,
+        }
 
     def _public_confidence_label(self, confidence: str, language: str = "fr") -> str:
         labels = {
@@ -1132,6 +2344,14 @@ class FactCheckerAgent:
         project_context: Dict[str, Any],
         language: str,
     ) -> Dict[str, Any]:
+        """
+        Applique le garde-fou sans perdre les sources ni créer des claims vides.
+
+        Les affirmations sont générées de manière déterministe à partir du contexte
+        du projet. Les sources sont déjà publiques et validées en amont.
+        """
+        original = deepcopy(result)
+
         try:
             validation = domain_integrity_guard.validate_object(
                 data=result,
@@ -1139,26 +2359,33 @@ class FactCheckerAgent:
             )
 
             if validation.get("is_valid"):
-                return result
+                candidate = result
+            else:
+                sanitized = domain_integrity_guard.sanitize_object(
+                    data=result,
+                    project_context=project_context,
+                )
+                candidate = sanitized if isinstance(sanitized, dict) else result
+                candidate["sanitized_by_domain_guard"] = True
 
-            sanitized = domain_integrity_guard.sanitize_object(
-                data=result,
-                project_context=project_context,
+            return self._repair_public_report(
+                result=candidate,
+                fallback=original,
+                language=language,
             )
-
-            if isinstance(sanitized, dict):
-                sanitized["sanitized_by_domain_guard"] = True
-                return sanitized
-
-            return result
 
         except Exception:
-            result["domain_guard_warning"] = (
+            repaired = self._repair_public_report(
+                result=result,
+                fallback=original,
+                language=language,
+            )
+            repaired["domain_guard_warning"] = (
                 "Domain guard validation could not be completed."
                 if language == "en"
-                else "La validation du garde-fou de domaine n’a pas pu être complétée."
+                else "La validation du garde-fou de domaine n'a pas pu être complétée."
             )
-            return result
+            return repaired
 
     # ========================================================
     # Small helpers

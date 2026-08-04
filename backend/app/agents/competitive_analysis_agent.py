@@ -721,6 +721,26 @@ class CompetitiveAnalysisAgent:
         category = str(source.get("canonical_category") or "").strip().lower()
         region_match = str(source.get("region_match") or "unknown").strip().lower()
 
+        # Backward-compatible canonicalization for already validated source
+        # objects that predate Source Intelligence V8 fields. The final public
+        # pass must not reject a valid adjacent solution merely because the
+        # canonical_category alias was not copied by an older caller.
+        if not category:
+            category_aliases = {
+                "competitor": "direct_competitor",
+                "direct_competitor": "direct_competitor",
+                "probable_direct_competitor": "probable_direct_competitor",
+                "adjacent_solution": "adjacent_solution",
+                "technology_benchmark": "technology_benchmark",
+                "technology_provider": "technology_benchmark",
+                "market_article": "market_evidence",
+                "market_evidence": "market_evidence",
+                "local_market_signal": "market_evidence",
+                "regulation": "market_evidence",
+                "directory": "ecosystem_actor",
+            }
+            category = category_aliases.get(source_type) or category_aliases.get(source_role, "")
+
         minimum_score = self.PUBLIC_MIN_SCORE
         if category == "direct_competitor" and region_match == "local":
             minimum_score = 0.58
@@ -764,6 +784,16 @@ class CompetitiveAnalysisAgent:
             for item in (source.get("evidence_categories") or [])
             if str(item).strip()
         }
+        if not evidence_categories:
+            conservative_categories = {
+                "direct_competitor": {"competitor_product"},
+                "probable_direct_competitor": {"competitor_product"},
+                "adjacent_solution": {"solution_benchmark"},
+                "technology_benchmark": {"technology_benchmark", "solution_benchmark"},
+                "market_evidence": {"sector_context"},
+                "ecosystem_actor": {"regional_context"},
+            }
+            evidence_categories = conservative_categories.get(category, set())
         if not evidence_categories:
             return "missing_evidence_category"
 
