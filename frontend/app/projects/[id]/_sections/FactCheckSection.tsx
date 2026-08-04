@@ -83,9 +83,59 @@ function formatEvidenceCategory(
     regulation: { fr: "Réglementation", en: "Regulation" },
     regional_context: { fr: "Contexte régional", en: "Regional context" },
     sector_context: { fr: "Contexte sectoriel", en: "Sector context" },
+    local_market_signal: { fr: "Signal de marché local", en: "Local market signal" },
+    technology_benchmark: { fr: "Benchmark technologique", en: "Technology benchmark" },
+    current_alternatives: { fr: "Alternatives actuelles", en: "Current alternatives" },
+    ecosystem_signal: { fr: "Signal d’écosystème", en: "Ecosystem signal" },
+    local_ecosystem: { fr: "Écosystème local", en: "Local ecosystem" },
   };
 
   return labels[value]?.[language] || cleanText(value.replaceAll("_", " "), language);
+}
+
+function sourceTypeText(value: string, language: ForgeLang): string {
+  const labels: Record<string, Record<ForgeLang, string>> = {
+    source: { fr: "Source de preuve", en: "Evidence source" },
+    market_article: { fr: "Source de marché", en: "Market source" },
+    market_evidence: { fr: "Preuve de marché", en: "Market evidence" },
+    adjacent_solution: { fr: "Solution adjacente", en: "Adjacent solution" },
+    technology_benchmark: { fr: "Benchmark technologique", en: "Technology benchmark" },
+    local_ecosystem: { fr: "Écosystème local", en: "Local ecosystem" },
+    competitor: { fr: "Produit concurrent", en: "Competitor product" },
+    direct_competitor: { fr: "Concurrent direct", en: "Direct competitor" },
+    official_source: { fr: "Source officielle", en: "Official source" },
+    regulation: { fr: "Source réglementaire", en: "Regulatory source" },
+    directory: { fr: "Annuaire sectoriel", en: "Sector directory" },
+  };
+  const key = String(value || "").trim().toLowerCase();
+  return labels[key]?.[language] || cleanText(key.replaceAll("_", " "), language);
+}
+
+function regionText(value: string, language: ForgeLang): string {
+  const labels: Record<string, Record<ForgeLang, string>> = {
+    local: { fr: "Local", en: "Local" },
+    regional: { fr: "Régional", en: "Regional" },
+    international: { fr: "International", en: "International" },
+    unknown: { fr: "Région non confirmée", en: "Region not confirmed" },
+  };
+  const key = String(value || "").trim().toLowerCase();
+  return labels[key]?.[language] || cleanText(value, language);
+}
+
+function claimCategoryText(value: string, language: ForgeLang): string {
+  const labels: Record<string, Record<ForgeLang, string>> = {
+    finance: { fr: "Finance", en: "Finance" },
+    solution: { fr: "Solution", en: "Solution" },
+    solution_hypothesis: { fr: "Hypothèse de solution", en: "Solution hypothesis" },
+    problem: { fr: "Problème", en: "Problem" },
+    market_size: { fr: "Taille du marché", en: "Market size" },
+    market_demand: { fr: "Demande du marché", en: "Market demand" },
+    market_context: { fr: "Contexte de marché", en: "Market context" },
+    local_competition: { fr: "Concurrence locale", en: "Local competition" },
+    general: { fr: "Général", en: "General" },
+  };
+  const key = String(value || "").trim().toLowerCase();
+  return labels[key]?.[language] || cleanText(key.replaceAll("_", " "), language);
 }
 
 function MetricCard({
@@ -273,12 +323,12 @@ function EvidenceCard({
       <div className="mt-3 flex flex-wrap gap-2">
         {item.source_type && (
           <span className="forge-badge">
-            {cleanText(item.source_type.replaceAll("_", " "), language)}
+            {sourceTypeText(item.source_type, language)}
           </span>
         )}
         {item.region_match && (
           <span className="forge-badge">
-            {cleanText(item.region_match, language)}
+            {regionText(item.region_match, language)}
           </span>
         )}
         {item.confidence && (
@@ -343,7 +393,7 @@ function ClaimCard({
           </span>
           {claim.category && (
             <span className="forge-badge">
-              {cleanText(claim.category.replaceAll("_", " "), language)}
+              {claimCategoryText(claim.category, language)}
             </span>
           )}
         </div>

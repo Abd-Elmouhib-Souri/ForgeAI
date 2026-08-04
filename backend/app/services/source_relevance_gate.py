@@ -201,6 +201,25 @@ class SourceRelevanceGate:
         "forum", "conference", "conférence", "salon professionnel",
     }
 
+    JOB_LISTING_HINTS = {
+        "job", "jobs", "career", "careers", "vacancy", "vacancies",
+        "recruitment", "recrutement", "emploi", "emplois", "offre d'emploi",
+        "offres d'emploi", "poste à pourvoir", "candidature", "apply now",
+        "responsable intelligence artificielle", "job description",
+    }
+
+    JOB_URL_HINTS = {
+        "/jobs/", "/job/", "/careers/", "/career/", "/vacancies/",
+        "/recruitment/", "/recrutement/", "/emploi/", "/emplois/",
+        "/offres-emploi/", "/offre-emploi/",
+    }
+
+    SOLUTION_ANNOUNCEMENT_HINTS = {
+        "solution", "platform", "plateforme", "software", "logiciel",
+        "application", "automation", "automatisation", "robot", "robotique",
+        "technology", "technologie", "system", "système", "service",
+    }
+
     CROSS_SECTOR_PRODUCT_HINTS = {
         "manufacturing", "factory", "industrial", "mes", "surgical",
         "sterilization", "hospital", "medical device", "pharmaceutical",
@@ -322,6 +341,10 @@ class SourceRelevanceGate:
         source_text = self._normalize(self._source_text(source))
         title_url_text = self._normalize(
             f"{self._safe_text(source.get('title'))} {self._safe_text(source.get('url'))}"
+        )
+        job_listing_mismatch = bool(
+            self._looks_like_job_listing(source)
+            and not self._project_is_recruitment_context(context)
         )
 
         matched_domain = self._matched_terms(source_text, context["domain_terms"])
@@ -475,6 +498,25 @@ class SourceRelevanceGate:
         ):
             source_type = "local_ecosystem"
 
+        local_solution_announcement = self._looks_like_local_solution_announcement(
+            source=source,
+            normalized_text=source_text,
+            region_match=region_match,
+            matched_domain_terms=matched_domain,
+            same_use_case=same_use_case,
+            same_solution=same_solution,
+        )
+        if local_solution_announcement:
+            # A provider may announce a real adjacent solution through its own
+            # blog. It remains an adjacent solution, never a direct competitor,
+            # until exact target/workflow/product evidence is verified.
+            source_type = "adjacent_solution"
+            is_product_page = False
+
+        if job_listing_mismatch:
+            source_type = "irrelevant"
+            is_product_page = False
+
         cross_sector_product = bool(
             source_type in {"competitor", "pricing_page", "adjacent_solution", "technology_benchmark"}
             and not same_sector
@@ -523,6 +565,14 @@ class SourceRelevanceGate:
         canonical_source_id = str(role_decision.get("canonical_source_id") or "")
         source_type = str(role_decision.get("legacy_source_type") or source_type)
 
+        if job_listing_mismatch:
+            source_type = "irrelevant"
+            source_role = "irrelevant"
+            canonical_category = "irrelevant"
+            comparison_scope = "irrelevant"
+            technology_supplier = False
+            canonical_source_id = ""
+
         ai_adjacent_confirmation = bool(
             ai_type == "adjacent_solution"
             and ai_confidence >= 0.75
@@ -540,6 +590,7 @@ class SourceRelevanceGate:
                 or same_solution
                 or len(matched_domain) >= 2
                 or ai_adjacent_confirmation
+                or local_solution_announcement
             )
         )
 
@@ -1800,6 +1851,88 @@ class SourceRelevanceGate:
         if not allow_two_single_terms and matched:
             return True
         return bool(matched and len(available) <= 2)
+
+    def _project_is_recruitment_context(self, context: Dict[str, Any]) -> bool:
+        project_text = self._normalize(
+            " ".join(
+                list(context.get("domain_terms") or [])
+                + list(context.get("sector_terms") or [])
+                + list(context.get("target_terms") or [])
+                + list(context.get("use_case_terms") or [])
+                + list(context.get("solution_terms") or [])
+            )
+        )
+        return self._contains_any(
+            project_text,
+            self.VERTICAL_SECTOR_GROUPS.get("recruitment", set()),
+        )
+
+    def _looks_like_job_listing(self, source: Dict[str, Any]) -> bool:
+        title = self._normalize(source.get("title", ""))
+        url = self._safe_text(source.get("url")).lower()
+        path = urlparse(url).path.lower()
+        title_url = self._normalize(f"{title} {url}")
+
+        if any(marker in path for marker in self.JOB_URL_HINTS):
+            return True
+        if self._contains_any(title_url, self.JOB_LISTING_HINTS):
+            # Avoid rejecting market articles merely mentioning employment.
+            return bool(
+                title.startswith(("emploi ", "job ", "offre d'emploi"))
+                or "responsable " in title
+                or "apply now" in title_url
+                or "/job" in path
+                or "/career" in path
+                or "/offres-emploi" in path
+            )
+        return False
+
+    def _looks_like_local_solution_announcement(
+        self,
+        *,
+        source: Dict[str, Any],
+        normalized_text: str,
+        region_match: str,
+        matched_domain_terms: List[str],
+        same_use_case: bool,
+        same_solution: bool,
+    ) -> bool:
+        if region_match != "local" or not matched_domain_terms:
+            return False
+        if self._looks_like_job_listing(source):
+            return False
+
+        title = self._normalize(source.get("title", ""))
+        url = self._safe_text(source.get("url")).lower()
+        domain = self._domain(url)
+        if not domain or self._is_search_or_social_domain(domain):
+            return False
+        if self._is_market_source_domain(domain) or self._is_research_domain(domain):
+            return False
+
+        # Generic reports, rankings and market pages are evidence, not named
+        # solutions. Provider announcements may use a /blog/ URL.
+        if self._contains_any(
+            title,
+            {
+                "market size", "market report", "industry report", "top 10",
+                "top 15", "best software", "study", "étude", "résultats du projet",
+                "newsletter", "emploi", "job",
+            },
+        ):
+            return False
+
+        solution_signal = self._contains_any(
+            f"{title} {normalized_text[:1200]}",
+            self.SOLUTION_ANNOUNCEMENT_HINTS,
+        )
+        semantic_proximity = bool(
+            same_use_case or same_solution or len(matched_domain_terms) >= 2
+        )
+        named_solution = bool(
+            re.search(r"\b[A-Z][A-Za-z0-9_-]{2,}\b", self._safe_text(source.get("title")))
+        )
+        return bool(solution_signal and semantic_proximity and named_solution)
 
     def _looks_like_article_or_list(self, source: Dict[str, Any]) -> bool:
         title = self._normalize(source.get("title", ""))

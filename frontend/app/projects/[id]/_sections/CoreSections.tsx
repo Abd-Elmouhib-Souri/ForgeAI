@@ -114,24 +114,57 @@ function riskLabel(value?: string | null, language: ForgeLang = "fr"): string {
   return value || "—";
 }
 
-function verdictLabel(value?: string | null, language: ForgeLang = "fr"): string {
+function confidenceLabel(
+  value?: string | null,
+  language: ForgeLang = "fr"
+): string {
   const normalized = String(value || "").toLowerCase();
 
   if (language === "en") {
-    if (normalized.includes("pivot")) return "Pivot";
-    if (normalized.includes("poursuivre") || normalized.includes("continue")) {
-      return "Continue";
-    }
-    if (normalized.includes("abandon") || normalized.includes("stop")) return "Stop";
-    return value || "—";
+    if (normalized.includes("high") || normalized.includes("élev")) return "High";
+    if (normalized.includes("medium") || normalized.includes("moy")) return "Medium";
+    if (normalized.includes("low") || normalized.includes("faib")) return "Low";
+    return cleanText(value || "—", language);
   }
 
-  if (normalized.includes("pivot")) return "Pivoter";
-  if (normalized.includes("poursuivre") || normalized.includes("continue")) {
-    return "Poursuivre";
+  if (normalized.includes("high") || normalized.includes("élev")) return "Élevée";
+  if (normalized.includes("medium") || normalized.includes("moy")) return "Moyenne";
+  if (normalized.includes("low") || normalized.includes("faib")) return "Faible";
+
+  return cleanText(value || "—", language);
+}
+
+function verdictLabel(value?: string | null, language: ForgeLang = "fr"): string {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replaceAll("-", "_")
+    .replaceAll(" ", "_");
+
+  const labels = language === "en"
+    ? {
+        go: "Go",
+        conditional_go: "Continue with conditions",
+        pivot: "Pivot",
+        no_go: "No-go",
+        insufficient_evidence: "Insufficient evidence",
+      }
+    : {
+        go: "Poursuivre",
+        conditional_go: "Poursuivre sous conditions",
+        pivot: "Pivoter",
+        no_go: "Ne pas poursuivre",
+        insufficient_evidence: "Preuves insuffisantes",
+      };
+
+  if (["go", "poursuivre", "continue"].includes(normalized)) return labels.go;
+  if (["conditional_go", "continue_with_conditions", "poursuivre_sous_conditions"].includes(normalized)) {
+    return labels.conditional_go;
   }
-  if (normalized.includes("abandon") || normalized.includes("stop")) {
-    return "Abandonner";
+  if (["pivot", "pivoter"].includes(normalized)) return labels.pivot;
+  if (["no_go", "stop", "abandon", "abandonner"].includes(normalized)) return labels.no_go;
+  if (["insufficient_evidence", "preuves_insuffisantes"].includes(normalized)) {
+    return labels.insufficient_evidence;
   }
 
   return value || "—";
@@ -370,7 +403,7 @@ export function SolutionSection({
         />
         <AnalysisBlock
           title={t.difficulty}
-          value={analysisData.difficulty}
+          value={riskLabel(analysisData.difficulty, lang)}
           language={lang}
         />
       </div>
@@ -407,7 +440,13 @@ export function TargetMarketSection({
       <div className="grid gap-5 md:grid-cols-2">
         <AnalysisBlock
           title={t.targetUsers}
-          value={analysisData.target_users || analysisData.target_market}
+          value={
+            analysisData.target_users ||
+            analysisData.target_market ||
+            marketStudy?.target_customers ||
+            marketStudy?.customer_segments ||
+            analysisData.persona_builder?.target_segments
+          }
           language={lang}
         />
         <AnalysisBlock
@@ -448,11 +487,11 @@ export function MarketOpportunitySection({
         ? analysisData.swot?.opportunities
         : [
             lang === "en"
-              ? "Position the product as a focused SaaS for small training providers instead of a broad generic platform."
-              : "Positionner le produit comme un SaaS ciblé pour les petits organismes de formation au lieu d’une plateforme générique.",
+              ? "Position the product around one priority workflow and expand only after measurable field validation."
+              : "Positionner le produit autour d’un workflow prioritaire et élargir uniquement après une validation terrain mesurable.",
             lang === "en"
-              ? "Use a pilot program to prove weekly usage, time saved and willingness to pay."
-              : "Utiliser un pilote pour prouver l’usage hebdomadaire, le temps gagné et la volonté de payer.",
+              ? "Use a bounded pilot to prove repeat use, time saved, reliability and willingness to pay."
+              : "Utiliser un pilote limité pour prouver l’usage répété, le temps gagné, la fiabilité et la volonté de payer.",
           ];
 
   const marketRiskItems =
@@ -489,11 +528,12 @@ export function MarketOpportunitySection({
         />
         <AnalysisBlock
           title={t.dataConfidence}
-          value={
+          value={confidenceLabel(
             marketStudy?.data_confidence ||
-            analysisData.startup_score?.confidence_level ||
-            (lang === "en" ? "Low" : "Faible")
-          }
+              analysisData.startup_score?.confidence_level ||
+              "low",
+            lang
+          )}
           language={lang}
         />
       </div>
@@ -650,13 +690,49 @@ export function StartupScoreSection({
     currentScore?.breakdown ||
     {};
 
+  const potentialScore = currentScore?.potential_score ?? officialScore;
+  const evidenceScore = currentScore?.evidence_confidence_score;
+  const executionScore = currentScore?.execution_readiness_score;
+  const evidenceLevel =
+    currentScore?.evidence_confidence_level ||
+    currentScore?.overall_evidence_confidence ||
+    currentScore?.confidence_level ||
+    "—";
+
   return (
     <SectionShell id="startup-score" title={t.sectionStartupScore}>
-      <div className="grid gap-5 md:grid-cols-4">
-        <MetricCard label={t.globalScore} value={formatScore(officialScore)} tone="amber" />
+      <div className="grid gap-5 md:grid-cols-3">
+        <MetricCard
+          label={lang === "en" ? "Potential score" : "Score de potentiel"}
+          value={formatScore(potentialScore)}
+          tone="amber"
+        />
+        <MetricCard
+          label={lang === "en" ? "Evidence confidence" : "Confiance des preuves"}
+          value={
+            typeof evidenceScore === "number"
+              ? formatScore(evidenceScore)
+              : cleanText(evidenceLevel, lang)
+          }
+          tone="sky"
+        />
+        <MetricCard
+          label={lang === "en" ? "Execution readiness" : "Préparation à l’exécution"}
+          value={formatScore(executionScore)}
+          tone="emerald"
+        />
+      </div>
+
+      <div className="mt-5 grid gap-5 md:grid-cols-3">
         <MetricCard label={t.risk} value={riskLabel(currentScore?.risk_level, lang)} tone="rose" />
-        <MetricCard label={t.sourceConfidence} value={cleanText(currentScore?.confidence_level || "—", lang)} tone="sky" />
-        <MetricCard label={t.verdict} value={verdictLabel(currentScore?.verdict, lang)} tone="emerald" />
+        <MetricCard label={t.sourceConfidence} value={confidenceLabel(evidenceLevel, lang)} tone="sky" />
+        <MetricCard label={t.verdict} value={verdictLabel(
+            currentScore?.canonical_verdict_code ||
+              currentScore?.verdict_code ||
+              analysisData?.verdict_code ||
+              currentScore?.verdict,
+            lang
+          )} tone="emerald" />
       </div>
 
       {(currentScore?.summary || currentScore?.score_explanation) && (
@@ -735,12 +811,11 @@ export function VerdictSection({
       ? "Focus the product on the first operational workflow, run a pilot with real target users, then expand features only after repeated usage is proven."
       : "Centrer le produit sur le premier workflow opérationnel, lancer un pilote avec de vrais utilisateurs cibles, puis élargir les fonctionnalités seulement après preuve d’usage répété.");
 
-  const validatedOpportunities =
-    toListItems(judge?.validated_opportunities || [], lang).length > 0
-      ? judge?.validated_opportunities || []
-      : toListItems(analysisData.swot?.opportunities || [], lang).length > 0
-        ? analysisData.swot?.opportunities || []
-        : startupScore?.strengths || [];
+  const validatedOpportunities = judge?.validated_opportunities || [];
+  const potentialOpportunities =
+    judge?.potential_opportunities ||
+    analysisData.swot?.opportunities ||
+    [];
 
   const criticalRisks =
     toListItems(judge?.critical_risks || [], lang).length > 0
@@ -752,7 +827,15 @@ export function VerdictSection({
       <div className="grid gap-5 md:grid-cols-3">
         <MetricCard
           label={t.verdict}
-          value={verdictLabel(judge?.verdict || startupScore?.verdict, lang)}
+          value={verdictLabel(
+            analysisData?.verdict_code ||
+              judge?.verdict_code ||
+              startupScore?.canonical_verdict_code ||
+              startupScore?.verdict_code ||
+              judge?.verdict ||
+              startupScore?.verdict,
+            lang
+          )}
           tone="emerald"
         />
         <MetricCard
@@ -793,6 +876,16 @@ export function VerdictSection({
         <ListBlock
           title={t.validatedOpportunities}
           items={validatedOpportunities}
+          language={lang}
+          emptyText={
+            lang === "en"
+              ? "No opportunity is considered validated without compatible evidence."
+              : "Aucune opportunité n’est considérée comme validée sans preuve compatible."
+          }
+        />
+        <ListBlock
+          title={t.potentialOpportunities}
+          items={potentialOpportunities}
           language={lang}
         />
         <ListBlock

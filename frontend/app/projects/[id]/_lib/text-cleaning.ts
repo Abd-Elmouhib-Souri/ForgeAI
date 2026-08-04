@@ -150,6 +150,30 @@ const publicPairsFr: Pair[] = [
   ["risk level: low", "niveau de risque : Faible"],
 ];
 
+const identifierPairsFr: Pair[] = [
+  ["all_committee_members", "Tous les membres du comité"],
+  ["project_defender", "Défenseur du projet"],
+  ["field_validation_required", "Validation terrain requise"],
+  ["not_confirmed", "Non confirmé"],
+  ["solution_hypothesis", "Hypothèse de solution"],
+  ["local_competition", "Concurrence locale"],
+  ["market_demand", "Demande du marché"],
+  ["market_size", "Taille du marché"],
+  ["market_context", "Contexte de marché"],
+];
+
+const identifierPairsEn: Pair[] = [
+  ["all_committee_members", "All committee members"],
+  ["project_defender", "Project defender"],
+  ["field_validation_required", "Field validation required"],
+  ["not_confirmed", "Not confirmed"],
+  ["solution_hypothesis", "Solution hypothesis"],
+  ["local_competition", "Local competition"],
+  ["market_demand", "Market demand"],
+  ["market_size", "Market size"],
+  ["market_context", "Market context"],
+];
+
 const typoPairs: Pair[] = [
   ["Armes robotiques", "Bras robotiques"],
   ["armes robotiques", "bras robotiques"],
@@ -227,6 +251,10 @@ export function cleanText(value: string, language: ForgeLang = "fr"): string {
   );
 
   cleaned = replacePairs(cleaned, typoPairs);
+  cleaned = replacePairs(
+    cleaned,
+    language === "en" ? identifierPairsEn : identifierPairsFr
+  );
   cleaned = normalizeTechnologyTokens(cleaned);
   cleaned = fixCommonSpacing(fixMojibake(cleaned));
 

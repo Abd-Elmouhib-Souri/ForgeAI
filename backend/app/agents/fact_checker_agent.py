@@ -368,6 +368,7 @@ class FactCheckerAgent:
         registry_claims = self._claims_from_registry(
             registry=claim_registry,
             language=language,
+            fallback_sources=relevant_sources,
         )
         claims = self._merge_claim_sets(base_claims, registry_claims)
         claims = self._clean_claims(claims)
@@ -700,11 +701,18 @@ class FactCheckerAgent:
         *,
         registry: Dict[str, Any],
         language: str,
+        fallback_sources: List[Dict[str, Any]] | None = None,
     ) -> List[Dict[str, Any]]:
         """Convert the canonical claim registry into public fact-check cards."""
         source_index = registry.get("source_index") or {}
         if not isinstance(source_index, dict):
             source_index = {}
+
+        sources_by_url = {
+            self._safe_text(source.get("url"), "").lower(): dict(source)
+            for source in (fallback_sources or [])
+            if isinstance(source, dict) and self._safe_text(source.get("url"), "")
+        }
 
         results: List[Dict[str, Any]] = []
         for item in registry.get("claims") or []:
@@ -715,9 +723,12 @@ class FactCheckerAgent:
                 continue
 
             path = self._safe_text(item.get("path"), "")
-            # The five broad claims are already represented by the base report;
-            # registry rows add the concrete claims from generated sections.
+            # The five broad claims are already represented by the base report.
+            # Generic demand-driver prose is useful in the market narrative but
+            # is not a fact-check claim unless the product explicitly measures it.
             if path in {"problem", "proposed_solution"}:
+                continue
+            if path.startswith("market_study.demand_drivers["):
                 continue
 
             raw_status = self._safe_text(item.get("status"), "not_confirmed")
@@ -725,10 +736,14 @@ class FactCheckerAgent:
                 "sourced": "sourced",
                 "estimated": "estimated",
                 "hypothesis": "estimated",
-                "not_confirmed": "field_validation_required",
+                "not_confirmed": "not_confirmed",
                 "field_validation_required": "field_validation_required",
                 "rejected": "not_confirmed",
             }.get(raw_status, "field_validation_required")
+            status = self._status_for_claim_text(
+                status=status,
+                claim_text=claim_text,
+            )
             confidence = self._safe_text(item.get("confidence"), "low").lower()
             if confidence not in {"low", "medium", "high"}:
                 confidence = "low"
@@ -736,8 +751,18 @@ class FactCheckerAgent:
             evidence: List[Dict[str, Any]] = []
             for source_id in item.get("source_ids") or []:
                 source = source_index.get(source_id)
-                if isinstance(source, dict) and source.get("url"):
-                    evidence.append(dict(source))
+                if not isinstance(source, dict) or not source.get("url"):
+                    continue
+                source_row = dict(source)
+                canonical = sources_by_url.get(
+                    self._safe_text(source_row.get("url"), "").lower()
+                )
+                if canonical:
+                    source_row = self._merge_source_records(
+                        canonical,
+                        source_row,
+                    )
+                evidence.append(source_row)
 
             correction = self._registry_correction(
                 path=path,
@@ -1854,12 +1879,57 @@ class FactCheckerAgent:
             result.append(source)
         return result
 
+    def _status_for_claim_text(
+        self,
+        *,
+        status: str,
+        claim_text: str,
+    ) -> str:
+        normalized = " ".join(
+            self._safe_text(claim_text, "").casefold().split()
+        )
+        absence_markers = (
+            "non confirmé",
+            "non confirmée",
+            "ne permettent pas de quantifier",
+            "ne permet pas de quantifier",
+            "données insuffisantes",
+            "not confirmed",
+            "cannot be quantified",
+            "do not allow quantification",
+            "insufficient data",
+            "no compatible evidence",
+        )
+        if any(marker in normalized for marker in absence_markers):
+            return "not_confirmed"
+        return status
+
+    def _evidence_title(self, source: Dict[str, Any]) -> str:
+        generic = {
+            "",
+            "source",
+            "external source",
+            "source externe",
+            "evidence source",
+            "source de preuve",
+        }
+        for key in ("title", "source_title", "name", "vendor_name"):
+            candidate = self._safe_text(source.get(key), "")
+            if candidate and candidate.casefold() not in generic:
+                return candidate
+        try:
+            domain = urlparse(self._safe_text(source.get("url"), "")).netloc
+        except Exception:
+            domain = ""
+        domain = domain.lower().removeprefix("www.")
+        return domain or "Source de preuve"
+
     def _compact_evidence(
         self,
         source: Dict[str, Any],
     ) -> Dict[str, Any]:
         return {
-            "title": self._safe_text(source.get("title"), "Source"),
+            "title": self._evidence_title(source),
             "url": self._safe_text(source.get("url"), ""),
             "source_type": self._safe_text(source.get("source_type"), "source"),
             "region_match": self._safe_text(source.get("region_match"), "unknown"),
@@ -1923,6 +1993,14 @@ class FactCheckerAgent:
                     if compact.get("url"):
                         clean_evidence.append(compact)
 
+            normalized_status = self._status_for_claim_text(
+                status=self._safe_text(
+                    item.get("status"),
+                    "not_confirmed",
+                ),
+                claim_text=claim_text,
+            )
+
             cleaned.append(
                 {
                     **item,
@@ -1931,10 +2009,7 @@ class FactCheckerAgent:
                         item.get("category"),
                         "general",
                     ),
-                    "status": self._safe_text(
-                        item.get("status"),
-                        "not_confirmed",
-                    ),
+                    "status": normalized_status,
                     "confidence": self._safe_text(
                         item.get("confidence"),
                         "low",

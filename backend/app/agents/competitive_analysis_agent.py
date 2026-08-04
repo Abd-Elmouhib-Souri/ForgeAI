@@ -283,12 +283,17 @@ class CompetitiveAnalysisAgent:
 
         public_sources_count = len(safe_public_sources)
         raw_sources_count = len(raw_public_sources)
+        region_counts = self._region_counts(safe_public_sources)
 
         source_quality = {
             "public_display_threshold": self.PUBLIC_MIN_SCORE,
             "public_threshold_policy": "role_aware",
             "sources_count": public_sources_count,
             "canonical_sources_count": public_sources_count,
+            "local_sources_count": region_counts["local"],
+            "regional_sources_count": region_counts["regional"],
+            "international_sources_count": region_counts["international"],
+            "unknown_region_sources_count": region_counts["unknown"],
             "raw_public_sources_count_before_safety_filter": raw_sources_count,
             "removed_from_public_after_safety_filter": max(
                 0,
@@ -330,6 +335,10 @@ class CompetitiveAnalysisAgent:
             ),
             "sources_count": public_sources_count,
             "canonical_sources_count": public_sources_count,
+            "local_sources_count": region_counts["local"],
+            "regional_sources_count": region_counts["regional"],
+            "international_sources_count": region_counts["international"],
+            "unknown_region_sources_count": region_counts["unknown"],
             "canonical_source_ledger": source_ledger,
             "local_competitors_count": len(local_direct_competitors),
             "local_adjacent_solutions_count": len(local_adjacent_solutions),
@@ -380,6 +389,10 @@ class CompetitiveAnalysisAgent:
             "external_sources": {
                 "sources_count": public_sources_count,
                 "canonical_sources_count": public_sources_count,
+                "local_sources_count": region_counts["local"],
+                "regional_sources_count": region_counts["regional"],
+                "international_sources_count": region_counts["international"],
+                "unknown_region_sources_count": region_counts["unknown"],
                 "local_competitors_count": len(local_direct_competitors),
                 "local_adjacent_solutions_count": len(local_adjacent_solutions),
                 "regional_competitors_count": len(regional_competitors),
@@ -1136,7 +1149,6 @@ class CompetitiveAnalysisAgent:
                 "official_source",
                 "local_ecosystem",
                 "directory",
-                "adjacent_solution",
             }:
                 continue
 
@@ -1235,7 +1247,6 @@ class CompetitiveAnalysisAgent:
                 "official_source",
                 "local_ecosystem",
                 "directory",
-                "adjacent_solution",
             }:
                 continue
 
@@ -1536,6 +1547,7 @@ class CompetitiveAnalysisAgent:
         technology_sources = list(source_ledger.get("technology_benchmark_sources") or [])
         ecosystem_sources = list(source_ledger.get("ecosystem_actor_sources") or [])
         market_evidence_sources = list(source_ledger.get("market_evidence_sources") or [])
+        region_counts = self._region_counts(safe_sources)
         return {
             "format": "forgecrawler_v8_public_canonical_summary",
             "status": forgecrawler_result.get("status") or "completed",
@@ -1546,6 +1558,10 @@ class CompetitiveAnalysisAgent:
             "public_threshold_policy": "role_aware",
             "sources_count": len(safe_sources),
             "canonical_sources_count": len(safe_sources),
+            "local_sources_count": region_counts["local"],
+            "regional_sources_count": region_counts["regional"],
+            "international_sources_count": region_counts["international"],
+            "unknown_region_sources_count": region_counts["unknown"],
             "canonical_source_ledger": source_ledger,
             "local_competitors_count": len(local_competitor_sources),
             "adjacent_solutions_count": len(adjacent_sources),
@@ -1642,6 +1658,23 @@ class CompetitiveAnalysisAgent:
         ]
 
         return self._unique([normalized] + parts)
+
+    def _region_counts(
+        self,
+        sources: List[Dict[str, Any]],
+    ) -> Dict[str, int]:
+        counts = {
+            "local": 0,
+            "regional": 0,
+            "international": 0,
+            "unknown": 0,
+        }
+        for source in sources:
+            region = str(source.get("region_match") or "unknown").strip().lower()
+            if region not in counts:
+                region = "unknown"
+            counts[region] += 1
+        return counts
 
     # ========================================================
     # Generic helpers
