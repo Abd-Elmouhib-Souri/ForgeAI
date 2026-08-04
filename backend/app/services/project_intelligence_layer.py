@@ -2,7 +2,7 @@
 # backend/app/services/project_intelligence_layer.py
 # ============================================================
 #
-# ProjectIntelligenceLayer V2 — Structured Context + Real Source Query Planner
+# ProjectIntelligenceLayer V3 — Structured Context + Generic Evidence Query Planner
 #
 # Objectifs :
 # - transformer l'idée utilisateur en contexte structuré exploitable ;
@@ -21,6 +21,7 @@ import re
 from typing import Any, Dict, List
 
 from app.services.domain_integrity_guard import normalize_output_language
+from app.services.project_archetype_resolver import project_archetype_resolver
 
 
 class ProjectIntelligenceLayer:
@@ -59,6 +60,59 @@ class ProjectIntelligenceLayer:
         "software",
         "logiciel",
         "saas",
+    }
+
+    # Generic lexical guards used when the idea does not match a predefined
+    # sector profile. They deliberately remove sentence glue, business-model
+    # wording and vague product words from source-discovery concepts.
+    CONCEPT_STOP_WORDS = {
+        "a", "an", "and", "are", "as", "at", "be", "because", "been",
+        "before", "being", "between", "by", "can", "could", "do", "does",
+        "for", "from", "had", "has", "have", "how", "if", "in", "into",
+        "is", "it", "its", "many", "may", "more", "most", "need", "needs",
+        "new", "of", "on", "or", "our", "out", "should", "still", "than",
+        "that", "the", "their", "them", "these", "they", "this", "those",
+        "through", "to", "too", "use", "used", "uses", "using", "very",
+        "was", "we", "were", "what", "when", "where", "which", "who",
+        "with", "without", "would", "your", "first", "small", "simple",
+        "basic", "lightweight", "main", "real", "existing", "current",
+        "problem", "problems", "solution", "solutions", "model", "models",
+        "business", "monthly", "low", "high", "possible", "possible",
+        "aide", "aider", "avec", "avant", "besoin", "besoins", "car",
+        "ce", "ces", "cette", "comme", "dans", "de", "des", "du", "elle",
+        "elles", "en", "est", "et", "être", "etre", "leur", "leurs", "les",
+        "mais", "notre", "nous", "ou", "par", "pas", "peut", "peuvent",
+        "plus", "pour", "qui", "sans", "sont", "sur", "très", "tres", "un",
+        "une", "utilise", "utiliser", "utilisent", "vos", "votre",
+        "premier", "première", "premiere", "petit", "petite", "simples",
+        "problème", "probleme", "problèmes", "problemes", "modèle", "modele",
+        "mensuel", "faible", "élevé", "eleve",
+    }
+
+    GENERIC_CONCEPT_TERMS = {
+        "app", "application", "platform", "plateforme", "digital", "mobile",
+        "service", "solution", "tool", "outil", "business", "startup",
+        "online", "website", "dashboard", "management", "manage", "create",
+        "help", "system", "système", "systeme", "user", "users", "client",
+        "clients", "customer", "customers", "data", "software", "logiciel",
+        "saas", "product", "produit", "market", "marché", "marche",
+        "industry", "industrie", "company", "companies", "entreprise",
+        "subscription", "abonnement", "pricing", "price", "prix",
+    }
+
+    QUERY_AUDIENCE_TERMS = {
+        "businesses", "business", "owners", "owner", "teams", "team",
+        "users", "user", "customers", "customer", "clients", "client",
+        "companies", "company", "organizations", "organisation",
+        "organisations", "people", "professionals", "professional",
+    }
+
+    QUERY_INTENT_TERMS = {
+        "competitor", "competitors", "concurrent", "concurrents", "alternative",
+        "alternatives", "software", "logiciel", "platform", "plateforme",
+        "market", "marché", "marche", "report", "rapport", "study", "étude",
+        "etude", "statistics", "statistiques", "pricing", "price", "tarif",
+        "tarifs", "benchmark", "survey", "adoption", "demand", "demande",
     }
 
     OLD_DEMO_FORBIDDEN_TERMS = {
@@ -192,6 +246,64 @@ class ProjectIntelligenceLayer:
                 "pricing": [
                     "training management software pricing",
                     "HR training SaaS pricing",
+                ],
+            },
+        },
+        "workforce": {
+            "strong_terms": [
+                "workforce scheduling",
+                "employee scheduling",
+                "shift planning",
+                "shift scheduling",
+                "attendance tracking",
+                "leave requests",
+                "schedule changes",
+                "rotating shifts",
+                "payroll export",
+                "employee notifications",
+                "planning des equipes",
+                "planning des équipes",
+                "gestion des horaires",
+                "suivi de presence",
+                "suivi de présence",
+                "demandes de conge",
+                "demandes de congé",
+            ],
+            "weak_terms": [
+                "human resources",
+                "hr",
+                "employee",
+                "employees",
+                "workforce",
+                "management",
+            ],
+            "forbidden_terms": [
+                "recruitment only",
+                "job board only",
+                "training only",
+                "food delivery",
+                "grocery delivery",
+            ],
+            "queries": {
+                "direct_competitors": [
+                    "Tunisia workforce scheduling software",
+                    "Tunisia employee shift planning attendance software",
+                    "Tunisie logiciel planning horaires presence conges",
+                    "Tunisia HR software shifts attendance leave payroll export",
+                ],
+                "adjacent_solutions": [
+                    "North Africa employee scheduling software SMEs",
+                    "workforce management attendance leave software MENA",
+                    "shift planning software restaurants factories retail",
+                ],
+                "market_sources": [
+                    "Tunisia SME workforce management digitalization",
+                    "Tunisia employee scheduling attendance digital adoption",
+                    "Tunisie PME gestion horaires presence digitalisation",
+                ],
+                "pricing": [
+                    "employee scheduling software pricing small business",
+                    "workforce management SaaS pricing per employee",
                 ],
             },
         },
@@ -689,6 +801,72 @@ class ProjectIntelligenceLayer:
                 ],
             },
         },
+        "mobility": {
+            "strong_terms": [
+                "taxi booking", "ride hailing", "e hailing",
+                "taxi dispatch", "urban mobility", "ride request",
+                "application reservation taxi", "commande taxi",
+                "mise en relation taxi chauffeur", "prise en charge passager",
+            ],
+            "weak_terms": ["transport", "destination", "region", "région"],
+            "forbidden_terms": [
+                "transport management system", "freight management",
+                "warehouse management", "maritime logistics", "fleet logistics",
+            ],
+            "queries": {
+                "direct_competitors": [
+                    "taxi booking app Tunisia",
+                    "ride hailing Tunisia",
+                    "application réservation taxi Tunisie",
+                    "commander taxi application Tunisie",
+                ],
+                "adjacent_solutions": [
+                    "taxi dispatch software North Africa",
+                    "urban mobility booking platform",
+                    "e hailing platform Africa",
+                ],
+                "market_sources": [
+                    "Tunisia taxi regulation digital platform",
+                    "Tunisie mobilité urbaine taxi numérique",
+                ],
+                "pricing": [
+                    "ride hailing commission model",
+                    "taxi booking platform take rate",
+                ],
+            },
+        },
+        "recruitment": {
+            "strong_terms": [
+                "internship platform", "internship job board",
+                "student recruitment", "internship applications",
+                "plateforme stages", "offres de stage étudiants",
+                "candidature stage", "recrutement étudiants",
+            ],
+            "weak_terms": ["student", "students", "étudiant", "étudiants", "job"],
+            "forbidden_terms": [
+                "workforce scheduling", "payroll software", "employee attendance",
+                "course management", "learning management system",
+            ],
+            "queries": {
+                "direct_competitors": [
+                    "internship platform Tunisia",
+                    "student internship job board Tunisia",
+                    "plateforme stages étudiants Tunisie",
+                ],
+                "adjacent_solutions": [
+                    "graduate recruitment platform North Africa",
+                    "university career services software",
+                ],
+                "market_sources": [
+                    "Tunisia student internships employability",
+                    "Tunisie stages étudiants entreprises",
+                ],
+                "pricing": [
+                    "job board employer listing pricing",
+                    "internship platform employer subscription",
+                ],
+            },
+        },
         "beekeeping": {
             "strong_terms": [
                 "beekeeping",
@@ -810,6 +988,13 @@ class ProjectIntelligenceLayer:
         idea_readiness: Dict[str, Any] | None = None,
         analysis_data: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
+        """Build one canonical, source-discovery-ready project packet.
+
+        The method is deliberately deterministic. It does not invent a sector,
+        competitor or market fact. Predefined sector profiles enrich known
+        categories, while the generic concept extractor keeps the same pipeline
+        usable for ideas outside those profiles.
+        """
         language = normalize_output_language(output_language)
         project_context = project_context or {}
         idea_readiness = idea_readiness or {}
@@ -821,77 +1006,304 @@ class ProjectIntelligenceLayer:
             or project_context.get("title")
             or ""
         )
-
         description = self._clean_text(
-            description
-            or project_context.get("description")
-            or ""
+            description or project_context.get("description") or ""
         )
-
         industry = self._clean_text(
-            industry
-            or project_context.get("industry")
-            or ""
+            industry or project_context.get("industry") or ""
         )
-
         target_region = self._clean_text(
             target_region
             or project_context.get("market_region")
             or project_context.get("target_region")
-            or "Tunisie"
+            or ""
         )
 
-        detected_from_readiness = idea_readiness.get("detected") or {}
-
+        detected = idea_readiness.get("detected") or {}
+        explicit_economic_buyer = self._extract_economic_buyer_from_description(description)
         target_users = self._extract_target_users(
             description=description,
             project_context=project_context,
-            detected=detected_from_readiness,
+            detected=detected,
+        )
+
+        explicit_problem = self._extract_labeled_section(
+            description,
+            labels=("the problem is", "problem:", "main problem:", "le problème est", "le probleme est", "problème :", "probleme :"),
+            stop_labels=("the solution is", "solution:", "the first target users", "target users", "the mvp", "mvp", "the business model", "business model", "la solution est", "solution :", "les utilisateurs cibles", "le mvp", "modèle économique", "modele economique"),
+        )
+        explicit_solution = self._extract_labeled_section(
+            description,
+            labels=("the solution is", "solution:", "proposed solution:", "la solution est", "solution :", "solution proposée :", "solution proposee :"),
+            stop_labels=("the first target users", "target users", "the mvp", "mvp", "the business model", "business model", "les utilisateurs cibles", "les premiers utilisateurs", "le mvp", "modèle économique", "modele economique"),
+        )
+        explicit_mvp = self._extract_labeled_section(
+            description,
+            labels=(
+                "the first version would focus only on",
+                "the first version would focus on",
+                "the first version focuses on",
+                "the mvp should focus on",
+                "mvp should focus on",
+                "the mvp will be limited to",
+                "the mvp is limited to",
+                "mvp limited to",
+                "the mvp is",
+                "mvp:",
+                "la premiere version se concentrerait uniquement sur",
+                "la première version se concentrerait uniquement sur",
+                "la premiere version se concentre sur",
+                "la première version se concentre sur",
+                "le mvp doit se concentrer sur",
+                "le mvp sera limité à",
+                "le mvp sera limite a",
+                "le mvp est limité à",
+                "le mvp est limite a",
+                "mvp limité à",
+                "mvp limite a",
+                "le mvp est",
+                "mvp :",
+            ),
+            stop_labels=(
+                "it would not initially include",
+                "it will not initially include",
+                "the main operational user",
+                "main operational user",
+                "the primary operational user",
+                "primary operational user",
+                "the economic buyer",
+                "economic buyer",
+                "the business model",
+                "business model",
+                "the main constraints",
+                "main constraints",
+                "the pilot will be considered successful if",
+                "the pilot is successful if",
+                "success will be measured by",
+                "elle n'inclurait pas initialement",
+                "elle n’inclurait pas initialement",
+                "l'utilisateur opérationnel",
+                "l’utilisateur opérationnel",
+                "l'acheteur économique",
+                "l’acheteur économique",
+                "le modèle économique",
+                "le modele economique",
+                "modèle économique",
+                "modele economique",
+                "les contraintes principales",
+                "les contraintes",
+                "le pilote sera considéré comme réussi si",
+                "le pilote sera considere comme reussi si",
+                "le pilote est réussi si",
+                "la réussite sera mesurée par",
+            ),
+        )
+        explicit_business_model = self._extract_labeled_section(
+            description,
+            labels=("the business model can be", "the business model is", "business model:", "le modèle économique peut être", "le modele economique peut etre", "le modèle économique est", "modele economique :"),
+            stop_labels=(),
+        )
+        explicit_constraints = self._extract_labeled_section(
+            description,
+            labels=(
+                "the main constraints are",
+                "main constraints:",
+                "constraints:",
+                "les contraintes principales sont",
+                "les contraintes sont",
+                "contraintes :",
+            ),
+            stop_labels=(
+                "the pilot will be considered successful if",
+                "the pilot is successful if",
+                "success will be measured by",
+                "le pilote sera considéré comme réussi si",
+                "le pilote sera considere comme reussi si",
+                "le pilote est réussi si",
+                "la réussite sera mesurée par",
+            ),
+        )
+        explicit_success = self._extract_labeled_section(
+            description,
+            labels=(
+                "the pilot will be considered successful if",
+                "the pilot is successful if",
+                "success will be measured by",
+                "success criteria:",
+                "le pilote sera considéré comme réussi si",
+                "le pilote sera considere comme reussi si",
+                "le pilote est réussi si",
+                "la réussite sera mesurée par",
+                "critères de réussite :",
+                "criteres de reussite :",
+            ),
+            stop_labels=(),
         )
 
         problem = self._first_available_text(
-            detected_from_readiness.get("problem"),
+            explicit_problem,
             project_context.get("problem"),
             project_context.get("core_problem"),
+            detected.get("problem"),
             self._extract_sentence(description, self.PROBLEM_HINTS()),
         )
-
         solution = self._first_available_text(
-            detected_from_readiness.get("solution"),
+            explicit_solution,
             project_context.get("solution"),
             project_context.get("solution_type"),
+            detected.get("solution"),
             self._extract_sentence(description, self.SOLUTION_HINTS()),
         )
-
         main_use_case = self._first_available_text(
-            detected_from_readiness.get("main_use_case"),
+            detected.get("main_use_case"),
             project_context.get("main_use_case"),
             project_context.get("use_case"),
             solution,
         )
-
         business_model = self._first_available_text(
-            detected_from_readiness.get("business_model"),
+            explicit_business_model,
             project_context.get("business_model"),
+            detected.get("business_model"),
             self._extract_sentence(description, self.BUSINESS_HINTS()),
         )
-
         mvp_scope = self._first_available_text(
-            detected_from_readiness.get("mvp_scope"),
+            explicit_mvp,
             project_context.get("mvp_scope"),
+            detected.get("mvp_scope"),
             self._extract_sentence(description, self.MVP_HINTS()),
         )
 
-        value_proposition = self._build_value_proposition(
+        explicit_workflows = self._extract_explicit_workflows(
+            description=description,
+            solution=solution,
+            mvp_scope=mvp_scope,
+            language=language,
+        )
+        explicit_success_metrics = self._split_evidence_items(explicit_success)
+        explicit_constraint_items = self._split_evidence_items(explicit_constraints)
+
+        # Resolve the project operating model before building generic business
+        # outputs. This prevents a marketplace, hardware product or consumer
+        # transaction from being forced into the B2B workflow template.
+        archetype_context = project_archetype_resolver.resolve(
             title=title,
+            description=description,
+            industry=industry,
+            target_region=target_region,
+            output_language=language,
             target_users=target_users,
             problem=problem,
             solution=solution,
-            language=language,
+            business_model=business_model,
+            workflows=[main_use_case, mvp_scope],
         )
+
+        # The structured packet must expose a concise revenue hypothesis, not
+        # the whole idea sentence that happened to contain the word
+        # "commission" or "subscription".
+        business_model = self._first_available_text(
+            archetype_context.get("business_model_hypothesis"),
+            business_model,
+        )
+
+        inferred_targets = self._safe_list(archetype_context.get("target_users"))
+        if not target_users or self._roles_are_too_generic(target_users):
+            target_users = inferred_targets
+
+        inferred_workflows = self._safe_list(
+            archetype_context.get("priority_workflows")
+        )
+        if explicit_workflows and archetype_context.get("project_archetype") == "hardware_iot":
+            inferred_workflows = self._unique(
+                explicit_workflows
+                + [
+                    item
+                    for item in inferred_workflows
+                    if not self._is_generic_workflow(item)
+                ]
+            )[:6]
+        elif explicit_workflows and self._workflows_are_generic(inferred_workflows):
+            inferred_workflows = explicit_workflows
+        elif explicit_workflows:
+            inferred_workflows = self._unique(inferred_workflows + explicit_workflows)[:6]
+        if inferred_workflows:
+            main_use_case = inferred_workflows[0]
+
+        if not business_model:
+            business_model = self._clean_text(
+                archetype_context.get("business_model_hypothesis")
+            )
+
+        if not mvp_scope and inferred_workflows:
+            mvp_scope = ", ".join(inferred_workflows[:3])
 
         sector_tags = self._sector_tags(industry)
         sector_profile = self._sector_profile(sector_tags)
+
+        target_terms = self._extract_concepts(
+            values=target_users,
+            max_items=20,
+            prefer_short=True,
+        )
+        use_case_terms = self._extract_concepts(
+            values=[main_use_case, mvp_scope, solution],
+            max_items=16,
+            prefer_short=False,
+        )
+        solution_terms = self._extract_concepts(
+            values=[solution, mvp_scope],
+            max_items=14,
+            prefer_short=False,
+        )
+        problem_terms = self._extract_concepts(
+            values=[problem],
+            max_items=10,
+            prefer_short=False,
+        )
+
+        # Functional concepts must not be satisfied by the region or target
+        # name alone. This is essential for direct-competitor validation.
+        region_noise = self._extract_concepts(
+            values=self._region_noise_values(target_region),
+            max_items=16,
+            prefer_short=True,
+        )
+        title_noise = self._extract_concepts(
+            values=[title],
+            max_items=8,
+            prefer_short=True,
+        )
+        raw_target_noise = self._extract_concepts(
+            values=target_users,
+            max_items=36,
+            prefer_short=True,
+        )
+        target_terms = self._remove_context_noise(target_terms, region_noise + title_noise)
+        functional_noise = raw_target_noise + region_noise + title_noise
+        use_case_terms = self._remove_context_noise(use_case_terms, functional_noise)
+        solution_terms = self._remove_context_noise(solution_terms, functional_noise)
+        problem_terms = self._remove_context_noise(problem_terms, functional_noise)
+
+        domain_concepts = self._domain_concepts(
+            industry=industry,
+            description=description,
+            sector_profile=sector_profile,
+            project_context=project_context,
+            use_case_terms=use_case_terms,
+            solution_terms=solution_terms,
+            target_terms=target_terms,
+        )
+        domain_concepts = self._unique(
+            self._safe_list(archetype_context.get("search_terms"))
+            + domain_concepts
+        )[:32]
+        search_concepts = self._rank_search_concepts(
+            domain_concepts=domain_concepts,
+            use_case_terms=use_case_terms,
+            solution_terms=solution_terms,
+            target_terms=target_terms,
+            problem_terms=problem_terms,
+        )
 
         strong_keywords = self._strong_keywords(
             title=title,
@@ -905,24 +1317,66 @@ class ProjectIntelligenceLayer:
             mvp_scope=mvp_scope,
             sector_profile=sector_profile,
             project_context=project_context,
+            search_concepts=search_concepts,
         )
-
+        must_match_terms = self._must_match_terms(
+            search_concepts=search_concepts,
+            domain_concepts=domain_concepts,
+            use_case_terms=use_case_terms,
+            solution_terms=solution_terms,
+        )
         weak_terms_to_ignore = self._weak_terms_to_ignore(
             sector_profile=sector_profile,
         )
-
         forbidden_offtopic_terms = self._forbidden_offtopic_terms(
             sector_profile=sector_profile,
             sector_tags=sector_tags,
         )
 
-        must_match_terms = self._must_match_terms(
+        solution_category = self._best_solution_category(
+            solution_terms=solution_terms,
+            domain_concepts=domain_concepts,
+            industry=industry,
+        )
+        value_proposition = self._build_value_proposition(
             title=title,
             target_users=target_users,
             problem=problem,
             solution=solution,
-            strong_keywords=strong_keywords,
+            language=language,
         )
+        priority_workflows = self._priority_workflows(
+            explicit_mvp=explicit_mvp,
+            mvp_scope=mvp_scope,
+            solution=solution,
+            use_case_terms=use_case_terms,
+            language=language,
+            archetype_workflows=inferred_workflows,
+        )
+        primary_target = target_users[0] if target_users else ""
+        secondary_targets = target_users[1:4]
+        economic_buyer = self._economic_buyer(
+            explicit_buyer=explicit_economic_buyer,
+            target_users=target_users,
+            industry=industry,
+            language=language,
+            archetype_context=archetype_context,
+        )
+        actors = self._merge_actor_context(
+            archetype_context=archetype_context,
+            target_users=target_users,
+            economic_buyer=economic_buyer,
+            language=language,
+        )
+        success_metrics = self._unique(
+            explicit_success_metrics
+            + self._safe_list(archetype_context.get("success_metrics"))
+        )[:12]
+        constraints = self._unique(
+            explicit_constraint_items
+            + self._safe_list(project_context.get("constraints"))
+            + self._safe_list(archetype_context.get("constraints"))
+        )[:12]
 
         structured_project_context = {
             "project_name": title,
@@ -931,14 +1385,41 @@ class ProjectIntelligenceLayer:
             "sector": industry,
             "industry": industry,
             "sector_tags": sector_tags,
+            "project_archetype": archetype_context.get("project_archetype"),
+            "vertical": archetype_context.get("vertical"),
+            "business_motion": archetype_context.get("business_motion"),
+            "interaction_model": archetype_context.get("interaction_model"),
+            "validation_unit": archetype_context.get("validation_unit"),
+            "actors": actors,
+            "success_metrics": success_metrics,
+            "constraints": constraints,
+            "risk_dimensions": self._unique(
+                self._safe_list(archetype_context.get("risk_dimensions"))
+                + constraints
+            )[:16],
+            "evidence_needs": archetype_context.get("evidence_needs") or [],
+            "archetype_confidence": archetype_context.get("confidence"),
             "target_region": target_region,
             "market_region": target_region,
             "target_users": target_users,
+            "primary_target": primary_target,
+            "secondary_targets": secondary_targets,
+            "economic_buyer": economic_buyer,
+            "target_terms": target_terms,
             "problem": problem,
             "core_problem": problem,
+            "problem_keywords": problem_terms,
             "solution": solution,
-            "solution_type": solution,
-            "main_use_case": main_use_case,
+            "solution_type": solution_category or solution,
+            "solution_category": solution_category,
+            "solution_terms": solution_terms,
+            "main_use_case": priority_workflows[0] if priority_workflows else main_use_case,
+            "priority_workflow": priority_workflows[0] if priority_workflows else main_use_case,
+            "priority_workflows": priority_workflows,
+            "use_cases": priority_workflows or use_case_terms,
+            "use_case_terms": use_case_terms,
+            "domain_concepts": domain_concepts,
+            "search_concepts": search_concepts,
             "business_model": business_model,
             "mvp_scope": mvp_scope,
             "value_proposition": value_proposition,
@@ -950,7 +1431,6 @@ class ProjectIntelligenceLayer:
             language=language,
             target_region=target_region,
         )
-
         query_planner = self._query_planner(
             title=title,
             industry=industry,
@@ -963,8 +1443,13 @@ class ProjectIntelligenceLayer:
             strong_keywords=strong_keywords,
             sector_profile=sector_profile,
             language=language,
+            search_concepts=search_concepts,
+            domain_concepts=domain_concepts,
+            use_case_terms=priority_workflows + use_case_terms,
+            solution_terms=solution_terms,
+            target_terms=target_terms,
+            archetype_context=archetype_context,
         )
-
         context_confidence = self._context_confidence(
             title=title,
             industry=industry,
@@ -978,10 +1463,17 @@ class ProjectIntelligenceLayer:
         )
 
         agent_context_packet = {
-            "format": "project_intelligence_packet_v2_real_source_discovery",
+            "format": "project_intelligence_packet_v4_archetype_aware",
             "structured_project_context": structured_project_context,
+            "archetype_context": archetype_context,
             "strong_keywords": strong_keywords,
             "must_match_terms": must_match_terms,
+            "domain_concepts": domain_concepts,
+            "search_concepts": search_concepts,
+            "target_terms": target_terms,
+            "use_case_terms": use_case_terms,
+            "solution_terms": solution_terms,
+            "problem_keywords": problem_terms,
             "weak_terms_to_ignore": weak_terms_to_ignore,
             "forbidden_offtopic_terms": forbidden_offtopic_terms,
             "source_acceptance_rules": source_acceptance_rules,
@@ -994,13 +1486,20 @@ class ProjectIntelligenceLayer:
         }
 
         return {
-            "format": "project_intelligence_layer_v2_real_source_discovery",
+            "format": "project_intelligence_layer_v4_archetype_aware",
             "status": "completed",
             "output_language": language,
             "context_locked": True,
             "structured_project_context": structured_project_context,
+            "archetype_context": archetype_context,
             "strong_keywords": strong_keywords,
             "must_match_terms": must_match_terms,
+            "domain_concepts": domain_concepts,
+            "search_concepts": search_concepts,
+            "target_terms": target_terms,
+            "use_case_terms": use_case_terms,
+            "solution_terms": solution_terms,
+            "problem_keywords": problem_terms,
             "weak_terms_to_ignore": weak_terms_to_ignore,
             "forbidden_offtopic_terms": forbidden_offtopic_terms,
             "source_acceptance_rules": source_acceptance_rules,
@@ -1025,6 +1524,12 @@ class ProjectIntelligenceLayer:
             "agent_context_packet": intelligence.get("agent_context_packet") or {},
             "strong_keywords": intelligence.get("strong_keywords") or [],
             "must_match_terms": intelligence.get("must_match_terms") or [],
+            "domain_concepts": intelligence.get("domain_concepts") or [],
+            "search_concepts": intelligence.get("search_concepts") or [],
+            "target_terms": intelligence.get("target_terms") or [],
+            "use_case_terms": intelligence.get("use_case_terms") or [],
+            "solution_terms": intelligence.get("solution_terms") or [],
+            "problem_keywords": intelligence.get("problem_keywords") or [],
             "weak_terms_to_ignore": intelligence.get("weak_terms_to_ignore") or [],
             "forbidden_offtopic_terms": intelligence.get("forbidden_offtopic_terms") or [],
             "source_acceptance_rules": intelligence.get("source_acceptance_rules") or {},
@@ -1033,14 +1538,13 @@ class ProjectIntelligenceLayer:
             "context_locked": True,
         }
 
-        anchor_terms = self._unique(
+        merged["anchor_terms"] = self._unique(
             self._safe_list(base_project_context.get("anchor_terms"))
-            + intelligence.get("strong_keywords", [])
+            + intelligence.get("domain_concepts", [])
+            + intelligence.get("use_case_terms", [])
+            + intelligence.get("solution_terms", [])
             + intelligence.get("must_match_terms", [])
-        )
-
-        merged["anchor_terms"] = anchor_terms[:60]
-
+        )[:60]
         return merged
 
     @staticmethod
@@ -1062,6 +1566,12 @@ class ProjectIntelligenceLayer:
             "risk",
             "risque",
             "slow",
+            "paper",
+            "excel",
+            "spreadsheet",
+            "whatsapp",
+            "outdated",
+            "administrative burden",
             "cost",
             "coût",
             "cout",
@@ -1143,32 +1653,158 @@ class ProjectIntelligenceLayer:
         project_context: Dict[str, Any],
         detected: Dict[str, Any],
     ) -> List[str]:
-        candidates = (
-            self._safe_list(detected.get("target_users"))
-            + self._safe_list(project_context.get("target_users"))
-            + self._safe_list(project_context.get("target_market"))
-        )
+        # Explicit role statements always win over heuristic sentence matches.
+        explicit_roles = self._extract_actor_roles_from_description(description)
+        if explicit_roles:
+            return explicit_roles[:8]
 
-        if candidates:
-            return self._unique(candidates)[:10]
+        candidates = (
+            self._safe_list(project_context.get("target_users"))
+            + self._safe_list(project_context.get("target_market"))
+            + self._safe_list(detected.get("target_users"))
+        )
+        valid_candidates = [
+            item for item in candidates if self._is_actor_phrase(item)
+        ]
+        if valid_candidates:
+            return self._unique(valid_candidates)[:8]
 
         patterns = [
             r"(?:first target users are|target users are|target users include)\s+(.+?)(?:\.|\n|$)",
             r"(?:the first target users are)\s+(.+?)(?:\.|\n|$)",
             r"(?:users are|customers are|clients are)\s+(.+?)(?:\.|\n|$)",
-            r"(?:les utilisateurs cibles sont|les premiers utilisateurs sont|les clients cibles sont)\s+(.+?)(?:\.|\n|$)",
+            r"(?:les utilisateurs cibles sont|les premiers utilisateurs sont|les premiers utilisateurs ciblés sont|les clients cibles sont)\s+(.+?)(?:\.|\n|$)",
             r"(?:la cible est|les cibles sont)\s+(.+?)(?:\.|\n|$)",
         ]
-
         for pattern in patterns:
             match = re.search(pattern, description, flags=re.IGNORECASE)
-
             if not match:
                 continue
-
-            return self._split_items(match.group(1))[:10]
-
+            items = [item for item in self._split_items(match.group(1)) if self._is_actor_phrase(item)]
+            if items:
+                return items[:8]
         return []
+
+    def _roles_are_too_generic(self, values: List[str]) -> bool:
+        if not values:
+            return True
+        generic = {
+            "target user", "target users", "user", "users",
+            "utilisateur cible", "utilisateurs cibles", "client", "clients",
+            "economic buyer", "acheteur economique", "acheteur économique",
+        }
+        useful = []
+        for value in values:
+            normalized = self._normalize_concept(value)
+            if not normalized or normalized in generic:
+                continue
+            if len(normalized.split()) > 14:
+                continue
+            useful.append(normalized)
+        return not useful
+
+    def _extract_actor_roles_from_description(self, description: str) -> List[str]:
+        patterns = [
+            r"(?:the\s+)?(?:main|primary)\s+operational\s+user\s+(?:is|would\s+be|will\s+be)\s+(.+?)(?:\.|,\s+but|\n|$)",
+            r"(?:the\s+)?(?:main|primary)\s+(?:daily\s+)?user\s+(?:is|would\s+be|will\s+be)\s+(.+?)(?:\.|,\s+but|\n|$)",
+            r"(?:l['’]utilisateur\s+opérationnel\s+principal|l['’]utilisateur\s+principal)\s+(?:est|serait)\s+(.+?)(?:\.|,\s+mais|\n|$)",
+        ]
+        roles: List[str] = []
+        for pattern in patterns:
+            match = re.search(pattern, description, flags=re.IGNORECASE)
+            if match:
+                candidate = self._clean_actor_phrase(match.group(1))
+                if self._is_actor_phrase(candidate):
+                    roles.append(candidate)
+        buyer = self._extract_economic_buyer_from_description(description)
+        if buyer and self._is_actor_phrase(buyer):
+            roles.append(buyer)
+        return self._unique(roles)
+
+    def _extract_economic_buyer_from_description(self, description: str) -> str:
+        patterns = [
+            r"(?:the\s+)?economic\s+buyer\s+(?:is|would\s+be|will\s+be|would\s+probably\s+be|is\s+probably)\s+(.+?)(?:\.|,\s+but|\n|$)",
+            r"(?:the\s+)?budget\s+owner\s+(?:is|would\s+be|will\s+be)\s+(.+?)(?:\.|,\s+but|\n|$)",
+            r"(?:l['’]acheteur\s+économique|le\s+détenteur\s+du\s+budget)\s+(?:est|serait)\s+(.+?)(?:\.|,\s+mais|\n|$)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, description, flags=re.IGNORECASE)
+            if match:
+                candidate = self._clean_actor_phrase(match.group(1))
+                if self._is_actor_phrase(candidate):
+                    return candidate
+        return ""
+
+    def _clean_actor_phrase(self, value: str) -> str:
+        text = self._clean_text(value).strip(" .,:;-")
+        text = re.sub(r"^(?:the|a|an|le|la|les|un|une)\s+", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"^(?:probably|possibly|likely)\s+", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s+(?:responsible for|who manages|in charge of)\s+.+$", "", text, flags=re.IGNORECASE)
+        return text.strip(" .,:;-")
+
+    def _is_actor_phrase(self, value: Any) -> bool:
+        text = self._clean_actor_phrase(str(value or ""))
+        if not text or len(text.split()) > 14:
+            return False
+        normalized = self._normalize_concept(text)
+        tool_terms = {
+            "excel", "spreadsheet", "spreadsheets", "whatsapp", "paper", "notebook",
+            "notebooks", "software", "platform", "application", "app", "monthly export",
+        }
+        action_markers = {
+            "still prepare", "prepare weekly", "needs to verify", "would focus",
+            "focus only", "the first version", "before developing", "struggle to",
+        }
+        actor_markers = {
+            "user", "users", "customer", "customers", "client", "clients", "manager",
+            "owner", "assistant", "supervisor", "employee", "employees", "worker", "workers",
+            "company", "companies", "business", "businesses", "cooperative", "coopérative", "coopératives", "producer", "producteur", "producteurs",
+            "beekeeper", "farmer", "doctor", "patient", "student", "teacher", "restaurant",
+            "factory", "factories", "workshop", "workshops", "retailer", "retail",
+            "responsable", "directeur", "proprietaire", "propriétaire", "employe", "employé",
+            "entreprise", "entreprises", "coordinateur", "coordinateurs",
+        }
+        if any(marker in normalized for marker in action_markers):
+            return False
+        if all(term in normalized for term in ("excel", "whatsapp")):
+            return False
+        if normalized in tool_terms or any(normalized.startswith(f"{term} ") for term in tool_terms):
+            return False
+        return any(marker in normalized for marker in actor_markers)
+
+    def _extract_labeled_section(
+        self,
+        text: str,
+        *,
+        labels: tuple[str, ...],
+        stop_labels: tuple[str, ...],
+    ) -> str:
+        clean = self._clean_text(text)
+        if not clean:
+            return ""
+
+        lowered = clean.lower()
+        starts: list[tuple[int, str]] = []
+        for label in labels:
+            index = lowered.find(label.lower())
+            if index >= 0:
+                starts.append((index, label))
+        if not starts:
+            return ""
+
+        start_index, label = min(starts, key=lambda item: item[0])
+        content_start = start_index + len(label)
+        end_index = len(clean)
+        for stop in stop_labels:
+            index = lowered.find(stop.lower(), content_start)
+            if index >= 0:
+                end_index = min(end_index, index)
+
+        value = clean[content_start:end_index].strip(" \t\n:;.-")
+        value = re.sub(r"\s+", " ", value).strip()
+        if not value:
+            return ""
+        return value[0].upper() + value[1:] if len(value) > 1 else value.upper()
 
     def _extract_sentence(self, text: str, hints: set[str]) -> str:
         clean_text = self._clean_text(text)
@@ -1208,6 +1844,13 @@ class ProjectIntelligenceLayer:
             "lms": ["edtech", "lms"],
             "hrtech": ["hrtech", "hr", "training", "skills"],
             "hr tech": ["hrtech", "hr", "training", "skills"],
+            "human resources": ["workforce"],
+            "workforce": ["workforce"],
+            "workforce management": ["workforce"],
+            "workforce scheduling": ["workforce"],
+            "employee scheduling": ["workforce"],
+            "shift planning": ["workforce"],
+            "shift scheduling": ["workforce"],
             "healthtech": ["healthtech", "health", "medical"],
             "health tech": ["healthtech", "health", "medical"],
             "medtech": ["healthtech", "medical"],
@@ -1233,6 +1876,16 @@ class ProjectIntelligenceLayer:
             "supermarket": ["grocery", "retailtech", "ecommerce"],
             "delivery": ["delivery", "marketplace"],
             "livraison": ["delivery", "marketplace"],
+            "transport": ["mobility"],
+            "mobility": ["mobility"],
+            "mobilité": ["mobility"],
+            "mobilite": ["mobility"],
+            "taxi": ["mobility", "marketplace"],
+            "ride hailing": ["mobility", "marketplace"],
+            "recruitment": ["recruitment", "marketplace"],
+            "recrutement": ["recruitment", "marketplace"],
+            "internship": ["recruitment", "marketplace"],
+            "stage": ["recruitment", "marketplace"],
         }
 
         for key, values in mapping.items():
@@ -1296,72 +1949,57 @@ class ProjectIntelligenceLayer:
         mvp_scope: str,
         sector_profile: Dict[str, Any],
         project_context: Dict[str, Any],
+        search_concepts: List[str] | None = None,
     ) -> List[str]:
+        """Return search-safe business concepts, never sentence fragments.
+
+        Business-model wording, project names and region names are excluded from
+        the strong list. They remain available elsewhere in the context but may
+        not count as source relevance evidence.
+        """
         candidates: List[str] = []
-
-        candidates.extend(self._project_name_terms(title))
-        candidates.extend(self._split_items(industry))
-        candidates.extend(self._safe_list(target_region))
-        candidates.extend(target_users)
-        candidates.extend(self._important_phrases(problem))
-        candidates.extend(self._important_phrases(solution))
-        candidates.extend(self._important_phrases(main_use_case))
-        candidates.extend(self._important_phrases(business_model))
-        candidates.extend(self._important_phrases(mvp_scope))
+        candidates.extend(search_concepts or [])
+        candidates.extend(self._safe_list(project_context.get("domain_concepts")))
+        candidates.extend(self._safe_list(project_context.get("search_concepts")))
         candidates.extend(self._safe_list(project_context.get("anchor_terms")))
-        candidates.extend(self._safe_list(project_context.get("strong_keywords")))
-        candidates.extend(sector_profile.get("strong_terms", []))
 
-        cleaned: List[str] = []
+        region_tokens = set(self._concept_tokens(target_region))
+        title_tokens = set(self._concept_tokens(title))
+        result: List[str] = []
 
         for candidate in candidates:
-            item = self._clean_text(candidate)
-
-            if not item:
+            clean = self._normalize_concept(candidate)
+            if not self._is_specific_concept(clean):
                 continue
-
-            if len(item) < 3:
+            tokens = set(self._concept_tokens(clean))
+            if tokens and tokens.issubset(region_tokens | title_tokens):
                 continue
+            result.append(clean)
 
-            cleaned.append(item)
-
-        return self._unique(cleaned)[:100]
+        return self._unique(result)[:48]
 
     def _must_match_terms(
         self,
         *,
-        title: str,
-        target_users: List[str],
-        problem: str,
-        solution: str,
-        strong_keywords: List[str],
+        search_concepts: List[str],
+        domain_concepts: List[str],
+        use_case_terms: List[str],
+        solution_terms: List[str],
     ) -> List[str]:
-        candidates: List[str] = []
-
-        title_terms = self._project_name_terms(title)
-
-        if title_terms:
-            candidates.extend(title_terms[:3])
-
-        candidates.extend(target_users[:4])
-        candidates.extend(self._important_phrases(problem)[:4])
-        candidates.extend(self._important_phrases(solution)[:4])
-        candidates.extend(strong_keywords[:12])
-
-        result = []
-
-        for item in candidates:
-            clean = self._clean_text(item)
-
-            if not clean:
-                continue
-
-            if clean.lower() in self.DEFAULT_WEAK_TERMS:
-                continue
-
-            result.append(clean)
-
-        return self._unique(result)[:24]
+        """Return a compact evidence gate, not a bag of every project word."""
+        candidates = (
+            domain_concepts[:8]
+            + use_case_terms[:8]
+            + solution_terms[:6]
+            + search_concepts[:12]
+        )
+        return self._unique(
+            [
+                self._normalize_concept(item)
+                for item in candidates
+                if self._is_specific_concept(item)
+            ]
+        )[:20]
 
     def _weak_terms_to_ignore(self, *, sector_profile: Dict[str, Any]) -> List[str]:
         weak_terms = set(self.DEFAULT_WEAK_TERMS)
@@ -1472,31 +2110,343 @@ class ProjectIntelligenceLayer:
         return sorted(forbidden)
 
     def _important_phrases(self, text: str) -> List[str]:
-        clean = self._clean_text(text)
+        """Compatibility wrapper around the professional concept extractor."""
+        return self._extract_concepts(
+            values=[text],
+            max_items=24,
+            prefer_short=False,
+        )
 
-        if not clean:
-            return []
+    def _extract_concepts(
+        self,
+        *,
+        values: List[Any],
+        max_items: int,
+        prefer_short: bool,
+    ) -> List[str]:
+        candidates: List[str] = []
+        occurrence: Dict[str, int] = {}
 
-        phrases: List[str] = []
+        for raw_value in values:
+            for raw in self._safe_list(raw_value):
+                normalized = self._normalize_concept(raw)
+                if not normalized:
+                    continue
 
-        chunks = re.split(r",|;|\band\b|\bet\b|\bor\b|\bou\b|\.", clean, flags=re.IGNORECASE)
+                clauses = re.split(
+                    r"[,;:|/]|\\b(?:and|or|et|ou|where|who|that|which|pour|afin de)\\b",
+                    normalized,
+                    flags=re.IGNORECASE,
+                )
+                for clause in clauses:
+                    tokens = self._concept_tokens(clause)
+                    if not tokens:
+                        continue
+                    clean_tokens = [
+                        token for token in tokens
+                        if token not in self.CONCEPT_STOP_WORDS
+                        and token not in self.GENERIC_CONCEPT_TERMS
+                        and len(token) >= 3
+                    ]
+                    if not clean_tokens:
+                        continue
 
-        for chunk in chunks:
-            chunk = self._clean_text(chunk)
+                    # Single terms preserve niche nouns; two- and three-word
+                    # phrases preserve meaning such as "invoice reconciliation".
+                    for size in (3, 2, 1):
+                        for index in range(0, len(clean_tokens) - size + 1):
+                            phrase = " ".join(clean_tokens[index:index + size])
+                            if not self._is_specific_concept(phrase):
+                                continue
+                            occurrence[phrase] = occurrence.get(phrase, 0) + 1
 
-            if len(chunk) < 4:
+        candidates = list(occurrence)
+        candidates.sort(
+            key=lambda item: (
+                occurrence[item],
+                1 if 2 <= len(item.split()) <= 3 else 0,
+                -abs(len(item.split()) - (2 if prefer_short else 3)),
+                len(item),
+            ),
+            reverse=True,
+        )
+        return self._unique(candidates)[:max_items]
+
+    def _domain_concepts(
+        self,
+        *,
+        industry: str,
+        description: str,
+        sector_profile: Dict[str, Any],
+        project_context: Dict[str, Any],
+        use_case_terms: List[str],
+        solution_terms: List[str],
+        target_terms: List[str],
+    ) -> List[str]:
+        project_text = self._normalize_concept(
+            " ".join([industry, description, " ".join(use_case_terms + solution_terms + target_terms)])
+        )
+        candidates: List[str] = []
+
+        # Existing structured concepts have priority.
+        candidates.extend(self._safe_list(project_context.get("domain_concepts")))
+        candidates.extend(self._safe_list(project_context.get("search_concepts")))
+
+        # Sector profiles enrich matching projects, but a profile term is kept
+        # only when the idea or industry shares at least one meaningful token.
+        project_tokens = set(self._concept_tokens(project_text))
+        for term in sector_profile.get("strong_terms", []):
+            term_tokens = set(self._concept_tokens(term))
+            meaningful = {
+                token for token in term_tokens
+                if token not in self.GENERIC_CONCEPT_TERMS
+                and token not in self.CONCEPT_STOP_WORDS
+            }
+            if meaningful and meaningful & project_tokens:
+                candidates.append(term)
+
+        candidates.extend(self._extract_concepts(
+            values=[industry], max_items=8, prefer_short=True
+        ))
+        candidates.extend(use_case_terms[:8])
+        candidates.extend(solution_terms[:8])
+
+        return self._unique([
+            self._normalize_concept(item)
+            for item in candidates
+            if self._is_specific_concept(item)
+        ])[:24]
+
+    def _rank_search_concepts(
+        self,
+        *,
+        domain_concepts: List[str],
+        use_case_terms: List[str],
+        solution_terms: List[str],
+        target_terms: List[str],
+        problem_terms: List[str],
+    ) -> List[str]:
+        weighted = (
+            domain_concepts[:16]
+            + use_case_terms[:14]
+            + solution_terms[:12]
+            + target_terms[:8]
+            + problem_terms[:6]
+        )
+        return self._unique([
+            self._normalize_concept(item)
+            for item in weighted
+            if self._is_specific_concept(item)
+        ])[:36]
+
+    def _best_solution_category(
+        self,
+        *,
+        solution_terms: List[str],
+        domain_concepts: List[str],
+        industry: str,
+    ) -> str:
+        for item in solution_terms + domain_concepts:
+            if 2 <= len(item.split()) <= 4 and self._is_specific_concept(item):
+                return item
+        return self._normalize_concept(industry)
+
+    def _pick_query_concept(
+        self,
+        primary: List[str],
+        fallback: List[str],
+        index: int,
+    ) -> str:
+        selected_pool = primary if any(self._is_specific_concept(item) for item in primary) else fallback
+        pool = [item for item in selected_pool if self._is_specific_concept(item)]
+        pool = self._unique(pool)
+        pool.sort(
+            key=lambda item: (
+                1 if not (set(self._concept_tokens(item)) & self.QUERY_AUDIENCE_TERMS) else 0,
+                1 if 2 <= len(item.split()) <= 3 else 0,
+                len(item.split()),
+                len(item),
+            ),
+            reverse=True,
+        )
+        if not pool:
+            return "business workflow"
+        return pool[min(index, len(pool) - 1)]
+
+    def _remove_context_noise(
+        self,
+        concepts: List[str],
+        noise_concepts: List[str],
+    ) -> List[str]:
+        noise_tokens = {
+            token
+            for concept in noise_concepts
+            for token in self._concept_tokens(concept)
+        }
+        result: List[str] = []
+        for concept in concepts:
+            remaining = [
+                token
+                for token in self._concept_tokens(concept)
+                if token not in noise_tokens
+            ]
+            if not remaining:
                 continue
+            clean = " ".join(remaining)
+            if not self._is_specific_concept(clean):
+                continue
+            result.append(clean)
+        result.sort(
+            key=lambda item: (
+                1 if 2 <= len(item.split()) <= 3 else 0,
+                len(item.split()),
+                len(item),
+            ),
+            reverse=True,
+        )
+        return self._unique(result)
 
-            words = [word for word in re.split(r"\s+", chunk) if len(word) >= 3]
+    def _region_noise_values(self, region: str) -> List[str]:
+        clean = self._normalize_concept(region)
+        values = [clean] if clean else []
+        aliases = {
+            "tunisie": ["tunisia", "tunisian", "tunisien", "tunisienne"],
+            "tunisia": ["tunisie", "tunisian", "tunisien", "tunisienne"],
+            "france": ["french", "français", "francais", "française", "francaise"],
+            "germany": ["german", "allemagne", "allemand"],
+            "allemagne": ["germany", "german", "allemand"],
+            "morocco": ["maroc", "moroccan", "marocain"],
+            "maroc": ["morocco", "moroccan", "marocain"],
+            "algeria": ["algérie", "algerie", "algerian", "algérien", "algerien"],
+            "algérie": ["algeria", "algerie", "algerian", "algérien", "algerien"],
+        }
+        for key, items in aliases.items():
+            if key in clean:
+                values.extend(items)
+        return self._unique(values)
 
-            if len(words) >= 2:
-                phrases.append(" ".join(words[:8]))
+    def _pick_market_domain_concept(
+        self,
+        primary: List[str],
+        fallback: List[str],
+    ) -> str:
+        pool = self._unique([
+            item for item in primary + fallback
+            if self._is_specific_concept(item)
+        ])
+        workflow_verbs = {
+            "track", "record", "register", "export", "generate", "create",
+            "follow", "manage", "suivi", "enregistrer", "générer", "generer",
+        }
+        preferred = [
+            item for item in pool
+            if len(item.split()) == 2
+            and not (set(self._concept_tokens(item)) & workflow_verbs)
+            and not (set(self._concept_tokens(item)) & self.QUERY_AUDIENCE_TERMS)
+        ]
+        if preferred:
+            return preferred[0]
+        single_word = [
+            item for item in pool
+            if len(item.split()) == 1
+            and not (set(self._concept_tokens(item)) & self.QUERY_AUDIENCE_TERMS)
+        ]
+        if single_word:
+            return single_word[0]
+        return pool[0] if pool else "business sector"
 
-            for size in (2, 3, 4):
-                for i in range(0, max(0, len(words) - size + 1)):
-                    phrases.append(" ".join(words[i : i + size]))
+    def _relevant_profile_queries(
+        self,
+        queries: List[str],
+        concepts: List[str],
+        limit: int,
+    ) -> List[str]:
+        concept_tokens = {
+            token for concept in concepts for token in self._concept_tokens(concept)
+            if token not in self.GENERIC_CONCEPT_TERMS
+            and token not in self.CONCEPT_STOP_WORDS
+        }
+        result: List[str] = []
+        for query in queries:
+            query_tokens = set(self._concept_tokens(query))
+            if concept_tokens and not (query_tokens & concept_tokens):
+                continue
+            result.append(query)
+            if len(result) >= limit:
+                break
+        return result
 
-        return self._unique(phrases)[:35]
+    def _select_balanced_queries(
+        self,
+        queries_by_intent: Dict[str, List[str]],
+        max_queries: int,
+    ) -> List[str]:
+        order = [
+            "direct_competitors",
+            "local_solutions",
+            "official_sources",
+            "market_sources",
+            "adjacent_solutions",
+            "pricing",
+            "field_validation",
+        ]
+        selected: List[str] = []
+        cursor = 0
+        while len(selected) < max_queries:
+            added = False
+            for intent in order:
+                values = queries_by_intent.get(intent) or []
+                if cursor < len(values):
+                    candidate = values[cursor]
+                    if candidate not in selected:
+                        selected.append(candidate)
+                        added = True
+                        if len(selected) >= max_queries:
+                            break
+            if not added:
+                break
+            cursor += 1
+        return selected
+
+    def _normalize_query(self, value: Any) -> str:
+        text = self._normalize_concept(value)
+        tokens: List[str] = []
+        seen = set()
+        for token in self._concept_tokens(text):
+            if token in seen:
+                continue
+            seen.add(token)
+            tokens.append(token)
+        return " ".join(tokens[:9])
+
+    def _normalize_concept(self, value: Any) -> str:
+        text = self._clean_text(value).lower()
+        text = text.replace("’", "'")
+        text = re.sub(r"[^a-z0-9à-ÿ' -]+", " ", text)
+        text = re.sub(r"\s+", " ", text).strip(" -")
+        return text
+
+    def _concept_tokens(self, value: Any) -> List[str]:
+        normalized = self._normalize_concept(value)
+        return [
+            token for token in re.split(r"[\s-]+", normalized)
+            if token
+        ]
+
+    def _is_specific_concept(self, value: Any) -> bool:
+        clean = self._normalize_concept(value)
+        if not clean:
+            return False
+        tokens = [
+            token for token in self._concept_tokens(clean)
+            if token not in self.CONCEPT_STOP_WORDS
+            and token not in self.GENERIC_CONCEPT_TERMS
+        ]
+        if not tokens:
+            return False
+        if len(tokens) == 1 and len(tokens[0]) < 4:
+            return False
+        return True
 
     def _project_name_terms(self, title: str) -> List[str]:
         title = self._clean_text(title)
@@ -1537,116 +2487,175 @@ class ProjectIntelligenceLayer:
         strong_keywords: List[str],
         sector_profile: Dict[str, Any],
         language: str,
+        search_concepts: List[str] | None = None,
+        domain_concepts: List[str] | None = None,
+        use_case_terms: List[str] | None = None,
+        solution_terms: List[str] | None = None,
+        target_terms: List[str] | None = None,
+        archetype_context: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
-        target_short = self._short_query_phrase(" ".join(target_users[:2]), max_words=8)
-        problem_short = self._short_query_phrase(problem, max_words=10)
-        solution_short = self._short_query_phrase(solution, max_words=10)
-        use_case_short = self._short_query_phrase(main_use_case or solution, max_words=10)
-        primary_terms = self._short_query_phrase(" ".join(str(item) for item in strong_keywords[:8]), max_words=12)
+        """Create short, intent-specific and workflow-balanced queries.
 
-        base_context = self._clean_text(
-            " ".join(
-                [
-                    title,
-                    industry,
-                    target_region,
-                    target_short,
-                    use_case_short,
-                ]
-            )
+        The planner never lets a secondary feature represent the full project.
+        It combines a domain anchor, an exact target or a concrete workflow and
+        the region. Discovery and verification intents remain separate.
+        """
+        del title, problem, business_model
+        search_concepts = search_concepts or strong_keywords
+        domain_concepts = domain_concepts or search_concepts
+        use_case_terms = use_case_terms or search_concepts
+        solution_terms = solution_terms or search_concepts
+        target_terms = target_terms or []
+        archetype_context = archetype_context or {}
+
+        region = self._short_query_phrase(target_region, max_words=2)
+        industry_parts = [
+            self._normalize_concept(part)
+            for part in re.split(r"[/|,;]+", industry)
+            if self._normalize_concept(part)
+        ]
+        generic_industry_parts = {
+            "agritech", "edtech", "fintech", "healthtech", "legaltech",
+            "technology", "technologie", "software", "saas", "traceability",
+            "tracabilite", "digital", "human resources", "sme saas",
+        }
+        specific_industry = next(
+            (part for part in industry_parts if part not in generic_industry_parts),
+            "",
         )
+        archetype_terms = self._safe_list(archetype_context.get("search_terms"))
+        archetype_domain = self._pick_market_domain_concept(
+            archetype_terms,
+            archetype_terms,
+        )
+        domain = archetype_domain or specific_industry or self._pick_market_domain_concept(domain_concepts, search_concepts)
+        target = self._pick_query_concept(target_terms, [], 0)
 
-        direct_competitor_queries = [
-            f"{title} competitors {target_region}",
-            f"{industry} competitors {target_region} {target_short}",
-            f"{use_case_short} {target_region} competitors",
-            f"{solution_short} {target_region} alternatives",
-            f"{primary_terms} {target_region} competitors",
+        def useful(values: List[str], limit: int = 4) -> List[str]:
+            blocked_leads = {
+                "generate", "create", "manage", "track", "record", "receive",
+                "help", "simple", "basic", "software", "platform", "solution",
+            }
+            result: List[str] = []
+            ranked_values = sorted(
+                values,
+                key=lambda value: (
+                    1 if any(token in self._normalize_concept(value) for token in ("hive", "inspection", "treatment", "harvest", "contract", "maintenance", "renewal", "shift", "schedule", "attendance", "leave", "payroll")) else 0,
+                    -1 if any(token in self._normalize_concept(value) for token in ("export", "generate", "sheet", "pricing")) else 0,
+                    -len(self._concept_tokens(value)),
+                ),
+                reverse=True,
+            )
+            for value in ranked_values:
+                clean = self._normalize_concept(value)
+                tokens = self._concept_tokens(clean)
+                if not tokens or tokens[0] in blocked_leads and len(tokens) == 1:
+                    continue
+                if clean in {"traceability sheets", "generate traceability sheets"}:
+                    continue
+                if len(tokens) > 5:
+                    clean = " ".join(tokens[:5])
+                if self._is_specific_concept(clean) and clean not in result:
+                    result.append(clean)
+                if len(result) >= limit:
+                    break
+            return result
+
+        workflows = useful(use_case_terms, 5)
+        solutions = useful(solution_terms, 4)
+        anchors = useful(domain_concepts, 5)
+        if not domain:
+            domain = anchors[0] if anchors else self._normalize_query(industry)
+        primary_workflow = workflows[0] if workflows else (solutions[0] if solutions else domain)
+        secondary_workflow = workflows[1] if len(workflows) > 1 else (solutions[1] if len(solutions) > 1 else domain)
+
+        archetype_queries = archetype_context.get("search_queries") or {}
+        direct = (
+            self._safe_list(archetype_queries.get("local_fr"))[:3]
+            + self._safe_list(archetype_queries.get("local_en"))[:3]
+            + [
+                f"{domain} management software {region}",
+                f"{target} {domain} application {region}" if target else f"{domain} application {region}",
+                f"{primary_workflow} software {region}",
+            ]
+        )
+        local_solutions = (
+            self._safe_list(archetype_queries.get("all"))[:3]
+            + [
+                f"{region} {domain} application platform",
+                f"{region} {target} digital platform" if target else f"{region} {domain} startup",
+            ]
+        )
+        adjacent = [
+            f"{domain} workflow software",
+            f"{secondary_workflow} platform",
+            f"{domain} technology solutions",
+        ]
+        official = [
+            f"{region} {domain} statistics official",
+            f"{region} {domain} ministry report",
+        ]
+        market = [
+            f"{region} {domain} market report",
+            f"{region} {domain} association cooperative",
+            f"{region} {domain} digital adoption study",
+        ]
+        pricing = [
+            f"{domain} software pricing",
+            f"{primary_workflow} SaaS pricing",
+        ]
+        validation = [
+            f"{region} {target} workflow survey" if target else f"{region} {domain} user survey",
+            f"{region} {domain} adoption barriers",
         ]
 
-        adjacent_solution_queries = [
-            f"{use_case_short} software",
-            f"{problem_short} solution {industry}",
-            f"{target_short} management software {industry}",
-            f"{solution_short} benchmark",
-            f"{primary_terms} alternatives",
-        ]
-
-        market_source_queries = [
-            f"{industry} market {target_region}",
-            f"{industry} startups {target_region}",
-            f"{target_region} digital transformation {industry}",
-            f"{target_short} market needs {target_region}",
-            f"{primary_terms} market {target_region}",
-        ]
-
-        pricing_queries = [
-            f"{use_case_short} pricing",
-            f"{industry} SaaS pricing",
-            f"{solution_short} subscription pricing",
-            f"{primary_terms} pricing",
-        ]
-
-        validation_queries = [
-            f"{problem_short} {target_region}",
-            f"{target_short} pain points {target_region}",
-            f"{industry} adoption barriers {target_region}",
-        ]
-
-        sector_queries = sector_profile.get("queries") or {}
-
-        direct_competitor_queries.extend(sector_queries.get("direct_competitors", []))
-        adjacent_solution_queries.extend(sector_queries.get("adjacent_solutions", []))
-        market_source_queries.extend(sector_queries.get("market_sources", []))
-        pricing_queries.extend(sector_queries.get("pricing", []))
+        profile_queries = sector_profile.get("queries") or {}
+        direct.extend(self._relevant_profile_queries(
+            profile_queries.get("direct_competitors", []), search_concepts, 2
+        ))
+        adjacent.extend(self._relevant_profile_queries(
+            profile_queries.get("adjacent_solutions", []), search_concepts, 2
+        ))
+        market.extend(self._relevant_profile_queries(
+            profile_queries.get("market_sources", []), domain_concepts, 2
+        ))
+        pricing.extend(self._relevant_profile_queries(
+            profile_queries.get("pricing", []), search_concepts, 1
+        ))
 
         if language == "fr":
-            direct_competitor_queries.extend(
-                [
-                    f"{industry} concurrents {target_region}",
-                    f"{use_case_short} concurrents {target_region}",
-                    f"{solution_short} alternatives {target_region}",
-                    f"{target_region} application similaire {industry}",
-                ]
-            )
+            direct.append(f"logiciel {domain} {region}")
+            local_solutions.append(f"application {domain} {region}")
+            official.append(f"statistiques officielles {domain} {region}")
 
-            adjacent_solution_queries.extend(
-                [
-                    f"{use_case_short} logiciel",
-                    f"{problem_short} solution {target_region}",
-                    f"{target_short} logiciel gestion {industry}",
-                    f"{solution_short} benchmark international",
-                ]
-            )
-
-            market_source_queries.extend(
-                [
-                    f"{industry} marché {target_region}",
-                    f"{industry} startups {target_region}",
-                    f"{target_region} transformation digitale {industry}",
-                    f"{target_short} besoins marché {target_region}",
-                ]
-            )
-
-            pricing_queries.extend(
-                [
-                    f"{use_case_short} tarifs",
-                    f"{industry} prix SaaS",
-                    f"{solution_short} abonnement prix",
-                ]
-            )
+        queries_by_intent = {
+            "direct_competitors": self._clean_queries(direct, max_queries=5),
+            "local_solutions": self._clean_queries(local_solutions, max_queries=4),
+            "official_sources": self._clean_queries(official, max_queries=3),
+            "market_sources": self._clean_queries(market, max_queries=4),
+            "adjacent_solutions": self._clean_queries(adjacent, max_queries=4),
+            "pricing": self._clean_queries(pricing, max_queries=2),
+            "field_validation": self._clean_queries(validation, max_queries=2),
+        }
 
         return {
-            "format": "query_planner_v2_real_source_discovery",
-            "base_context": base_context,
-            "primary_search_terms": strong_keywords[:24],
-            "queries_by_intent": {
-                "direct_competitors": self._clean_queries(direct_competitor_queries),
-                "adjacent_solutions": self._clean_queries(adjacent_solution_queries),
-                "market_sources": self._clean_queries(market_source_queries),
-                "pricing": self._clean_queries(pricing_queries),
-                "field_validation": self._clean_queries(validation_queries),
-            },
+            "format": "query_planner_v5_archetype_aware",
+            "project_archetype": archetype_context.get("project_archetype"),
+            "vertical": archetype_context.get("vertical"),
+            "base_context": self._clean_text(
+                " | ".join(item for item in [domain, target, primary_workflow, region] if item)
+            ),
+            "primary_search_terms": search_concepts[:24],
+            "domain_concepts": domain_concepts[:16],
+            "use_case_terms": use_case_terms[:16],
+            "solution_terms": solution_terms[:16],
+            "target_terms": target_terms[:12],
+            "priority_workflows": workflows[:5],
+            "queries_by_intent": queries_by_intent,
+            "queries": self._select_balanced_queries(queries_by_intent, max_queries=8),
+            "verification_queries": self._unique(
+                queries_by_intent["official_sources"] + queries_by_intent["field_validation"]
+            )[:4],
             "search_strategy": self._search_strategy(language),
             "output_language": language,
         }
@@ -1665,26 +2674,26 @@ class ProjectIntelligenceLayer:
 
         return " ".join(words[:max_words])
 
-    def _clean_queries(self, queries: List[str]) -> List[str]:
-        cleaned = []
-
+    def _clean_queries(
+        self,
+        queries: List[str],
+        max_queries: int = 8,
+    ) -> List[str]:
+        cleaned: List[str] = []
         for query in queries:
-            clean = self._clean_text(query)
-
-            if not clean:
+            clean = self._normalize_query(query)
+            if len(clean.split()) < 3 or len(clean.split()) > 9:
                 continue
-
-            clean = re.sub(r"\s+", " ", clean).strip()
-
-            if len(clean) < 8:
+            specific = [
+                token for token in self._concept_tokens(clean)
+                if token not in self.GENERIC_CONCEPT_TERMS
+                and token not in self.QUERY_INTENT_TERMS
+                and token not in self.CONCEPT_STOP_WORDS
+            ]
+            if not specific:
                 continue
-
-            if len(clean.split()) > 18:
-                clean = " ".join(clean.split()[:18])
-
             cleaned.append(clean)
-
-        return self._unique(cleaned)[:16]
+        return self._unique(cleaned)[:max_queries]
 
     def _search_strategy(self, language: str) -> Dict[str, Any]:
         if language == "en":
@@ -1718,7 +2727,7 @@ class ProjectIntelligenceLayer:
             public_rule = "Une source faible ou générique doit être rejetée au lieu d’être affichée."
 
         return {
-            "format": "source_acceptance_rules_v2_real_source_discovery",
+            "format": "source_acceptance_rules_v3_claim_aware_evidence",
             "public_display_threshold": 0.70,
             "internal_use_threshold": 0.50,
             "rejection_threshold": 0.50,
@@ -1728,6 +2737,8 @@ class ProjectIntelligenceLayer:
                     "same_or_close_use_case",
                     "same_or_close_solution_category",
                     "local_or_clear_target_region",
+                    "explicit_product_page_signal",
+                    "domain_plus_use_case_evidence",
                 ],
                 "adjacent_solution": [
                     "clear_contextual_link",
@@ -1736,6 +2747,7 @@ class ProjectIntelligenceLayer:
                 "market_source": [
                     "sector_relevance",
                     "regional_or_target_relevance",
+                    "claim_compatible_evidence_category",
                 ],
                 "benchmark": [
                     "same_solution_category_or_operating_model",
@@ -1858,6 +2870,318 @@ class ProjectIntelligenceLayer:
             ],
         }
 
+    def _split_evidence_items(self, value: Any) -> List[str]:
+        text = self._clean_text(value)
+        if not text:
+            return []
+        parts = re.split(
+            r"[;\n]|,(?=\s*(?:et|and|ou|or)?\s*[a-zA-ZÀ-ÿ0-9])|"
+            r"\s+(?:et|and)\s+(?=(?:(?:la|le|l['’]|the)\s+)?(?:réduit|reduit|détecte|detecte|couvre|mesure|améliore|ameliore|maintenance|réparation|reparation|reduces|detects|covers|measures|improves|maintenance|repair)\b)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        result: List[str] = []
+        for part in parts:
+            clean = re.sub(r"^(?:et|and|ou|or)\s+", "", part.strip(" .,:;-"), flags=re.IGNORECASE)
+            if len(clean) < 3:
+                continue
+            result.append(clean)
+        return self._unique(result)[:12]
+
+    def _workflows_are_generic(self, workflows: List[str]) -> bool:
+        if not workflows:
+            return True
+        generic_markers = {
+            "core action",
+            "core workflow",
+            "main field operation",
+            "perform the main field operation",
+            "réaliser l'opération terrain principale",
+            "réaliser l’opération terrain principale",
+            "opération terrain principale",
+            "gérer le flux principal",
+            "manage the core workflow",
+        }
+        normalized = [self._normalize_concept(item) for item in workflows]
+        return all(
+            any(self._normalize_concept(marker) in item for marker in generic_markers)
+            or len(item.split()) < 3
+            for item in normalized
+        )
+
+    def _is_generic_workflow(self, value: Any) -> bool:
+        normalized = self._normalize_concept(value)
+        generic_markers = (
+            "core action",
+            "core workflow",
+            "main field operation",
+            "operation terrain principale",
+            "opération terrain principale",
+            "realiser l operation terrain principale",
+            "réaliser l opération terrain principale",
+            "manage the core workflow",
+            "gerer le flux principal",
+            "gérer le flux principal",
+        )
+        return not normalized or any(
+            self._normalize_concept(marker) in normalized
+            for marker in generic_markers
+        )
+
+    def _extract_explicit_workflows(
+        self,
+        *,
+        description: str,
+        solution: str,
+        mvp_scope: str,
+        language: str,
+    ) -> List[str]:
+        text = self._clean_text(". ".join([solution, mvp_scope, description]))
+        if not text:
+            return []
+        lowered_text = text.lower()
+        workflow_stop_markers = (
+            "les premiers utilisateurs ciblés",
+            "les utilisateurs cibles",
+            "the first target users",
+            "target users are",
+            "le modèle économique",
+            "the business model",
+            "les contraintes principales",
+            "the main constraints",
+            "le pilote sera considéré comme réussi si",
+            "the pilot will be considered successful if",
+        )
+        stop_positions = [
+            lowered_text.find(marker)
+            for marker in workflow_stop_markers
+            if lowered_text.find(marker) >= 0
+        ]
+        if stop_positions:
+            text = text[: min(stop_positions)].strip()
+
+        clauses = re.split(
+            r"(?<=[.!?])\s+|[;\n]+|,\s+(?:puis|then|et|and)\s+|"
+            r",\s*(?=(?:détecte|detecte|transmet|signale|envoie|inspecte|surveille|detects|sends|reports|monitors)\b)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        mappings_fr = (
+            (r"^inspecte\s+", "inspecter "),
+            (r"^surveille\s+", "surveiller "),
+            (r"^détecte\s+", "détecter "),
+            (r"^detecte\s+", "détecter "),
+            (r"^transmet\s+", "transmettre "),
+            (r"^signale\s+", "signaler "),
+            (r"^envoie\s+", "envoyer "),
+            (r"^(?:le|la|les|un|une|l['’])?\s*(?:robot|application|plateforme|système|solution|outil)\s+inspecte\s+", "inspecter "),
+            (r"^(?:le|la|les|un|une|l['’])?\s*(?:robot|application|plateforme|système|solution|outil)\s+surveille\s+", "surveiller "),
+            (r"^(?:le|la|les|un|une|l['’])?\s*(?:robot|application|plateforme|système|solution|outil)\s+détecte\s+", "détecter "),
+            (r"^(?:le|la|les|un|une|l['’])?\s*(?:robot|application|plateforme|système|solution|outil)\s+transmet\s+", "transmettre "),
+            (r"^(?:le|la|les|un|une|l['’])?\s*(?:robot|application|plateforme|système|solution|outil)\s+signale\s+", "signaler "),
+            (r"^(?:le|la|les|un|une|l['’])?\s*(?:robot|application|plateforme|système|solution|outil)\s+envoie\s+", "envoyer "),
+            (r"^(?:le|la|les|un|une|l['’])?\s*(?:robot|application|plateforme|système|solution|outil)\s+permet de\s+", ""),
+        )
+        mappings_en = (
+            (r"^inspects\s+", "inspect "),
+            (r"^monitors\s+", "monitor "),
+            (r"^detects\s+", "detect "),
+            (r"^sends\s+", "send "),
+            (r"^reports\s+", "report "),
+            (r"^(?:the|a|an)?\s*(?:robot|application|platform|system|solution|tool)\s+inspects\s+", "inspect "),
+            (r"^(?:the|a|an)?\s*(?:robot|application|platform|system|solution|tool)\s+monitors\s+", "monitor "),
+            (r"^(?:the|a|an)?\s*(?:robot|application|platform|system|solution|tool)\s+detects\s+", "detect "),
+            (r"^(?:the|a|an)?\s*(?:robot|application|platform|system|solution|tool)\s+sends\s+", "send "),
+            (r"^(?:the|a|an)?\s*(?:robot|application|platform|system|solution|tool)\s+reports\s+", "report "),
+            (r"^(?:the|a|an)?\s*(?:robot|application|platform|system|solution|tool)\s+allows\s+", ""),
+        )
+        action_verbs = (
+            r"^(inspecter|surveiller|détecter|transmettre|signaler|envoyer|alerter|classer|mesurer|enregistrer|suivre|gérer|réserver|publier|consulter|maintenir|diagnostiquer)\b"
+            if language != "en"
+            else r"^(inspect|monitor|detect|send|report|alert|classify|measure|record|track|manage|book|publish|review|maintain|diagnose)\b"
+        )
+        mappings = mappings_en if language == "en" else mappings_fr
+        result: List[str] = []
+        for clause in clauses:
+            clean = clause.strip(" .,:;-")
+            if len(clean) < 8 or len(clean.split()) > 22:
+                continue
+            lowered = clean.lower()
+            for pattern, replacement in mappings:
+                updated = re.sub(pattern, replacement, lowered, flags=re.IGNORECASE)
+                if updated != lowered:
+                    lowered = updated
+                    break
+            lowered = re.sub(r"^(?:et|and|puis|then)\s+", "", lowered).strip()
+            if not re.match(action_verbs, lowered, flags=re.IGNORECASE):
+                continue
+            if any(marker in lowered for marker in ("sera considéré", "considered successful", "modèle économique", "business model", "contraintes principales")):
+                continue
+            result.append(lowered)
+        return self._unique(result)[:6]
+
+    def _merge_actor_context(
+        self,
+        *,
+        archetype_context: Dict[str, Any],
+        target_users: List[str],
+        economic_buyer: str,
+        language: str,
+    ) -> Dict[str, Any]:
+        actors = dict(archetype_context.get("actors") or {})
+        archetype = str(archetype_context.get("project_archetype") or "")
+        primary = target_users[0] if target_users else actors.get("demand_side") or actors.get("primary_user") or ""
+        secondary = target_users[1:] if len(target_users) > 1 else []
+
+        actors["primary_user"] = primary
+        actors["target_users"] = target_users
+        actors["secondary_users"] = secondary
+        actors["payer"] = economic_buyer or actors.get("payer") or primary
+
+        if archetype == "two_sided_marketplace":
+            actors["demand_side"] = actors.get("demand_side") or primary
+            if not actors.get("supply_side") and secondary:
+                actors["supply_side"] = secondary[0]
+        elif archetype == "hardware_iot":
+            actors["demand_side"] = primary
+            actors["field_operator"] = primary
+            # Do not invent a supply-side role from another customer segment.
+            actors["supply_side"] = ""
+            actors.setdefault(
+                "technical_maintainer",
+                "Responsable technique ou mainteneur" if language != "en" else "Technical maintainer",
+            )
+        return actors
+
+    def _priority_workflows(
+        self,
+        *,
+        explicit_mvp: str,
+        mvp_scope: str,
+        solution: str,
+        use_case_terms: List[str],
+        language: str,
+        archetype_workflows: List[str] | None = None,
+    ) -> List[str]:
+        raw_items: List[str] = []
+        result: List[str] = []
+
+        candidate_archetype_workflows = list(archetype_workflows or [])
+        # Specific archetype workflows are authoritative. Generic placeholders
+        # are replaced by actions extracted from the user's own description.
+        if not self._workflows_are_generic(candidate_archetype_workflows):
+            for item in candidate_archetype_workflows:
+                workflow = self._clean_text(item).strip(" .,:;-")
+                if not workflow or workflow.casefold() in {value.casefold() for value in result}:
+                    continue
+                result.append(workflow)
+                if len(result) >= 6:
+                    break
+
+        if len(result) < 3:
+            for value in (explicit_mvp, mvp_scope):
+                raw_items.extend(self._split_items(value))
+        if not raw_items and not result:
+            raw_items.extend(use_case_terms)
+        if self._workflows_are_generic(candidate_archetype_workflows):
+            raw_items.extend(candidate_archetype_workflows)
+
+        for item in raw_items:
+            workflow = self._normalize_workflow_label(item, language)
+            if not workflow or workflow.casefold() in {value.casefold() for value in result}:
+                continue
+            result.append(workflow)
+            if len(result) >= 6:
+                break
+
+        if not result and solution:
+            fallback = self._normalize_workflow_label(solution, language)
+            if fallback:
+                result.append(fallback)
+        return result
+
+    def _normalize_workflow_label(self, value: Any, language: str) -> str:
+        clean = self._clean_text(value).strip(" .,:;-")
+        if not clean:
+            return ""
+        normalized = self._normalize_concept(clean)
+        meta_markers = {
+            "the first version would focus", "first version would focus", "focus only on",
+            "before developing", "needs to verify", "the idea is to", "la premiere version",
+            "la première version", "se concentrerait", "avant de developper", "avant de développer",
+        }
+        for marker in meta_markers:
+            normalized = normalized.replace(self._normalize_concept(marker), " ")
+        normalized = re.sub(r"\s+", " ", normalized).strip(" .,:;-")
+        if not normalized or len(normalized.split()) > 12:
+            return ""
+
+        en_rules = [
+            (("shift planning", "shift scheduling", "weekly schedules", "weekly schedule"), "create weekly shift schedules"),
+            (("attendance", "attendance tracking"), "record attendance"),
+            (("leave requests", "leave request", "time off requests"), "manage leave requests"),
+            (("payroll preparation", "payroll export", "monthly export"), "export monthly attendance data for payroll preparation"),
+            (("schedule changes", "shift changes"), "notify employees about schedule changes"),
+            (("hive inspections", "hive inspection"), "record hive inspections"),
+            (("treatments", "treatment history"), "track treatments"),
+            (("harvest batches", "harvest batch"), "track harvest batches"),
+            (("traceability sheets", "traceability document", "traceability pdf"), "export a traceability document"),
+            (("hive history",), "retrieve hive history"),
+        ]
+        fr_rules = [
+            (("planning des equipes", "planning des équipes", "planning des horaires", "horaires hebdomadaires"), "créer le planning hebdomadaire des équipes"),
+            (("presence", "présence", "suivi de presence", "suivi de présence"), "enregistrer les présences"),
+            (("demandes de conge", "demandes de congé"), "gérer les demandes de congé"),
+            (("export paie", "preparation de la paie", "préparation de la paie"), "exporter les données mensuelles pour la paie"),
+            (("changements de planning", "changements d horaires"), "notifier les changements de planning"),
+        ]
+        rules = en_rules if language == "en" else fr_rules
+        for needles, label in rules:
+            if any(needle in normalized for needle in needles):
+                return label
+
+        verbs_en = r"^(record|register|track|link|export|review|retrieve|manage|monitor|generate|create|notify|approve|request|confirm|schedule|plan)\b"
+        verbs_fr = r"^(enregistrer|suivre|relier|exporter|consulter|gérer|gerer|surveiller|générer|generer|créer|creer|notifier|approuver|demander|confirmer|planifier)\b"
+        if language == "en" and re.match(verbs_en, normalized):
+            return normalized
+        if language == "fr" and re.match(verbs_fr, normalized):
+            return normalized
+        return (f"manage {normalized}" if language == "en" else f"gérer {normalized}")
+
+    def _economic_buyer(
+        self,
+        *,
+        explicit_buyer: str,
+        target_users: List[str],
+        industry: str,
+        language: str,
+        archetype_context: Dict[str, Any] | None = None,
+    ) -> str:
+        if explicit_buyer and self._is_actor_phrase(explicit_buyer):
+            return self._clean_actor_phrase(explicit_buyer)
+        archetype_context = archetype_context or {}
+        payer = self._clean_text((archetype_context.get("actors") or {}).get("payer"))
+        if payer:
+            return payer
+        priority_markers = (
+            "manager", "director", "owner", "cooperative", "organisation",
+            "organization", "company", "responsable", "directeur",
+            "propriétaire", "proprietaire", "coopérative", "cooperative",
+        )
+        for target in target_users:
+            normalized = self._normalize_concept(target)
+            if any(marker in normalized for marker in priority_markers):
+                return self._clean_actor_phrase(target)
+        if len(target_users) > 1:
+            return self._clean_actor_phrase(target_users[1])
+        if target_users:
+            return self._clean_actor_phrase(target_users[0])
+        return (
+            f"Decision-maker in {industry}"
+            if language == "en"
+            else f"Décideur dans {industry}"
+        )
+
     def _build_value_proposition(
         self,
         *,
@@ -1944,18 +3268,22 @@ class ProjectIntelligenceLayer:
             return ""
 
         text = str(value)
-        text = text.replace("â€™", "'")
-        text = text.replace("Ã©", "é")
-        text = text.replace("Ã¨", "è")
-        text = text.replace("Ãª", "ê")
-        text = text.replace("Ã ", "à")
-        text = text.replace("Ã¢", "â")
-        text = text.replace("Ã®", "î")
-        text = text.replace("Ã´", "ô")
-        text = text.replace("Ã¹", "ù")
-        text = text.replace("Ã»", "û")
-        text = text.replace("Ã§", "ç")
-        text = text.replace("Â", "")
+        legacy_replacements = {
+            "\u00e2\u20ac\u2122": "'",
+            "\u00c3\u00a9": "é",
+            "\u00c3\u00a8": "è",
+            "\u00c3\u00aa": "ê",
+            "\u00c3\u00a0": "à",
+            "\u00c3\u00a2": "â",
+            "\u00c3\u00ae": "î",
+            "\u00c3\u00b4": "ô",
+            "\u00c3\u00b9": "ù",
+            "\u00c3\u00bb": "û",
+            "\u00c3\u00a7": "ç",
+            "\u00c2": "",
+        }
+        for legacy, repaired in legacy_replacements.items():
+            text = text.replace(legacy, repaired)
         text = re.sub(r"\s+", " ", text).strip()
 
         return text
