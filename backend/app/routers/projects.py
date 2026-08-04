@@ -48,6 +48,92 @@ def normalize_market_region(region: Optional[str]) -> str:
     return str(region).strip()
 
 
+ANALYSIS_CONTEXT_FIELDS = {
+    "title",
+    "description",
+    "industry",
+    "market_region",
+    "output_language",
+}
+
+
+def _normalize_context_value(
+    field_name: str,
+    value: Any,
+) -> Any:
+    """
+    Normalise les champs qui déterminent le contexte d'analyse.
+
+    Cette normalisation sert uniquement à comparer l'ancienne valeur
+    avec la nouvelle valeur afin d'éviter d'invalider un rapport lorsque
+    l'utilisateur enregistre exactement les mêmes informations.
+    """
+    if field_name == "market_region":
+        return normalize_market_region(value)
+
+    if field_name == "output_language":
+        return normalize_output_language(value or "fr")
+
+    if value is None:
+        return ""
+
+    if isinstance(value, str):
+        return value.strip()
+
+    return value
+
+
+def _analysis_context_has_changed(
+    project: Project,
+    update_data: dict[str, Any],
+) -> bool:
+    """
+    Retourne True lorsqu'un champ utilisé par les agents a réellement changé.
+
+    Un ancien rapport devient obsolète dès que le titre, la description,
+    le secteur, la région ou la langue de sortie change.
+    """
+    for field_name in ANALYSIS_CONTEXT_FIELDS:
+        if field_name not in update_data:
+            continue
+
+        current_value = _normalize_context_value(
+            field_name,
+            getattr(project, field_name, None),
+        )
+        next_value = _normalize_context_value(
+            field_name,
+            update_data.get(field_name),
+        )
+
+        if current_value != next_value:
+            return True
+
+    return False
+
+
+def _invalidate_analysis_after_context_change(
+    project: Project,
+) -> None:
+    """
+    Supprime tout résultat calculé avec l'ancien contexte.
+
+    Le projet reste disponible, mais l'utilisateur doit relancer l'analyse.
+    Cette invalidation empêche notamment l'ancienne région, les anciennes
+    sources et l'ancien verdict d'apparaître après une modification.
+    """
+    project.startup_score = None
+    project.analysis_status = "not_started"
+    project.analysis_step = "Projet modifié - relancez l’analyse"
+    project.analysis_progress = 0
+    project.analysis_data = None
+    project.analysis_error = None
+    project.analysis_started_at = None
+    project.analysis_completed_at = None
+    project.analysis_run_id = None
+    project.analysis_heartbeat_at = None
+
+
 def public_analysis_step(
     step: Optional[str],
     output_language: str = "fr",
@@ -1369,6 +1455,15 @@ async def update_project(
 ):
     project = await get_project_or_404(project_id, db, current_user)
 
+    if project.analysis_status in {"queued", "running"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Le projet ne peut pas être modifié pendant une analyse. "
+                "Attendez la fin du traitement avant d’enregistrer."
+            ),
+        )
+
     update_data = project_in.model_dump(exclude_unset=True)
 
     if "market_region" in update_data:
@@ -1381,14 +1476,23 @@ async def update_project(
             update_data["output_language"]
         )
 
+    analysis_context_changed = _analysis_context_has_changed(
+        project,
+        update_data,
+    )
+
     for field, value in update_data.items():
         setattr(project, field, value)
+
+    if analysis_context_changed:
+        _invalidate_analysis_after_context_change(
+            project
+        )
 
     await db.commit()
     await db.refresh(project)
 
     return project_to_public_response(project)
-
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project(

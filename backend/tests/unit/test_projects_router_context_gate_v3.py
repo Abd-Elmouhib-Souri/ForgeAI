@@ -236,3 +236,112 @@ def test_public_step_supports_clarification_status() -> None:
         )
         == "Project clarification required"
     )
+
+
+def _project_with_existing_analysis() -> SimpleNamespace:
+    return SimpleNamespace(
+        title="Student App",
+        description="Je veux créer une application pour les étudiants.",
+        industry="Éducation",
+        market_region="Tunisie",
+        output_language="fr",
+        startup_score=7.2,
+        analysis_status="needs_clarification",
+        analysis_step="Clarification du projet requise",
+        analysis_progress=10,
+        analysis_data={
+            "target_region": "Tunisie",
+            "idea_readiness": {
+                "ready_for_agents": False,
+            },
+        },
+        analysis_error="ancienne erreur",
+        analysis_started_at="old start",
+        analysis_completed_at="old completion",
+        analysis_run_id="old-run",
+        analysis_heartbeat_at="old heartbeat",
+    )
+
+
+def test_region_change_invalidates_stale_analysis() -> None:
+    project = _project_with_existing_analysis()
+
+    update_data = {
+        "market_region": "",
+    }
+
+    assert (
+        projects._analysis_context_has_changed(
+            project,
+            update_data,
+        )
+        is True
+    )
+
+    project.market_region = ""
+    projects._invalidate_analysis_after_context_change(
+        project
+    )
+
+    assert project.market_region == ""
+    assert project.startup_score is None
+    assert project.analysis_status == "not_started"
+    assert project.analysis_progress == 0
+    assert project.analysis_data is None
+    assert project.analysis_error is None
+    assert project.analysis_started_at is None
+    assert project.analysis_completed_at is None
+    assert project.analysis_run_id is None
+    assert project.analysis_heartbeat_at is None
+
+
+def test_unchanged_context_does_not_require_invalidation() -> None:
+    project = _project_with_existing_analysis()
+
+    update_data = {
+        "title": "Student App",
+        "description": (
+            "Je veux créer une application pour les étudiants."
+        ),
+        "industry": "Éducation",
+        "market_region": "  Tunisie  ",
+        "output_language": "fr",
+    }
+
+    assert (
+        projects._analysis_context_has_changed(
+            project,
+            update_data,
+        )
+        is False
+    )
+
+
+def test_description_change_invalidates_stale_analysis() -> None:
+    project = _project_with_existing_analysis()
+
+    assert (
+        projects._analysis_context_has_changed(
+            project,
+            {
+                "description": (
+                    "Une application aide les étudiants à organiser "
+                    "leurs devoirs et leurs examens."
+                )
+            },
+        )
+        is True
+    )
+
+
+def test_update_route_blocks_edits_during_running_analysis() -> None:
+    module_source = inspect.getsource(
+        projects.update_project
+    )
+
+    assert (
+        'project.analysis_status in {"queued", "running"}'
+        in module_source
+    )
+
+    assert "HTTP_409_CONFLICT" in module_source
