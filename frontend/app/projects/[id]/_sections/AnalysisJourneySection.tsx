@@ -303,20 +303,20 @@ export default function AnalysisJourneySection({
           <h2 className="mt-2 text-2xl font-black tracking-tight text-slate-950">
             {reportLanguage === "en"
               ? "Strategic project progress"
-              : "Progression stratÃ©gique du projet"}
+              : "Progression stratégique du projet"}
           </h2>
 
           <p className="mt-2 text-sm font-semibold leading-6 text-slate-500">
             {cleanText(project.title, reportLanguage)} {"\u2014"}{" "}
             {reportLanguage === "en"
               ? "ForgeAI turns the idea into a decision-ready report step by step."
-              : "ForgeAI transforme lâ€™idÃ©e en rapport dÃ©cisionnel Ã©tape par Ã©tape."}
+              : "ForgeAI transforme l’idée en rapport décisionnel étape par étape."}
           </p>
         </div>
 
         <div className="rounded-3xl bg-gradient-to-br from-sky-400 via-violet-500 to-rose-400 px-6 py-4 text-center text-white shadow-lg shadow-violet-200">
           <p className="text-xs font-black uppercase opacity-80">
-            {reportLanguage === "en" ? "Completion" : "ComplÃ©tion"}
+            {reportLanguage === "en" ? "Completion" : "Complétion"}
           </p>
           <p className="text-3xl font-black">{progress}%</p>
         </div>

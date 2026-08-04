@@ -1,3 +1,4 @@
+from app.services.evidence_ledger import evidence_ledger
 from copy import deepcopy
 from typing import Any, Dict, List, Optional
 
@@ -30,9 +31,9 @@ TECHNICAL_KEYS_TO_HIDE = {
     "search_query",
     "extraction_method",
     "text_extracted",
-    "pricing_found",
-    "confidence",
     "partial_completion",
+    "local_market_sources",
+    "local_market_candidates",
 
     # Internal context / guard packets - never public
     "startup_evaluator_meta",
@@ -67,6 +68,141 @@ SAFE_META_KEYS = {
     "llm_used",
     "format",
     "status",
+}
+
+
+# Public source sections are already validated by ForgeCrawler,
+# SourceRelevanceGate and CompetitiveAnalysisAgent. The global public
+# sanitizer may clean their shape, but must not delete or reclassify them.
+PUBLIC_SOURCE_SECTION_FIELDS = {
+    "forgecrawler": {
+        "format",
+        "status",
+        "confidence_level",
+        "context_locked",
+        "output_language",
+        "public_display_threshold",
+        "sources_count",
+        "local_competitors_count",
+        "regional_competitors_count",
+        "international_benchmarks_count",
+        "market_sources_count",
+        "sources",
+        "public_sources",
+        "local_competitor_sources",
+        "regional_competitor_sources",
+        "international_benchmark_sources",
+        "market_context_sources",
+        "source_quality",
+        "no_verified_relevant_source_found",
+        "no_source_message",
+        "limitations",
+    },
+    "competitive_analysis": {
+        "format",
+        "status",
+        "source_based",
+        "context_locked",
+        "output_language",
+        "confidence_level",
+        "sources_count",
+        "local_competitors_count",
+        "regional_competitors_count",
+        "international_benchmarks_count",
+        "market_sources_count",
+        "sources",
+        "public_sources",
+        "local_competitor_sources",
+        "regional_competitor_sources",
+        "international_benchmark_sources",
+        "market_context_sources",
+        "local_direct_competitors",
+        "local_adjacent_solutions",
+        "regional_competitors",
+        "international_benchmarks",
+        "verified_competitors",
+        "local_competitors",
+        "market_sources",
+        "external_sources",
+        "no_verified_relevant_source_found",
+        "no_source_message",
+        "source_quality",
+        "limitations",
+    },
+}
+
+
+PUBLIC_CONTEXT_GATE_SECTION_FIELDS = {
+    "idea_readiness": {
+        "format",
+        "canonical_format",
+        "schema_version",
+        "status",
+        "score",
+        "ready_for_agents",
+        "threshold",
+        "missing_fields",
+        "ambiguous_fields",
+        "blockers",
+        "questions",
+        "clarification_questions",
+        "recommendation",
+        "reasons",
+        "output_language",
+        "checklist",
+    },
+    "context_confidence": {
+        "score",
+        "status",
+        "missing_fields",
+        "ambiguous_fields",
+        "blockers",
+        "clarification_questions",
+        "reasons",
+        "ready_for_agents",
+    },
+}
+
+
+MOJIBAKE_TEXT_REPLACEMENTS = {
+    "â€™": "’",
+    "â€˜": "‘",
+    "â€œ": "“",
+    "â€": "”",
+    "â€”": "—",
+    "â€“": "–",
+    "â€¦": "…",
+    "Ã€": "À",
+    "Ã‚": "Â",
+    "Ã‡": "Ç",
+    "Ãˆ": "È",
+    "Ã‰": "É",
+    "ÃŠ": "Ê",
+    "Ã‹": "Ë",
+    "ÃŽ": "Î",
+    "ÃÏ": "Ï",
+    "Ã”": "Ô",
+    "Ã™": "Ù",
+    "Ã›": "Û",
+    "Ãœ": "Ü",
+    "Ã ": "à",
+    "Ã¢": "â",
+    "Ã¤": "ä",
+    "Ã§": "ç",
+    "Ã¨": "è",
+    "Ã©": "é",
+    "Ãª": "ê",
+    "Ã«": "ë",
+    "Ã®": "î",
+    "Ã¯": "ï",
+    "Ã´": "ô",
+    "Ã¶": "ö",
+    "Ã¹": "ù",
+    "Ã»": "û",
+    "Ã¼": "ü",
+    "Å“": "œ",
+    "Å’": "Œ",
+    "Â ": " ",
 }
 
 
@@ -176,11 +312,27 @@ def sanitize_analysis_data_for_public(
     context = project_context or {}
     language = _language(data, context)
 
-    data = _sanitize_recursive(data, context)
     data = _ensure_proposed_solution(data, context)
+    data = _sanitize_recursive(data, context)
     data = _sanitize_external_sources(data, raw_data, context)
     data = _sanitize_competitive_analysis(data, context)
+
+    # Preserve validated public source structures before the global
+    # DomainIntegrityGuard pass. This prevents an unrelated text
+    # contamination rule from silently turning retained sources into zero.
+    public_source_snapshot = _snapshot_public_source_sections(data)
+    public_context_gate_snapshot = _snapshot_public_context_gate_sections(data)
+
     data = _sanitize_debate_room(data, context)
+    # DebateRoomGraph emits a deterministic, typed public contract. Preserve it
+    # across the broad DomainIntegrityGuard pass so role IDs, fixed questions,
+    # round titles and evidence-status labels are not rewritten as generic text.
+    debate_room_snapshot = deepcopy(data.get("debate_room")) if isinstance(data.get("debate_room"), dict) else None
+    # PersonaBuilderAgent emits a deterministic typed contract. Preserve the
+    # already-clean public persona object across the global DomainIntegrityGuard;
+    # otherwise generic but required fields such as buying power, adoption
+    # triggers and interview questions can be blanked independently.
+    persona_builder_snapshot = deepcopy(data.get("persona_builder")) if isinstance(data.get("persona_builder"), dict) else None
     data = _sanitize_public_limitations(data, context)
     data = _final_language_pass(data, language)
 
@@ -203,6 +355,20 @@ def sanitize_analysis_data_for_public(
     data = _restore_safe_public_formats(data, raw_data)
     data = _sanitize_recursive(data, context)
     data = _final_language_pass(data, language)
+    data = _restore_public_source_sections(
+        data,
+        public_source_snapshot,
+    )
+    data = evidence_ledger.sanitize_public_claims(data)
+    data = _restore_public_context_gate_sections(
+        data,
+        public_context_gate_snapshot,
+        context,
+    )
+    if isinstance(debate_room_snapshot, dict):
+        data["debate_room"] = debate_room_snapshot
+    if isinstance(persona_builder_snapshot, dict):
+        data["persona_builder"] = persona_builder_snapshot
 
     return data
 
@@ -276,7 +442,7 @@ def _sanitize_recursive(value: Any, project_context: Dict[str, Any]) -> Any:
 
 def _clean_public_text(text: str, project_context: Dict[str, Any]) -> str:
     language = _language(project_context=project_context)
-    cleaned = str(text or "")
+    cleaned = _repair_mojibake_text(str(text or ""))
 
     technical_replacements = (
         TECHNICAL_WORD_REPLACEMENTS_EN
@@ -335,58 +501,65 @@ def _ensure_proposed_solution(
     data: Dict[str, Any],
     project_context: Dict[str, Any],
 ) -> Dict[str, Any]:
-    proposed_solution = data.get("proposed_solution")
-
-    if isinstance(proposed_solution, str) and proposed_solution.strip():
-        return data
-
     language = _language(data, project_context)
 
-    title_fallback = "The project" if language == "en" else "Le projet"
-
-    title = str(project_context.get("title") or data.get("title") or title_fallback)
-    description = str(
-        project_context.get("description")
-        or data.get("summary")
-        or data.get("problem")
-        or ""
-    )
-    industry = str(
-        project_context.get("industry")
-        or data.get("detected_sector")
-        or ""
-    )
-    region = str(
-        project_context.get("market_region")
-        or project_context.get("region")
-        or data.get("target_region")
-        or ""
+    intelligence = data.get("project_intelligence") or {}
+    structured = (
+        data.get("structured_project_context")
+        or intelligence.get("structured_project_context")
+        or project_context.get("structured_project_context")
+        or project_context.get("project_intelligence", {}).get("structured_project_context")
+        or {}
     )
 
-    if language == "en":
-        data["proposed_solution"] = (
-            f"{title} should be reduced to a clear MVP directly based on the user's "
-            f"project description: {description[:300]}. "
-            f"The first version must match the target sector"
-            f"{' (' + industry + ')' if industry else ''}"
-            f"{' and target region ' + region if region else ''}. "
-            "No sector-specific feature should be added unless it is explicitly present "
-            "in the project input or verified sources."
-        )
+    explicit_solution = str(
+        structured.get("solution")
+        or project_context.get("solution")
+        or project_context.get("solution_type")
+        or ""
+    ).strip()
+    mvp_scope = str(
+        structured.get("mvp_scope")
+        or project_context.get("mvp_scope")
+        or ""
+    ).strip()
+
+    # The structured solution is authoritative. It prevents the original long
+    # description (problem + solution + business model) from leaking into the
+    # public solution section.
+    if explicit_solution:
+        solution = explicit_solution
+        if mvp_scope and mvp_scope.lower() not in solution.lower():
+            if language == "en":
+                solution = f"{solution} The first MVP is limited to: {mvp_scope}."
+            else:
+                solution = f"{solution} Le premier MVP est limité à : {mvp_scope}."
+        data["proposed_solution"] = solution
         return data
 
-    data["proposed_solution"] = (
-        f"{title} doit être réduit à un MVP clair directement basé sur la description "
-        f"du projet utilisateur : {description[:300]}. "
-        f"La première version doit rester alignée avec le secteur ciblé"
-        f"{' (' + industry + ')' if industry else ''}"
-        f"{' et la région ' + region if region else ''}. "
-        "Aucune fonctionnalité métier spécifique ne doit être ajoutée si elle n’apparaît "
-        "pas dans l’input du projet ou dans des sources vérifiées."
-    )
+    current = str(data.get("proposed_solution") or "").strip()
+    if current:
+        # Keep a short existing solution only when it is not obviously the full
+        # project description containing both labelled problem and solution.
+        lowered = current.lower()
+        contaminated = (
+            len(current) > 700
+            or ("the problem is" in lowered and "the solution is" in lowered)
+            or ("le problème" in lowered and "la solution" in lowered)
+        )
+        if not contaminated:
+            return data
 
+    title = str(project_context.get("title") or data.get("title") or "Project").strip()
+    if language == "en":
+        data["proposed_solution"] = (
+            f"{title} must be defined as a focused MVP based only on the explicit solution and core use cases supplied by the project owner."
+        )
+    else:
+        data["proposed_solution"] = (
+            f"{title} doit être défini comme un MVP ciblé fondé uniquement sur la solution et les cas d’usage explicitement fournis par le porteur du projet."
+        )
     return data
-
 
 def _sanitize_external_sources(
     data: Dict[str, Any],
@@ -401,10 +574,9 @@ def _sanitize_external_sources(
 
     raw_status = raw_forgecrawler.get("status") or forgecrawler.get("status")
     raw_errors_count = _count_hidden_errors(raw_forgecrawler)
-    guard_context = _build_guard_context_from_public_context(data, project_context)
-
     for group_key in [
         "sources",
+        "public_sources",
         "local_competitor_sources",
         "regional_competitor_sources",
         "international_benchmark_sources",
@@ -412,20 +584,25 @@ def _sanitize_external_sources(
     ]:
         group = forgecrawler.get(group_key)
 
-        if isinstance(group, list):
-            cleaned_group = [
-                _sanitize_public_source(item, project_context) for item in group
-            ]
+        if not isinstance(group, list):
+            continue
 
-            cleaned_group = [
-                item for item in cleaned_group if isinstance(item, dict)
-            ]
+        cleaned_group = [
+            _sanitize_public_source(item, project_context)
+            for item in group
+        ]
 
-            forgecrawler[group_key] = domain_integrity_guard.filter_sources(
-                sources=cleaned_group,
-                project_context=guard_context,
-                min_overlap=1,
+        cleaned_group = [
+            item
+            for item in cleaned_group
+            if isinstance(item, dict)
+            and (
+                str(item.get("title") or "").strip()
+                or str(item.get("url") or "").strip()
             )
+        ]
+
+        forgecrawler[group_key] = _deduplicate_public_sources(cleaned_group)
 
     sources = forgecrawler.get("sources") or []
     local_sources = forgecrawler.get("local_competitor_sources") or []
@@ -496,6 +673,32 @@ def _sanitize_external_sources(
     return data
 
 
+def _deduplicate_public_sources(
+    sources: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    result: List[Dict[str, Any]] = []
+    seen = set()
+
+    for source in sources:
+        source_type = str(source.get("source_type") or "").strip().lower()
+        vendor_key = str(source.get("vendor_key") or "").strip().lower()
+        if source_type in {"competitor", "pricing_page", "adjacent_solution"} and vendor_key:
+            key = vendor_key
+        else:
+            key = (
+                str(source.get("url") or "").strip().lower()
+                or str(source.get("title") or "").strip().lower()
+            )
+
+        if not key or key in seen:
+            continue
+
+        seen.add(key)
+        result.append(source)
+
+    return result
+
+
 def _sanitize_public_source(
     source: Any,
     project_context: Dict[str, Any],
@@ -514,6 +717,21 @@ def _sanitize_public_source(
         "region_match",
         "is_direct_competitor",
         "why_relevant",
+        "confidence",
+        "pricing_found",
+        "source_relevance_score",
+        "public_display",
+        "same_or_close_target_user",
+        "same_or_close_use_case",
+        "same_or_close_solution_category",
+        "matched_strong_terms",
+        "vendor_key",
+        "vendor_name",
+        "canonical_vendor_domain",
+        "sector_mismatch",
+        "mismatch_terms",
+        "search_provider",
+        "provider_score",
     }
 
     cleaned = {
@@ -563,8 +781,6 @@ def _sanitize_competitive_analysis(
     if not isinstance(competitive, dict):
         return data
 
-    guard_context = _build_guard_context_from_public_context(data, project_context)
-
     for group_key in [
         "local_direct_competitors",
         "local_adjacent_solutions",
@@ -583,21 +799,9 @@ def _sanitize_competitive_analysis(
                 item for item in cleaned_group if isinstance(item, dict)
             ]
 
-            if group_key != "market_context_sources":
-                source_like_items = [
-                    _competitor_to_source_like(item)
-                    for item in cleaned_group
-                ]
-
-                filtered_items = domain_integrity_guard.filter_sources(
-                    sources=source_like_items,
-                    project_context=guard_context,
-                    min_overlap=1,
-                )
-
-                competitive[group_key] = filtered_items
-            else:
-                competitive[group_key] = cleaned_group
+            # Business relevance has already been decided upstream.
+            # The public sanitizer only cleans the payload shape and text.
+            competitive[group_key] = _deduplicate_competitive_items(cleaned_group)
 
     if competitive.get("confidence_level") == "high":
         sources_count = competitive.get("sources_count") or 0
@@ -616,6 +820,27 @@ def _sanitize_competitive_analysis(
     data["competitive_analysis"] = competitive
 
     return data
+
+
+def _deduplicate_competitive_items(
+    items: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    result: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in items:
+        vendor_key = str(item.get("vendor_key") or "").strip().lower()
+        key = vendor_key or str(
+            item.get("source_url")
+            or item.get("url")
+            or item.get("name")
+            or item.get("title")
+            or ""
+        ).strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
 
 
 def _competitor_to_source_like(item: Dict[str, Any]) -> Dict[str, Any]:
@@ -801,6 +1026,112 @@ def _final_language_pass(value: Any, language: str) -> Any:
         return _clean_public_text(value, context)
 
     return value
+
+
+def _repair_mojibake_text(value: str) -> str:
+    """
+    Répare les séquences UTF-8 courantes affichées comme du texte mojibake.
+
+    Cette fonction est volontairement déterministe et limitée à des séquences
+    connues. Elle ne transforme pas arbitrairement le contenu métier.
+    """
+    repaired = str(value or "")
+
+    for broken, correct in MOJIBAKE_TEXT_REPLACEMENTS.items():
+        repaired = repaired.replace(broken, correct)
+
+    return repaired
+
+
+def _snapshot_public_context_gate_sections(
+    data: Dict[str, Any],
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Capture uniquement les champs publics du gate de contexte.
+
+    Le DomainIntegrityGuard reste libre de nettoyer le reste du rapport,
+    mais ne doit jamais supprimer les questions nécessaires à l'utilisateur
+    pour compléter son projet.
+    """
+    snapshot: Dict[str, Dict[str, Any]] = {}
+
+    for section_name, allowed_fields in (
+        PUBLIC_CONTEXT_GATE_SECTION_FIELDS.items()
+    ):
+        section = data.get(section_name)
+
+        if not isinstance(section, dict):
+            continue
+
+        snapshot[section_name] = {
+            key: deepcopy(section[key])
+            for key in allowed_fields
+            if key in section
+        }
+
+    return snapshot
+
+
+def _restore_public_context_gate_sections(
+    data: Dict[str, Any],
+    snapshot: Dict[str, Dict[str, Any]],
+    project_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Restaure le contrat public du gate après les sanitizers génériques.
+
+    Les textes restent nettoyés, mais les listes de questions, champs manquants,
+    ambiguïtés et blocages conservent leur contenu et leur ordre.
+    """
+    restored = dict(data)
+
+    for section_name, fields in snapshot.items():
+        current_section = dict(restored.get(section_name) or {})
+        safe_fields = _sanitize_recursive(
+            deepcopy(fields),
+            project_context,
+        )
+
+        if isinstance(safe_fields, dict):
+            current_section.update(safe_fields)
+
+        restored[section_name] = current_section
+
+    return restored
+
+
+def _snapshot_public_source_sections(
+    data: Dict[str, Any],
+) -> Dict[str, Dict[str, Any]]:
+    snapshot: Dict[str, Dict[str, Any]] = {}
+
+    for section_name, allowed_fields in PUBLIC_SOURCE_SECTION_FIELDS.items():
+        section = data.get(section_name)
+
+        if not isinstance(section, dict):
+            continue
+
+        snapshot[section_name] = {
+            key: deepcopy(section[key])
+            for key in allowed_fields
+            if key in section
+        }
+
+    return snapshot
+
+
+def _restore_public_source_sections(
+    data: Dict[str, Any],
+    snapshot: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    restored = dict(data)
+
+    for section_name, fields in snapshot.items():
+        current_section = dict(restored.get(section_name) or {})
+        current_section.update(deepcopy(fields))
+        restored[section_name] = current_section
+
+    return restored
 
 
 def _restore_safe_public_formats(
