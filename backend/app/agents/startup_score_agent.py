@@ -1,4 +1,4 @@
-﻿# ============================================================
+# ============================================================
 # backend/app/agents/startup_score_agent.py
 # ============================================================
 #
@@ -114,7 +114,7 @@ class StartupScoreAgent:
         bmc = self._section(analysis_data, "business_model_canvas")
         financial = self._section(analysis_data, "financial_estimation")
         competitive = self._section(analysis_data, "competitive_analysis")
-        fact_checker = self._section(analysis_data, "fact_checker")
+        fact_checker = self._section(analysis_data, "fact_check_report")
 
         market_quality = self._section_quality(market_study)
         swot_quality = self._section_quality(swot)
@@ -321,7 +321,65 @@ class StartupScoreAgent:
                 else "Potentiellement prêt pour un financement pilote initial, si l’équipe montre des preuves terrain et d’usage."
             )
 
+        evidence_conf = analysis_data.get("evidence_confidence") or {}
+        overall_evidence = str(
+            evidence_conf.get("overall_evidence_confidence") or "low"
+        ).lower()
+        evidence_score = {"high": 8.5, "medium": 5.5, "low": 3.0}.get(
+            overall_evidence, 3.0
+        )
+        execution_readiness = self._round_half(self._score(
+            0.50 * breakdown["execution_feasibility"]
+            + 0.25 * breakdown["business_model_strength"]
+            + 0.25 * evidence_score
+        ))
+        potential_score = score
+        decision_score = self._round_half(self._score(
+            0.55 * potential_score
+            + 0.25 * evidence_score
+            + 0.20 * execution_readiness
+        ))
+
+        # Public confidence and risk are evidence-aware. Context clarity cannot
+        # be presented as source confidence.
+        confidence_level = overall_evidence
+        if overall_evidence == "low":
+            risk_level = "high"
+        elif overall_evidence == "medium":
+            risk_level = "medium"
+        else:
+            risk_level = "low" if potential_score >= 7.5 else "medium"
+
+        if output_language == "en":
+            verdict = (
+                "GO for a focused MVP pilot — scaling remains conditional on measured results."
+                if overall_evidence == "high" and execution_readiness >= 7.0
+                else "Conditional GO — validate evidence and field adoption before development."
+            )
+            summary = (
+                f"{title} has a potential score of {potential_score}/10, an evidence confidence score of {evidence_score}/10 "
+                f"and an execution readiness score of {execution_readiness}/10. The idea may justify a focused pilot, "
+                "but it is not externally validated until market, customer and financial evidence is strengthened."
+            )
+        else:
+            verdict = (
+                "GO pour un pilote MVP ciblé — le passage à l’échelle dépend de résultats mesurés."
+                if overall_evidence == "high" and execution_readiness >= 7.0
+                else "GO conditionnel — valider les preuves et l’adoption terrain avant le développement."
+            )
+            summary = (
+                f"{title} obtient un score de potentiel de {potential_score}/10, un score de confiance des preuves de {evidence_score}/10 "
+                f"et un score de préparation à l’exécution de {execution_readiness}/10. L’idée peut justifier un pilote ciblé, "
+                "mais elle n’est pas validée tant que les preuves marché, client et financières restent insuffisantes."
+            )
+
         return {
+            "potential_score": potential_score,
+            "evidence_confidence_score": evidence_score,
+            "execution_readiness_score": execution_readiness,
+            "decision_score": decision_score,
+            "evidence_confidence_level": overall_evidence,
+            "overall_evidence_confidence": overall_evidence,
             "format": "startup_score_v5_context_locked_deterministic",
             "status": "completed",
 
@@ -335,6 +393,14 @@ class StartupScoreAgent:
             "summary": summary,
             "score_explanation": score_explanation,
             "verdict": verdict,
+            "verdict_code": (
+                "GO" if overall_evidence == "high" and execution_readiness >= 7.0
+                else "CONDITIONAL_GO"
+            ),
+            "canonical_verdict_code": (
+                "go" if overall_evidence == "high" and execution_readiness >= 7.0
+                else "conditional_go"
+            ),
             "risk_level": risk_level,
             "confidence_level": confidence_level,
             "investment_readiness": investment_readiness,
@@ -358,7 +424,11 @@ class StartupScoreAgent:
             "recommendations": recommendations,
             "next_actions": next_actions,
 
-            "go_no_go": self._go_no_go(score, output_language),
+            "go_no_go": self._evidence_aware_go_no_go(
+                potential_score,
+                overall_evidence,
+                output_language,
+            ),
             "manual_review_required": True,
             "fallback_used": False,
             "error_handled": False,
@@ -425,6 +495,20 @@ class StartupScoreAgent:
             return "GO CONDITIONNEL : valider d’abord le problème et la volonté de payer."
         return "NO-GO développement tant que le problème, la cible et la valeur ne sont pas clarifiés."
 
+    def _evidence_aware_go_no_go(
+        self,
+        potential_score: float,
+        evidence_level: str,
+        lang: str,
+    ) -> str:
+        if evidence_level == "low":
+            return (
+                "CONDITIONAL GO: interviews and category-compatible evidence are required before development."
+                if lang == "en"
+                else "GO CONDITIONNEL : des entretiens et des preuves compatibles sont requis avant le développement."
+            )
+        return self._go_no_go(potential_score, lang)
+
     def _risk_level(self, score: float) -> str:
         if score >= 8:
             return "low"
@@ -451,34 +535,61 @@ class StartupScoreAgent:
         title = context["title"]
         target_users = context["target_users"]
         region = context["region"]
+        archetype = self._normalize(context.get("project_archetype"))
+
+        if archetype == "two_sided_marketplace":
+            if output_language == "en":
+                items = [
+                    f"{title} identifies distinct demand, supply and platform-operation roles around {target_users}.",
+                    f"The transaction can be tested within one bounded MVP scope in {region} before expansion.",
+                    "Value can be measured through match rate, time to fulfilment, completion, cancellation and repeat use.",
+                ]
+                if breakdown["business_model_strength"] >= 7:
+                    items.append("The business model can be tested directly through a fee or commission per completed transaction.")
+                return self._unique(items)
+            items = [
+                f"{title} identifie des rôles distincts de demande, d’offre et d’opération autour de {target_users}.",
+                f"La transaction peut être testée dans un périmètre MVP limité en {region} avant toute expansion.",
+                "La valeur peut être mesurée par le taux de mise en relation, le délai, la réalisation, les annulations et la réutilisation.",
+            ]
+            if breakdown["business_model_strength"] >= 7:
+                items.append("Le modèle économique peut être testé directement par un frais ou une commission sur chaque transaction réalisée.")
+            return self._unique(items)
+
+        if archetype == "hardware_iot":
+            if output_language == "en":
+                return self._unique([
+                    f"{title} can be validated through a bounded field deployment in {region}.",
+                    "The first proof can use measurable task success, accuracy, uptime and recovery criteria.",
+                    "A bill of materials and deployment-cost model can be tested before scaling production.",
+                ])
+            return self._unique([
+                f"{title} peut être validé par un déploiement terrain limité en {region}.",
+                "La première preuve peut utiliser des critères mesurables de réussite, précision, disponibilité et reprise.",
+                "La nomenclature matérielle et le coût déployé peuvent être testés avant toute montée en production.",
+            ])
 
         if output_language == "en":
             items = [
                 f"{title} has a clear first target around {target_users}.",
                 f"The project can be tested in {region} with a narrow MVP before scaling.",
-                "The concept is suitable for pilot validation because the core workflow can be reduced.",
+                "The concept is suitable for validation because the core outcome can be reduced and measured.",
             ]
-
             if breakdown["problem_solution_fit"] >= 7:
                 items.append("The problem-solution fit appears promising if interviews confirm repeated pain.")
-
             if breakdown["business_model_strength"] >= 7:
-                items.append("The business model has a credible starting path through pilots or subscriptions.")
-
+                items.append("The business model has a credible first monetization path to test.")
             return self._unique(items)
 
         items = [
             f"{title} possède une première cible claire autour de {target_users}.",
             f"Le projet peut être testé en {region} avec un MVP réduit avant le passage à l’échelle.",
-            "Le concept est adapté à une validation pilote car le flux principal peut être réduit.",
+            "Le concept est adapté à une validation car le résultat principal peut être réduit et mesuré.",
         ]
-
         if breakdown["problem_solution_fit"] >= 7:
             items.append("L’adéquation problème-solution semble prometteuse si les entretiens confirment une douleur répétée.")
-
         if breakdown["business_model_strength"] >= 7:
-            items.append("Le modèle économique possède une trajectoire crédible via pilotes ou abonnements.")
-
+            items.append("Le modèle économique possède une première trajectoire de monétisation crédible à tester.")
         return self._unique(items)
 
     def _weaknesses(
@@ -488,19 +599,49 @@ class StartupScoreAgent:
         breakdown: Dict[str, float],
         output_language: str,
     ) -> List[str]:
+        archetype = self._normalize(context.get("project_archetype"))
+        if archetype == "two_sided_marketplace":
+            if output_language == "en":
+                items = [
+                    "Demand and supply must be active under compatible transaction conditions.",
+                    "Safety, trust, cancellations and local operating constraints can block repeated use.",
+                    "Incentives may create apparent growth while contribution per completed transaction remains negative.",
+                ]
+                if breakdown["competitive_advantage"] < 7:
+                    items.append("The local advantage over incumbent platforms and direct offline alternatives is not yet proven.")
+                return self._unique(items)
+            items = [
+                "La demande et l’offre doivent être actives dans des conditions transactionnelles compatibles.",
+                "La sécurité, la confiance, les annulations et les contraintes locales peuvent bloquer la réutilisation.",
+                "Les incitations peuvent créer une croissance apparente alors que la contribution par transaction reste négative.",
+            ]
+            if breakdown["competitive_advantage"] < 7:
+                items.append("L’avantage local face aux plateformes établies et aux alternatives directes hors ligne n’est pas encore prouvé.")
+            return self._unique(items)
+
+        if archetype == "hardware_iot":
+            if output_language == "en":
+                return self._unique([
+                    "A working prototype does not yet prove field reliability or deployed cost.",
+                    "Maintenance, integration and recovery may dominate the operating burden.",
+                    "Supplier availability and certification can delay execution.",
+                ])
+            return self._unique([
+                "Un prototype fonctionnel ne prouve pas encore la fiabilité terrain ni le coût déployé.",
+                "La maintenance, l’intégration et la reprise peuvent dominer la charge opérationnelle.",
+                "La disponibilité des fournisseurs et la certification peuvent retarder l’exécution.",
+            ])
+
         if output_language == "en":
             items = [
-                "The willingness to pay still needs direct validation.",
+                "Willingness to pay still needs direct validation.",
                 "The first segment may still be too broad and should be narrowed.",
                 "The project should avoid adding advanced features before proving repeated use.",
             ]
-
             if breakdown["competitive_advantage"] < 7:
                 items.append("The competitive advantage must be strengthened with clearer differentiation.")
-
             if breakdown["financial_viability"] < 7:
-                items.append("Financial assumptions need pilot data before they can be trusted.")
-
+                items.append("Financial assumptions need observed data before they can be trusted.")
             return self._unique(items)
 
         items = [
@@ -508,13 +649,10 @@ class StartupScoreAgent:
             "Le premier segment peut encore être trop large et doit être réduit.",
             "Le projet doit éviter d’ajouter des fonctionnalités avancées avant de prouver l’usage répété.",
         ]
-
         if breakdown["competitive_advantage"] < 7:
             items.append("L’avantage concurrentiel doit être renforcé par une différenciation plus claire.")
-
         if breakdown["financial_viability"] < 7:
-            items.append("Les hypothèses financières doivent être validées par des données de pilote.")
-
+            items.append("Les hypothèses financières doivent être validées par des données observées.")
         return self._unique(items)
 
     def _recommendations(
@@ -524,26 +662,56 @@ class StartupScoreAgent:
         breakdown: Dict[str, float],
         output_language: str,
     ) -> List[str]:
-        if output_language == "en":
-            return self._unique(
-                [
-                    "Run 10 to 20 interviews with the first target users.",
-                    "Reduce the MVP to one core workflow and one measurable promise.",
-                    "Test willingness to pay before building advanced features.",
-                    "Use pilot usage data to refine pricing, onboarding and positioning.",
-                    "Compare the product against the real alternatives currently used by the target users.",
-                ]
-            )
+        archetype = self._normalize(context.get("project_archetype"))
+        if archetype == "two_sided_marketplace":
+            if output_language == "en":
+                return self._unique([
+                    "Launch the first test with one transaction type, one priority demand segment and one priority supply segment.",
+                    "Recruit demand-side users and supply-side providers before measuring liquidity.",
+                    "Track match rate, median fulfilment time, completion, cancellations and repeat use.",
+                    "Test a concrete transaction fee or commission and calculate contribution per completed transaction.",
+                    "Validate safety, incident handling and local operating constraints before expanding coverage.",
+                ])
+            return self._unique([
+                "Lancer le premier test avec un type de transaction, un segment prioritaire côté demande et un segment prioritaire côté offre.",
+                "Recruter simultanément les utilisateurs côté demande et les prestataires côté offre avant de mesurer la liquidité.",
+                "Suivre le taux de mise en relation, le délai médian, la réalisation, les annulations et la réutilisation.",
+                "Tester un frais de service ou une commission concrète et calculer la marge contributive par transaction réalisée.",
+                "Valider la sécurité, la gestion des incidents et les contraintes opérationnelles locales avant d’élargir la couverture.",
+            ])
 
-        return self._unique(
-            [
-                "Faire 10 à 20 entretiens avec les premiers utilisateurs ciblés.",
-                "Réduire le MVP à un flux principal et une promesse mesurable.",
-                "Tester la volonté de payer avant de construire les fonctionnalités avancées.",
-                "Utiliser les données d’usage pilote pour améliorer le prix, l’onboarding et le positionnement.",
-                "Comparer le produit aux alternatives réellement utilisées par les utilisateurs ciblés.",
-            ]
-        )
+        if archetype == "hardware_iot":
+            if output_language == "en":
+                return self._unique([
+                    "Run field trials against explicit task-success, accuracy, uptime and recovery thresholds.",
+                    "Validate the bill of materials, supplier lead time and deployed unit cost.",
+                    "Assign ownership for maintenance, calibration, incidents and safe rollback.",
+                    "Measure performance in the real network, power and environmental conditions.",
+                    "Delay production scaling until reliability and service burden are observed.",
+                ])
+            return self._unique([
+                "Réaliser des essais terrain avec des seuils explicites de réussite, précision, disponibilité et reprise.",
+                "Valider la nomenclature, les délais fournisseurs et le coût unitaire déployé.",
+                "Attribuer la maintenance, l’étalonnage, les incidents et le retour arrière sûr.",
+                "Mesurer les performances dans les vraies conditions de réseau, alimentation et environnement.",
+                "Reporter la montée en production jusqu’à observation de la fiabilité et de la charge de service.",
+            ])
+
+        if output_language == "en":
+            return self._unique([
+                "Run interviews with the first target users and record current behaviour.",
+                "Reduce the MVP to one complete outcome and one measurable promise.",
+                "Test a concrete willingness-to-pay offer before advanced features.",
+                "Use observed usage data to refine pricing, adoption and positioning.",
+                "Compare the product against the strongest alternative used today.",
+            ])
+        return self._unique([
+            "Mener des entretiens avec les premiers utilisateurs et documenter le comportement actuel.",
+            "Réduire le MVP à un résultat complet et une promesse mesurable.",
+            "Tester une offre de paiement concrète avant les fonctionnalités avancées.",
+            "Utiliser les données d’usage observées pour améliorer le prix, l’adoption et le positionnement.",
+            "Comparer le produit à l’alternative la plus forte réellement utilisée aujourd’hui.",
+        ])
 
     def _next_actions(
         self,
@@ -552,26 +720,56 @@ class StartupScoreAgent:
         score: float,
         output_language: str,
     ) -> List[str]:
-        if output_language == "en":
-            return self._unique(
-                [
-                    "Define the smallest useful MVP screen flow.",
-                    "Prepare a user interview script.",
-                    "Recruit pilot users from the first target segment.",
-                    "Track activation, weekly usage and willingness to pay.",
-                    "Update the score after pilot evidence is collected.",
-                ]
-            )
+        archetype = self._normalize(context.get("project_archetype"))
+        if archetype == "two_sided_marketplace":
+            if output_language == "en":
+                return self._unique([
+                    "Define the first transaction scope, participant criteria and operating rules.",
+                    "Recruit an initial cohort on both sides of the marketplace.",
+                    "Instrument match, acceptance, completion, cancellation, repeat-use and incident events.",
+                    "Test the transaction fee and compute contribution margin per completed transaction.",
+                    "Review GO, PIVOT or NO-GO thresholds after the bounded field test.",
+                ])
+            return self._unique([
+                "Définir le premier périmètre transactionnel, les critères des participants et les règles opérationnelles.",
+                "Recruter une première cohorte des deux côtés de la marketplace.",
+                "Instrumenter mise en relation, acceptation, réalisation, annulation, réutilisation et incidents.",
+                "Tester le frais par transaction et calculer la marge contributive par transaction réalisée.",
+                "Revoir les seuils GO, PIVOT ou NO-GO après le test terrain limité.",
+            ])
 
-        return self._unique(
-            [
-                "Définir le plus petit flux MVP utile.",
-                "Préparer un script d’entretien utilisateur.",
-                "Recruter des utilisateurs pilotes dans le premier segment cible.",
-                "Suivre l’activation, l’usage hebdomadaire et la volonté de payer.",
-                "Mettre à jour le score après collecte de preuves terrain.",
-            ]
-        )
+        if archetype == "hardware_iot":
+            if output_language == "en":
+                return self._unique([
+                    "Define the field acceptance test and failure thresholds.",
+                    "Build the bill of materials and deployed-cost baseline.",
+                    "Run a limited real-environment test with logging and recovery procedures.",
+                    "Record maintenance time, failures, uptime and task success.",
+                    "Update the decision after reliability and unit-cost evidence is collected.",
+                ])
+            return self._unique([
+                "Définir le test d’acceptation terrain et les seuils d’échec.",
+                "Construire la nomenclature et la base de coût déployé.",
+                "Réaliser un test limité en environnement réel avec journalisation et procédure de reprise.",
+                "Mesurer maintenance, pannes, disponibilité et réussite de la tâche.",
+                "Mettre à jour la décision après collecte des preuves de fiabilité et de coût unitaire.",
+            ])
+
+        if output_language == "en":
+            return self._unique([
+                "Define the smallest complete MVP outcome.",
+                "Prepare the interview and observation protocol.",
+                "Recruit users from the first target segment.",
+                "Track activation, repeated outcome and willingness to pay.",
+                "Update the score after direct evidence is collected.",
+            ])
+        return self._unique([
+            "Définir le plus petit résultat MVP complet.",
+            "Préparer le protocole d’entretien et d’observation.",
+            "Recruter des utilisateurs du premier segment ciblé.",
+            "Suivre l’activation, le résultat répété et la volonté de payer.",
+            "Mettre à jour le score après collecte de preuves directes.",
+        ])
 
     # ========================================================
     # Context extraction
@@ -580,94 +778,49 @@ class StartupScoreAgent:
     def _context(self, state: Dict[str, Any]) -> Dict[str, str]:
         analysis_data = state.get("analysis_data") or {}
         project_context = state.get("project_context") or {}
-
         project_intelligence = (
             state.get("project_intelligence")
             or analysis_data.get("project_intelligence")
             or project_context.get("project_intelligence")
             or {}
         )
-
+        packet = (
+            state.get("agent_context_packet")
+            or analysis_data.get("agent_context_packet")
+            or project_context.get("agent_context_packet")
+            or project_intelligence.get("agent_context_packet")
+            or {}
+        )
         structured = (
             state.get("structured_project_context")
             or analysis_data.get("structured_project_context")
             or project_context.get("structured_project_context")
             or project_intelligence.get("structured_project_context")
+            or packet.get("structured_project_context")
+            or {}
+        )
+        archetype = (
+            state.get("archetype_context")
+            or analysis_data.get("archetype_context")
+            or project_context.get("archetype_context")
+            or project_intelligence.get("archetype_context")
+            or packet.get("archetype_context")
             or {}
         )
 
-        title = self._safe_text(
-            structured.get("project_name")
-            or structured.get("title")
-            or project_context.get("project_name")
-            or project_context.get("title")
-            or state.get("title"),
-            "Project",
-        )
-
-        description = self._safe_text(
-            structured.get("description")
-            or project_context.get("description")
-            or state.get("description"),
-            "",
-        )
-
-        sector = self._safe_text(
-            structured.get("sector")
-            or structured.get("industry")
-            or project_context.get("sector")
-            or project_context.get("industry")
-            or state.get("industry"),
-            "target sector",
-        )
-
-        region = self._safe_text(
-            structured.get("target_region")
-            or structured.get("market_region")
-            or project_context.get("target_region")
-            or project_context.get("market_region")
-            or state.get("region"),
-            "target region",
-        )
-
-        target_users = self._readable_list(
-            structured.get("target_users")
-            or project_context.get("target_users")
-            or project_context.get("target_market")
-            or "target users"
-        )
-
-        problem = self._safe_text(
-            structured.get("problem")
-            or structured.get("core_problem")
-            or structured.get("main_problem")
-            or structured.get("pain_point")
-            or project_context.get("problem")
-            or project_context.get("core_problem")
-            or project_context.get("main_problem"),
-            "the identified operational problem",
-        )
-
-        solution = self._safe_text(
-            structured.get("solution")
-            or structured.get("solution_type")
-            or structured.get("value_proposition")
-            or project_context.get("solution")
-            or project_context.get("solution_type"),
-            "the proposed solution",
-        )
-
-        business_model = self._safe_text(
-            structured.get("business_model")
-            or project_context.get("business_model"),
-            "subscription or pilot-based business model",
-        )
-
-        mvp_scope = self._safe_text(
-            structured.get("mvp_scope")
-            or project_context.get("mvp_scope"),
-            "a reduced MVP focused on the core workflow",
-        )
+        title = self._safe_text(structured.get("project_name") or structured.get("title") or packet.get("project_name") or project_context.get("project_name") or project_context.get("title") or state.get("title"), "Project")
+        description = self._safe_text(structured.get("description") or packet.get("description") or project_context.get("description") or state.get("description"), "")
+        sector = self._safe_text(structured.get("sector") or structured.get("industry") or archetype.get("vertical") or packet.get("sector") or project_context.get("sector") or project_context.get("industry") or state.get("industry"), "target sector")
+        region = self._safe_text(structured.get("target_region") or structured.get("market_region") or packet.get("target_region") or project_context.get("target_region") or project_context.get("market_region") or state.get("region"), "target region")
+        target_users = self._readable_list(structured.get("target_users") or archetype.get("target_users") or packet.get("target_users") or project_context.get("target_users") or project_context.get("target_market") or "target users")
+        problem = self._safe_text(structured.get("problem") or structured.get("core_problem") or structured.get("main_problem") or structured.get("pain_point") or packet.get("problem") or project_context.get("problem") or project_context.get("core_problem") or project_context.get("main_problem"), "the identified operational problem")
+        solution = self._safe_text(structured.get("solution") or structured.get("solution_type") or structured.get("value_proposition") or packet.get("solution") or project_context.get("solution") or project_context.get("solution_type"), "the proposed solution")
+        project_archetype = self._safe_text(structured.get("project_archetype") or archetype.get("project_archetype") or packet.get("project_archetype"), "generic_digital_product")
+        business_model = self._safe_text(structured.get("business_model") or archetype.get("business_model") or packet.get("business_model") or project_context.get("business_model"), "monetization model to validate")
+        mvp_scope = self._safe_text(structured.get("mvp_scope") or archetype.get("validation_unit") or packet.get("mvp_scope") or project_context.get("mvp_scope"), "a reduced MVP focused on the core outcome")
+        validation_unit = self._safe_text(structured.get("validation_unit") or archetype.get("validation_unit") or packet.get("validation_unit") or mvp_scope, mvp_scope)
+        success_metrics = self._readable_list(structured.get("success_metrics") or archetype.get("success_metrics") or packet.get("success_metrics") or "")
+        risk_dimensions = self._readable_list(structured.get("risk_dimensions") or archetype.get("risk_dimensions") or packet.get("risk_dimensions") or "")
 
         context = {
             "title": title,
@@ -677,16 +830,15 @@ class StartupScoreAgent:
             "target_users": target_users,
             "problem": problem,
             "solution": solution,
+            "project_archetype": project_archetype,
             "business_model": business_model,
             "mvp_scope": mvp_scope,
+            "validation_unit": validation_unit,
+            "success_metrics": success_metrics,
+            "risk_dimensions": risk_dimensions,
         }
-
         allowed_context = self._allowed_context(context)
-
-        return {
-            key: self._sanitize_text(value, allowed_context=allowed_context)
-            for key, value in context.items()
-        }
+        return {key: self._sanitize_text(value, allowed_context=allowed_context) for key, value in context.items()}
 
     # ========================================================
     # Sanitization
@@ -872,8 +1024,8 @@ class StartupScoreAgent:
             "target users",
             "the identified operational problem",
             "the proposed solution",
-            "subscription or pilot-based business model",
-            "a reduced mvp focused on the core workflow",
+            "monetization model to validate",
+            "a reduced mvp focused on the core outcome",
         }
 
         return text not in generic and len(text) >= 4
