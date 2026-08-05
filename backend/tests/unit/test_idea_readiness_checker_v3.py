@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.schemas.analysis_context import (
     ContextReadinessStatus,
+    comparison_key,
 )
 from app.services.idea_readiness_checker import (
     idea_readiness_checker,
@@ -81,11 +82,15 @@ def test_complete_project_uses_canonical_context() -> None:
     )
 
     assert (
+    comparison_key(
         "une seule serre"
-        in result["detected"][
+    )
+    in comparison_key(
+        result["detected"][
             "mvp_scope"
         ]
     )
+)
 
 
 def test_vague_project_is_blocked() -> None:
