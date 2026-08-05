@@ -223,10 +223,14 @@ class StartupEvaluatorGraph:
                 "partial_completion": False,
             }
 
-            if not idea_readiness.get(
-                "ready_for_agents",
-                False,
-            ):
+            canonical_ready_for_agents = bool(
+                idea_readiness.get(
+                    "ready_for_agents",
+                    False,
+                )
+            )
+
+            if not canonical_ready_for_agents:
                 logger.info(
                     "[StartupEvaluatorGraph] "
                     "Analyse bloquée par le Context Gate "
@@ -366,7 +370,7 @@ class StartupEvaluatorGraph:
                         0,
                     )
                 ),
-                "ready_for_agents": True,
+                "ready_for_agents": canonical_ready_for_agents,
                 "project_intelligence_status": (
                     project_intelligence.get(
                         "status"
@@ -498,7 +502,7 @@ class StartupEvaluatorGraph:
                         0,
                     )
                 ),
-                "ready_for_agents": True,
+                "ready_for_agents": canonical_ready_for_agents,
                 "project_intelligence_status": (
                     project_intelligence.get(
                         "status"
@@ -1249,42 +1253,98 @@ class StartupEvaluatorGraph:
         analysis_data: Dict[str, Any],
         output_language: str,
     ) -> Dict[str, Any]:
-        """Fill evidence-aware local feasibility and cautious trend signals."""
-        language = normalize_output_language(output_language)
-        ledger = analysis_data.get("evidence_ledger")
-        if not isinstance(ledger, dict):
-            ledger = evidence_ledger.build(analysis_data)
+        """
+        Complète l'étude de marché avec des signaux prudents fondés
+        uniquement sur les preuves réellement retenues.
+
+        Cette méthode est volontairement universelle :
+        - aucun secteur, projet ou pays de démonstration n'est codé en dur ;
+        - les formulations s'appuient sur le contexte canonique du run ;
+        - un signal de contexte n'est jamais présenté comme une preuve
+          de demande, d'adoption ou de volonté de payer.
+        """
+        language = normalize_output_language(
+            output_language
+        )
+
+        ledger = analysis_data.get(
+            "evidence_ledger"
+        )
+
+        if not isinstance(
+            ledger,
+            dict,
+        ):
+            ledger = evidence_ledger.build(
+                analysis_data
+            )
 
         sources = [
             dict(item)
-            for item in (ledger.get("source_index") or {}).values()
-            if isinstance(item, dict)
+            for item in (
+                ledger.get(
+                    "source_index"
+                )
+                or {}
+            ).values()
+            if isinstance(
+                item,
+                dict,
+            )
         ]
 
         local_sources = [
             source
             for source in sources
-            if str(source.get("region_match") or "").lower() == "local"
-            and set(source.get("evidence_categories") or [])
-            & {
-                "regional_context",
-                "sector_context",
-                "local_market_signal",
-                "market_demand",
-                "market_demand_claim",
-                "solution_benchmark",
-            }
+            if (
+                str(
+                    source.get(
+                        "region_match"
+                    )
+                    or ""
+                ).lower()
+                == "local"
+                and set(
+                    source.get(
+                        "evidence_categories"
+                    )
+                    or []
+                )
+                & {
+                    "regional_context",
+                    "sector_context",
+                    "local_market_signal",
+                    "market_demand",
+                    "market_demand_claim",
+                    "solution_benchmark",
+                }
+            )
         ]
+
         technology_sources = [
             source
             for source in sources
-            if set(source.get("evidence_categories") or [])
-            & {"technology_benchmark", "solution_benchmark"}
+            if set(
+                source.get(
+                    "evidence_categories"
+                )
+                or []
+            )
+            & {
+                "technology_benchmark",
+                "solution_benchmark",
+            }
         ]
+
         market_sources = [
             source
             for source in sources
-            if set(source.get("evidence_categories") or [])
+            if set(
+                source.get(
+                    "evidence_categories"
+                )
+                or []
+            )
             & {
                 "market_size",
                 "market_size_claim",
@@ -1294,77 +1354,186 @@ class StartupEvaluatorGraph:
             }
         ]
 
+        structured_context = (
+            analysis_data.get(
+                "structured_project_context"
+            )
+            or {}
+        )
+
+        project_packet = (
+            analysis_data.get(
+                "project_context_packet"
+            )
+            or {}
+        )
+
+        if not isinstance(
+            structured_context,
+            dict,
+        ):
+            structured_context = {}
+
+        if not isinstance(
+            project_packet,
+            dict,
+        ):
+            project_packet = {}
+
+        context_candidates = [
+            structured_context.get(
+                "sector"
+            ),
+            structured_context.get(
+                "industry"
+            ),
+            project_packet.get(
+                "industry_user_input"
+            ),
+            structured_context.get(
+                "solution_category"
+            ),
+            structured_context.get(
+                "project_archetype"
+            ),
+            project_packet.get(
+                "primary_archetype"
+            ),
+        ]
+
+        context_label = next(
+            (
+                self._compact_context_label(
+                    candidate
+                )
+                for candidate in context_candidates
+                if self._compact_context_label(
+                    candidate
+                )
+            ),
+            (
+                "project sector"
+                if language == "en"
+                else "secteur du projet"
+            ),
+        )
+
+        target_region = self._compact_context_label(
+            structured_context.get(
+                "target_region"
+            )
+            or structured_context.get(
+                "market_region"
+            )
+            or project_packet.get(
+                "target_region"
+            )
+        )
+
         if language == "en":
             local_signal = (
-                "Retained local sources provide sector and ecosystem signals, "
-                "but they do not yet prove active demand, budget availability "
-                "or willingness to pay."
+                (
+                    "Retained local sources provide sector and ecosystem "
+                    f"signals for {context_label}, but they do not yet prove "
+                    "active demand, budget availability or willingness to pay."
+                )
                 if local_sources
-                else "No compatible local evidence currently confirms demand, "
-                "adoption or willingness to pay; local feasibility requires "
-                "official data and field interviews."
+                else (
+                    "No compatible local evidence currently confirms demand, "
+                    "adoption or willingness to pay"
+                    + (
+                        f" in {target_region}"
+                        if target_region
+                        else ""
+                    )
+                    + "; local feasibility requires official data and "
+                    "field interviews."
+                )
             )
-            trend_candidates = []
+
+            trend_candidates: list[str] = []
+
             if technology_sources:
-                trend_candidates.extend(
-                    [
-                        "Signal to validate: agricultural inspection is increasingly "
-                        "combined with automation, computer vision and connected sensors.",
-                        "Signal to validate: related technology benchmarks show a move "
-                        "toward precision agriculture and continuous monitoring; transfer "
-                        "to the launch market remains unproven.",
-                    ]
-                )
-            if local_sources:
                 trend_candidates.append(
-                    "Local signal to validate: retained Tunisian initiatives show "
-                    "AgriTech experimentation, but not yet broad adoption or willingness "
-                    "to pay."
-                )
-            if market_sources:
-                trend_candidates.append(
-                    "Secondary market signal: robotics and precision-agriculture pages "
-                    "indicate sector interest, but their figures and methodologies must "
-                    "be checked before an investment decision."
-                )
-        else:
-            local_signal = (
-                "Les sources locales retenues constituent des signaux de contexte "
-                "sectoriel et d’écosystème, mais elles ne prouvent pas encore une "
-                "demande active, un budget disponible ni la volonté de payer."
-                if local_sources
-                else "Aucune preuve locale compatible ne confirme actuellement la "
-                "demande, l’adoption ou la volonté de payer ; la faisabilité locale "
-                "doit être validée par des données officielles et des entretiens terrain."
-            )
-            trend_candidates = []
-            if technology_sources:
-                trend_candidates.extend(
-                    [
-                        "Signal à valider : l’inspection agricole combine de plus en "
-                        "plus automatisation, vision artificielle et capteurs connectés.",
-                        "Signal à valider : les benchmarks retenus indiquent une "
-                        "progression de l’agriculture de précision et du suivi continu ; "
-                        "leur transférabilité au marché de lancement reste non prouvée.",
-                    ]
-                )
-            if local_sources:
-                trend_candidates.append(
-                    "Signal local à valider : les initiatives tunisiennes retenues "
-                    "montrent une expérimentation AgriTech, mais pas encore une adoption "
-                    "large ni une volonté de payer démontrée."
-                )
-            if market_sources:
-                trend_candidates.append(
-                    "Signal secondaire : les pages consacrées à la robotique et à "
-                    "l’agriculture de précision indiquent un intérêt sectoriel, mais "
-                    "leurs chiffres et méthodologies doivent être vérifiés."
+                    "Signal to validate: retained technology benchmarks show "
+                    f"comparable capabilities or operating models for "
+                    f"{context_label}; their transferability to the launch "
+                    "market remains unproven."
                 )
 
-        def missing(value: Any) -> bool:
+            if local_sources:
+                trend_candidates.append(
+                    "Local signal to validate: retained local sources show "
+                    f"ecosystem activity around {context_label}, but not yet "
+                    "broad adoption, budget availability or demonstrated "
+                    "willingness to pay."
+                )
+
+            if market_sources:
+                trend_candidates.append(
+                    "Secondary market signal: retained market sources indicate "
+                    f"interest in {context_label}, but their figures, scope and "
+                    "methodologies must be checked before an investment decision."
+                )
+
+        else:
+            local_signal = (
+                (
+                    "Les sources locales retenues constituent des signaux de "
+                    f"contexte sectoriel et d'écosystème pour {context_label}, "
+                    "mais elles ne prouvent pas encore une demande active, "
+                    "un budget disponible ni la volonté de payer."
+                )
+                if local_sources
+                else (
+                    "Aucune preuve locale compatible ne confirme actuellement "
+                    "la demande, l'adoption ou la volonté de payer"
+                    + (
+                        f" dans {target_region}"
+                        if target_region
+                        else ""
+                    )
+                    + " ; la faisabilité locale doit être validée par des "
+                    "données officielles et des entretiens terrain."
+                )
+            )
+
+            trend_candidates = []
+
+            if technology_sources:
+                trend_candidates.append(
+                    "Signal à valider : les benchmarks technologiques retenus "
+                    "montrent des capacités ou des modèles opératoires "
+                    f"comparables pour {context_label} ; leur transférabilité "
+                    "au marché de lancement reste non prouvée."
+                )
+
+            if local_sources:
+                trend_candidates.append(
+                    "Signal local à valider : les sources locales retenues "
+                    f"montrent une activité d'écosystème autour de "
+                    f"{context_label}, mais pas encore une adoption large, "
+                    "un budget disponible ni une volonté de payer démontrée."
+                )
+
+            if market_sources:
+                trend_candidates.append(
+                    "Signal secondaire : les sources de marché retenues "
+                    f"indiquent un intérêt pour {context_label}, mais leurs "
+                    "chiffres, leur périmètre et leurs méthodologies doivent "
+                    "être vérifiés avant une décision d'investissement."
+                )
+
+        def missing(
+            value: Any,
+        ) -> bool:
             if value is None:
                 return True
-            if isinstance(value, str):
+
+            if isinstance(
+                value,
+                str,
+            ):
                 return value.strip() in {
                     "",
                     "—",
@@ -1375,25 +1544,69 @@ class StartupEvaluatorGraph:
                     "non disponible",
                     "not available",
                 }
-            if isinstance(value, list):
+
+            if isinstance(
+                value,
+                list,
+            ):
                 meaningful = [
                     item
                     for item in value
-                    if str(item or "").strip()
-                    not in {"", "—", "–", "-", "n/a", "N/A"}
+                    if str(
+                        item
+                        or ""
+                    ).strip()
+                    not in {
+                        "",
+                        "—",
+                        "–",
+                        "-",
+                        "n/a",
+                        "N/A",
+                    }
                 ]
+
                 return not meaningful
+
             return False
 
-        if missing(market_study.get("local_feasibility")):
-            market_study["local_feasibility"] = local_signal
-        if missing(market_study.get("local_context")):
-            market_study["local_context"] = local_signal
+        if missing(
+            market_study.get(
+                "local_feasibility"
+            )
+        ):
+            market_study[
+                "local_feasibility"
+            ] = local_signal
 
-        existing_trends = market_study.get("market_trends") or market_study.get("trends")
+        if missing(
+            market_study.get(
+                "local_context"
+            )
+        ):
+            market_study[
+                "local_context"
+            ] = local_signal
 
-        def cautious_signal(value: Any) -> bool:
-            normalized = " ".join(str(value or "").casefold().split())
+        existing_trends = (
+            market_study.get(
+                "market_trends"
+            )
+            or market_study.get(
+                "trends"
+            )
+        )
+
+        def cautious_signal(
+            value: Any,
+        ) -> bool:
+            normalized = " ".join(
+                str(
+                    value
+                    or ""
+                ).casefold().split()
+            )
+
             prefixes = (
                 "signal à valider",
                 "signal local à valider",
@@ -1402,52 +1615,185 @@ class StartupEvaluatorGraph:
                 "local signal to validate",
                 "secondary market signal",
             )
-            return any(normalized.startswith(prefix) for prefix in prefixes)
+
+            return any(
+                normalized.startswith(
+                    prefix
+                )
+                for prefix in prefixes
+            )
 
         existing_items = (
-            [item for item in existing_trends if str(item or "").strip()]
-            if isinstance(existing_trends, list)
-            else [existing_trends] if str(existing_trends or "").strip() else []
+            [
+                item
+                for item in existing_trends
+                if str(
+                    item
+                    or ""
+                ).strip()
+            ]
+            if isinstance(
+                existing_trends,
+                list,
+            )
+            else (
+                [
+                    existing_trends
+                ]
+                if str(
+                    existing_trends
+                    or ""
+                ).strip()
+                else []
+            )
         )
 
-        # LLM-generated trends can sound definitive even when the evidence is
-        # weak. Replace them with deterministic, explicitly cautious signals.
-        if trend_candidates and (
-            missing(existing_trends)
-            or not all(cautious_signal(item) for item in existing_items)
+        # Les tendances produites par un agent peuvent sembler définitives
+        # même lorsque les preuves sont faibles. Elles sont remplacées par
+        # des signaux déterministes et explicitement prudents.
+        if (
+            trend_candidates
+            and (
+                missing(
+                    existing_trends
+                )
+                or not all(
+                    cautious_signal(
+                        item
+                    )
+                    for item in existing_items
+                )
+            )
         ):
-            market_study["market_trends"] = trend_candidates
-        elif missing(existing_trends):
-            market_study["market_trends"] = [
+            market_study[
+                "market_trends"
+            ] = trend_candidates
+
+        elif missing(
+            existing_trends
+        ):
+            market_study[
+                "market_trends"
+            ] = [
                 (
-                    "No market trend is sufficiently supported by the retained evidence."
+                    "No market trend is sufficiently supported "
+                    "by the retained evidence."
                     if language == "en"
-                    else "Aucune tendance de marché n’est suffisamment soutenue par les preuves retenues."
+                    else (
+                        "Aucune tendance de marché n'est "
+                        "suffisamment soutenue par les preuves "
+                        "retenues."
+                    )
                 )
             ]
 
-        market_study["market_trend_signals"] = list(trend_candidates)
-        market_study["market_trends_status"] = (
-            "signals_to_validate" if trend_candidates else "unverified"
+        market_study[
+            "market_trend_signals"
+        ] = list(
+            trend_candidates
         )
-        market_study["trends"] = list(market_study.get("market_trends") or [])
-        market_study["evidence_basis"] = [
+
+        market_study[
+            "market_trends_status"
+        ] = (
+            "signals_to_validate"
+            if trend_candidates
+            else "unverified"
+        )
+
+        market_study[
+            "trends"
+        ] = list(
+            market_study.get(
+                "market_trends"
+            )
+            or []
+        )
+
+        market_study[
+            "evidence_basis"
+        ] = [
             {
-                "source_id": source.get("source_id"),
-                "title": source.get("title"),
-                "region_match": source.get("region_match"),
-                "source_type": source.get("source_type"),
-                "evidence_quality": source.get("evidence_quality"),
+                "source_id": source.get(
+                    "source_id"
+                ),
+                "title": source.get(
+                    "title"
+                ),
+                "region_match": source.get(
+                    "region_match"
+                ),
+                "source_type": source.get(
+                    "source_type"
+                ),
+                "evidence_quality": source.get(
+                    "evidence_quality"
+                ),
             }
             for source in sources[:8]
         ]
-        market_study["local_evidence_status"] = (
-            "signal_only" if local_sources else "unverified"
+
+        market_study[
+            "local_evidence_status"
+        ] = (
+            "signal_only"
+            if local_sources
+            else "unverified"
         )
-        market_study["market_evidence_status"] = (
-            "secondary_signals" if market_sources else "unverified"
+
+        market_study[
+            "market_evidence_status"
+        ] = (
+            "secondary_signals"
+            if market_sources
+            else "unverified"
         )
+
         return market_study
+
+    def _compact_context_label(
+        self,
+        value: Any,
+        *,
+        max_length: int = 100,
+    ) -> str:
+        """
+        Produit un libellé court destiné aux phrases publiques
+        déterministes du graph.
+        """
+        text = re.sub(
+            r"\s+",
+            " ",
+            str(
+                value
+                or ""
+            ),
+        ).strip(
+            " .,:;|-"
+        )
+
+        if not text:
+            return ""
+
+        if len(
+            text
+        ) <= max_length:
+            return text
+
+        head = text[
+            : max_length - 3
+        ]
+
+        if " " in head:
+            head = head.rsplit(
+                " ",
+                1,
+            )[0]
+
+        return (
+            head.strip()
+            + "..."
+        )
 
     async def financial_estimation_node(self, state: StartupEvaluatorState) -> StartupEvaluatorState:
         return await self._run_agent_step(
