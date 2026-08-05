@@ -232,31 +232,31 @@ class BMCAgent:
         if language == "en":
             segments = [f"Demand side: {demand}.", f"Supply side: {supply or 'not identified — to validate'}.", f"Platform or ecosystem operator: {operator or 'not identified — to validate'}.", f"Paying participant: {payer or 'not identified — to validate'}."]
             values = [f"For {demand}: complete {core} with reliable availability and confirmation.", f"For {supply or 'the supply side to validate'}: receive relevant demand with transparent economics.", "For the operator: improve liquidity, quality, trust and incident handling.", f"Solve the launch-market problem: {context['problem']}."]
-            channels = ["Focused launch by geography, segment and time window", "Direct supply recruitment and onboarding", "Local digital acquisition and partnerships", "Referral after completed transactions"]
+            channels = ["Bounded launch around one transaction type and one priority segment", "Direct supply recruitment and onboarding", "Local digital acquisition and partnerships", "Referral after completed transactions"]
             relationships = ["Real-time status and support", "Identity, trust, rating and dispute mechanisms", "Supply onboarding and operational communication"]
             revenues = self._unique([model, "Commission or service fee per completed transaction", "Professional provider plan after liquidity is proven"])
-            resources = ["Matching and transaction infrastructure", "Active demand and supply in the same place and time", "Trust, safety, support and compliance processes", "Liquidity and contribution analytics"]
+            resources = ["Matching and transaction infrastructure", "Active demand and supply under compatible transaction conditions", "Trust, safety, support and compliance processes", "Liquidity and contribution analytics"]
             activities = ["Recruit and activate both sides", "Operate matching, cancellations and incidents", "Measure completion, repeat use and unit economics", "Validate local regulation and partner responsibilities"]
             partners = [f"Local supply and ecosystem partners in {region or 'the launch market'}", "Payment, identity, mapping and communication providers", "Regulatory or professional stakeholders when required"]
             costs = ["Product and matching infrastructure", "Supply acquisition and incentives", "Support, trust and safety", "Payment, mapping, messaging and compliance"]
             summary = f"{context['title']} is a two-sided marketplace. It must prove simultaneous demand, supply, trust and positive economics around {core}."
             note = f"The revenue hypothesis is {model}; measure it after incentives, support, payment and compliance costs."
             priorities = context["evidence_needs"] or ["Demand frequency", "Supply availability", "Transaction completion", "Repeat use", "Contribution margin"]
-            risk_note = "The main risk is liquidity failure: demand and supply may not be active in the same place and time."
+            risk_note = "The main risk is liquidity failure: demand and supply may not be active under compatible transaction conditions."
         else:
             segments = [f"Côté demande : {demand}.", f"Côté offre : {supply or 'non identifié — à valider'}.", f"Opérateur de plateforme ou écosystème : {operator or 'non identifié — à valider'}.", f"Participant payeur : {payer or 'non identifié — à valider'}."]
             values = [f"Pour {demand} : réaliser {core} avec disponibilité et confirmation fiables.", f"Pour {supply or 'le côté offre à valider'} : recevoir une demande pertinente avec une économie transparente.", "Pour l’opérateur : améliorer liquidité, qualité, confiance et gestion des incidents.", f"Résoudre le problème du marché de lancement : {context['problem']}."]
-            channels = ["Lancement concentré par zone, segment et plage horaire", "Recrutement et onboarding directs du côté offre", "Acquisition numérique locale et partenariats", "Recommandation après les transactions réussies"]
+            channels = ["Lancement limité autour d’un type de transaction et d’un segment prioritaire", "Recrutement et onboarding directs du côté offre", "Acquisition numérique locale et partenariats", "Recommandation après les transactions réussies"]
             relationships = ["Suivi et support en temps réel", "Identité, confiance, notation et gestion des litiges", "Onboarding et communication opérationnelle du côté offre"]
             revenues = self._unique([model, "Commission ou frais de service par transaction terminée", "Offre professionnelle après preuve de liquidité"])
-            resources = ["Infrastructure de mise en relation et transaction", "Demande et offre actives au même endroit et au même moment", "Processus de confiance, sécurité, support et conformité", "Analytics de liquidité et contribution"]
+            resources = ["Infrastructure de mise en relation et transaction", "Demande et offre actives dans des conditions transactionnelles compatibles", "Processus de confiance, sécurité, support et conformité", "Analytics de liquidité et contribution"]
             activities = ["Recruter et activer les deux côtés", "Opérer mise en relation, annulations et incidents", "Mesurer réalisation, répétition et économie unitaire", "Valider la réglementation locale et les responsabilités"]
             partners = [f"Partenaires locaux côté offre et écosystème en {region or 'marché de lancement'}", "Prestataires de paiement, identité, cartographie et communication", "Acteurs réglementaires ou professionnels si nécessaire"]
             costs = ["Produit et infrastructure de mise en relation", "Acquisition et incitations côté offre", "Support, confiance et sécurité", "Paiement, cartographie, messagerie et conformité"]
             summary = f"{context['title']} est une marketplace à deux côtés. Elle doit prouver simultanément demande, offre, confiance et économie positive autour de {core}."
             note = f"L’hypothèse de revenus est {model}; la mesurer après incitations, support, paiement et conformité."
             priorities = context["evidence_needs"] or ["Fréquence de la demande", "Disponibilité de l’offre", "Réalisation de la transaction", "Usage répété", "Marge contributive"]
-            risk_note = "Le risque principal est l’échec de liquidité : demande et offre peuvent ne pas être actives au même endroit et au même moment."
+            risk_note = "Le risque principal est l’échec de liquidité : demande et offre peuvent ne pas être actives dans des conditions transactionnelles compatibles."
 
         return self._result(segments=segments, values=values, channels=channels, relationships=relationships, revenues=revenues, resources=resources, activities=activities, partners=partners, costs=costs, summary=summary, note=note, priorities=priorities, risk_note=risk_note, risk_level="high")
 

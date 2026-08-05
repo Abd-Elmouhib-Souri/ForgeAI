@@ -162,11 +162,11 @@ class PersonaBuilderAgent:
                 {
                     "id": "supply_side_provider", "name": supply, "persona_name": supply,
                     "role": "Supply-side provider", "segment": supply,
-                    "profile": f"A provider in {context['region']} who accepts and fulfils relevant demand while protecting earnings and operating time.",
-                    "main_pain": "Demand is fragmented, poorly qualified or difficult to accept at the right place and time.",
+                    "profile": f"A provider in {context['region']} who accepts and fulfils relevant demand while protecting earnings and operating capacity.",
+                    "main_pain": "Demand is fragmented, poorly qualified or difficult to accept under clear operating conditions.",
                     "goals": [f"Complete: {workflows[1]}.", "Improve utilization, earnings and predictable demand without losing control."],
                     "frustrations": ["Low-quality requests, cancellations and unpaid time.", "High platform fees or poor geographic matching."],
-                    "current_alternatives": ["Street or phone-based demand", "Existing intermediary or platform", "Personal customer network"],
+                    "current_alternatives": ["Direct outreach and manually coordinated transactions", "Existing intermediary or specialized solution", "Established customer or partner network"],
                     "expected_value": "More relevant demand, lower idle time and transparent economics.",
                     "adoption_trigger": "Joins when qualified demand and net earnings exceed current channels.",
                     "adoption_obstacles": ["Weak demand liquidity", "Unclear fees, rules or dispute handling"],
@@ -183,7 +183,7 @@ class PersonaBuilderAgent:
                     "main_pain": "The service fails when supply, demand, trust and operational rules are not balanced.",
                     "goals": [f"Complete: {workflows[2]}.", "Keep the marketplace safe, liquid and economically sustainable."],
                     "frustrations": ["Coverage gaps, fraud, complaints and cancellations.", "Growth that increases incentives or support cost faster than revenue."],
-                    "current_alternatives": ["Manual dispatch and support", "Local partnerships", "Incumbent platform operations"],
+                    "current_alternatives": ["Transactions coordinated with generic tools", "Local or sector partners", "Existing operational solutions"],
                     "expected_value": "Predictable marketplace quality, compliance and contribution margin.",
                     "adoption_trigger": "Supports rollout when service thresholds, responsibilities and incident handling are explicit.",
                     "adoption_obstacles": risks[:3] or ["Regulatory constraints", "Trust and safety incidents", "Negative unit economics"],
@@ -199,10 +199,10 @@ class PersonaBuilderAgent:
             validation = [
                 f"Observe five {demand} attempting: {workflows[0]}.",
                 f"Interview five {supply} about acceptance, earnings and cancellation thresholds.",
-                "Run a zone-and-time liquidity test before broad rollout.",
+                "Run a bounded liquidity test on the first transaction scope before broad rollout.",
                 "Measure completed transactions, time to match, repeat use and contribution margin.",
             ]
-            persona_risks = risks or ["Demand and supply may not be liquid at the same place and time.", "Trust, safety, regulation and incentives can block the model."]
+            persona_risks = risks or ["Demand and supply may not be active under the same transaction conditions.", "Trust, safety, regulation and incentives can block the model."]
         else:
             personas = [
                 {
@@ -225,11 +225,11 @@ class PersonaBuilderAgent:
                 {
                     "id": "supply_side_provider", "name": supply, "persona_name": supply,
                     "role": "Prestataire côté offre", "segment": supply,
-                    "profile": f"Un prestataire en {context['region']} qui accepte et réalise les demandes pertinentes tout en protégeant son revenu et son temps.",
-                    "main_pain": "La demande est dispersée, mal qualifiée ou difficile à accepter au bon endroit et au bon moment.",
+                    "profile": f"Un prestataire en {context['region']} qui accepte et réalise les demandes pertinentes tout en protégeant son revenu et sa capacité opérationnelle.",
+                    "main_pain": "La demande est dispersée, mal qualifiée ou difficile à accepter selon des conditions opérationnelles claires.",
                     "goals": [f"Réaliser : {workflows[1]}.", "Améliorer l’utilisation, le revenu et la prévisibilité sans perdre le contrôle."],
                     "frustrations": ["Demandes faibles, annulations et temps non rémunéré.", "Frais élevés ou mauvaise correspondance géographique."],
-                    "current_alternatives": ["Demande directe par téléphone ou dans la rue", "Intermédiaire ou plateforme existante", "Réseau personnel de clients"],
+                    "current_alternatives": ["Prospection directe et transactions coordonnées manuellement", "Intermédiaire ou solution spécialisée existante", "Réseau établi de clients ou partenaires"],
                     "expected_value": "Plus de demandes pertinentes, moins de temps mort et une économie transparente.",
                     "adoption_trigger": "Rejoint lorsque la demande qualifiée et le revenu net dépassent les canaux actuels.",
                     "adoption_obstacles": ["Demande insuffisante", "Frais, règles ou gestion des litiges peu clairs"],
@@ -246,7 +246,7 @@ class PersonaBuilderAgent:
                     "main_pain": "Le service échoue lorsque l’offre, la demande, la confiance et les règles opérationnelles ne sont pas équilibrées.",
                     "goals": [f"Réaliser : {workflows[2]}.", "Maintenir une marketplace sûre, liquide et économiquement viable."],
                     "frustrations": ["Zones non couvertes, fraude, plaintes et annulations.", "Croissance qui augmente les incitations ou le support plus vite que les revenus."],
-                    "current_alternatives": ["Dispatch et support manuels", "Partenariats locaux", "Opérations de plateformes existantes"],
+                    "current_alternatives": ["Transactions coordonnées avec des outils génériques", "Partenaires locaux ou sectoriels", "Solutions opérationnelles existantes"],
                     "expected_value": "Qualité, conformité et marge contributive prévisibles.",
                     "adoption_trigger": "Soutient le déploiement lorsque les seuils, responsabilités et incidents sont clairement définis.",
                     "adoption_obstacles": risks[:3] or ["Contraintes réglementaires", "Incidents de confiance ou sécurité", "Économie unitaire négative"],
@@ -262,10 +262,10 @@ class PersonaBuilderAgent:
             validation = [
                 f"Observer cinq {demand} pendant : {workflows[0]}.",
                 f"Interroger cinq {supply} sur l’acceptation, le revenu et les annulations.",
-                "Tester la liquidité par zone et par heure avant un déploiement large.",
+                "Tester la liquidité sur le premier périmètre transactionnel avant un déploiement large.",
                 "Mesurer les transactions réalisées, le temps de mise en relation, la réutilisation et la marge contributive.",
             ]
-            persona_risks = risks or ["L’offre et la demande peuvent ne pas être disponibles au même endroit et au même moment.", "La confiance, la sécurité, la réglementation et les incitations peuvent bloquer le modèle."]
+            persona_risks = risks or ["L’offre et la demande peuvent ne pas être actives dans les mêmes conditions transactionnelles.", "La confiance, la sécurité, la réglementation et les incitations peuvent bloquer le modèle."]
 
         return self._result(
             context=context,
