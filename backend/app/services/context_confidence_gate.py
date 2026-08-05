@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Dict, Iterable, List, Mapping, Sequence
 
 from app.schemas.analysis_context import (
     ActorContext,
+    ActorRole,
     ContextConfidence,
     ContextReadinessStatus,
     ProjectContextPacketV3,
@@ -31,6 +33,21 @@ class ContextGatePolicy:
 
     allow_ready_cautious: bool = True
     require_region_for_regulated_projects: bool = True
+
+    minimum_specific_archetype_confidence: float = 0.55
+    blocking_archetype_confidence: float = 0.40
+
+
+@dataclass(frozen=True)
+class ArchetypeGateAssessment:
+    """
+    Résultat des règles de complétude propres à l'archétype.
+    """
+
+    blocking_missing_fields: tuple[str, ...] = ()
+    ambiguous_fields: tuple[str, ...] = ()
+    critical_contradictions: tuple[str, ...] = ()
+    reasons: tuple[str, ...] = ()
 
 
 class ContextConfidenceGate:
@@ -125,6 +142,261 @@ class ContextConfidenceGate:
         "pricing",
         "payant",
         "paid plan",
+    }
+
+    ARCHETYPE_ALIASES = {
+        "marketplace": "two_sided_marketplace",
+        "two sided marketplace": "two_sided_marketplace",
+        "two_sided_marketplace": "two_sided_marketplace",
+        "place de marche": "two_sided_marketplace",
+        "ecommerce": "ecommerce",
+        "e commerce": "ecommerce",
+        "hardware iot": "hardware_iot",
+        "hardware_iot": "hardware_iot",
+        "iot": "hardware_iot",
+        "robotique": "hardware_iot",
+        "b2b workflow saas": "b2b_workflow_saas",
+        "b2b_workflow_saas": "b2b_workflow_saas",
+        "saas": "b2b_workflow_saas",
+        "analytics ai tool": "analytics_ai_tool",
+        "analytics_ai_tool": "analytics_ai_tool",
+        "ai tool": "analytics_ai_tool",
+        "regulated service": "regulated_service",
+        "regulated_service": "regulated_service",
+        "professional service": "professional_service",
+        "professional_service": "professional_service",
+        "content community": "content_community",
+        "content_community": "content_community",
+    }
+
+    ARCHETYPE_BLOCKING_REQUIREMENTS = {
+        "two_sided_marketplace": (
+            "supply_side",
+            "demand_side",
+            "transaction_unit",
+            "transaction_flow",
+            "payment_responsibility",
+            "fulfillment_logistics",
+            "trust_mechanism",
+            "dispute_responsibility",
+        ),
+        "ecommerce": (
+            "transaction_unit",
+            "payment_responsibility",
+            "fulfillment_logistics",
+        ),
+        "b2b_workflow_saas": (
+            "priority_workflow",
+        ),
+        "hardware_iot": (
+            "deployment_environment",
+            "priority_workflow",
+        ),
+        "analytics_ai_tool": (
+            "priority_workflow",
+            "input_data",
+            "output_decision",
+        ),
+        "regulated_service": (
+            "target_region",
+            "priority_workflow",
+        ),
+        "professional_service": (
+            "priority_workflow",
+            "deliverable",
+        ),
+        "content_community": (
+            "priority_workflow",
+        ),
+    }
+
+    ARCHETYPE_AMBIGUOUS_REQUIREMENTS = {
+        "two_sided_marketplace": (
+            "business_model",
+        ),
+        "ecommerce": (
+            "return_refund_policy",
+        ),
+        "b2b_workflow_saas": (
+            "operational_user",
+            "decision_maker",
+            "payer",
+        ),
+        "hardware_iot": (
+            "maintenance_model",
+            "operational_safety",
+        ),
+        "analytics_ai_tool": (
+            "human_oversight",
+        ),
+        "regulated_service": (
+            "regulated_provider",
+            "beneficiary",
+            "regulatory_scope",
+            "professional_responsibility",
+        ),
+        "professional_service": (
+            "service_provider",
+            "service_client",
+        ),
+        "content_community": (
+            "creator_side",
+            "audience_side",
+            "moderation_model",
+        ),
+    }
+
+    UNRESOLVED_MARKERS = {
+        "pas encore defini",
+        "pas encore definie",
+        "non defini",
+        "non definie",
+        "a definir",
+        "reste a definir",
+        "n est pas defini",
+        "ne sont pas definis",
+        "inconnu",
+        "inconnue",
+        "a clarifier",
+        "non precise",
+        "non precisee",
+        "not defined",
+        "not yet defined",
+        "unknown",
+        "to be defined",
+        "undecided",
+        "tbd",
+    }
+
+    REQUIREMENT_MARKERS = {
+        "payment_responsibility": {
+            "paiement",
+            "payment",
+            "reglement",
+            "règlement",
+            "encaissement",
+            "facturation",
+            "billing",
+            "escrow",
+            "hors plateforme",
+            "offline payment",
+        },
+        "fulfillment_logistics": {
+            "transport",
+            "logistique",
+            "logistics",
+            "livraison",
+            "delivery",
+            "expedition",
+            "expédition",
+            "remise",
+            "retrait",
+            "collecte",
+            "fulfillment",
+            "execution du service",
+            "exécution du service",
+            "realisation de la prestation",
+            "réalisation de la prestation",
+        },
+        "trust_mechanism": {
+            "verification",
+            "vérification",
+            "confiance",
+            "trust",
+            "identite",
+            "identité",
+            "kyc",
+            "notation",
+            "rating",
+            "controle qualite",
+            "contrôle qualité",
+            "certification",
+        },
+        "dispute_responsibility": {
+            "litige",
+            "litiges",
+            "dispute",
+            "disputes",
+            "arbitrage",
+            "reclamation",
+            "réclamation",
+            "remboursement",
+            "refund",
+        },
+        "return_refund_policy": {
+            "retour",
+            "returns",
+            "return policy",
+            "remboursement",
+            "refund",
+            "retractation",
+            "rétractation",
+            "garantie",
+            "warranty",
+        },
+        "human_oversight": {
+            "supervision humaine",
+            "human oversight",
+            "validation humaine",
+            "human review",
+            "revue humaine",
+        },
+        "moderation_model": {
+            "moderation",
+            "modération",
+            "moderateur",
+            "modérateur",
+            "signalement",
+            "regles de communaute",
+            "règles de communauté",
+        },
+    }
+
+    REQUIREMENT_REASONS = {
+        "supply_side": (
+            "A two-sided model requires an explicit supply-side actor."
+        ),
+        "demand_side": (
+            "A two-sided model requires an explicit demand-side actor."
+        ),
+        "transaction_unit": (
+            "The central product, service, booking, asset, or result "
+            "being exchanged is not identified."
+        ),
+        "transaction_flow": (
+            "The operation needs a clear start and completion condition."
+        ),
+        "payment_responsibility": (
+            "The payment responsibility or explicit off-platform "
+            "payment policy is not defined."
+        ),
+        "fulfillment_logistics": (
+            "The delivery, transport, handover, or service fulfillment "
+            "model is not defined."
+        ),
+        "trust_mechanism": (
+            "The verification or trust mechanism is not defined."
+        ),
+        "dispute_responsibility": (
+            "The dispute, complaint, refund, or arbitration "
+            "responsibility is not defined."
+        ),
+        "deployment_environment": (
+            "A hardware or IoT project requires a concrete "
+            "deployment environment."
+        ),
+        "input_data": (
+            "The data or information entering the AI workflow "
+            "is not identified."
+        ),
+        "output_decision": (
+            "The result, recommendation, or decision produced "
+            "by the AI workflow is not identified."
+        ),
+        "deliverable": (
+            "The service deliverable or completion result "
+            "is not identified."
+        ),
     }
 
     def __init__(
@@ -451,6 +723,48 @@ class ContextConfidenceGate:
             )
 
         # --------------------------------------------------------------
+        # Exigences propres à l'archétype
+        # --------------------------------------------------------------
+
+        archetype_assessment = (
+            self._archetype_assessment(
+                packet
+            )
+        )
+
+        blockers.extend(
+            archetype_assessment
+            .blocking_missing_fields
+        )
+
+        ambiguous_fields.extend(
+            archetype_assessment
+            .ambiguous_fields
+        )
+
+        reasons.extend(
+            archetype_assessment.reasons
+        )
+
+        if (
+            archetype_assessment
+            .critical_contradictions
+        ):
+            blockers.append(
+                "critical_contradictions"
+            )
+
+            reasons.extend(
+                (
+                    "critical_contradiction: "
+                    + contradiction
+                )
+                for contradiction
+                in archetype_assessment
+                .critical_contradictions
+            )
+
+        # --------------------------------------------------------------
         # Score
         # --------------------------------------------------------------
 
@@ -537,8 +851,12 @@ class ContextConfidenceGate:
         packet: ProjectContextPacketV3,
     ) -> ProjectContextPacketV3:
         """
-        Retourne une copie du packet contenant la décision du gate.
+        Retourne une copie du packet contenant la décision canonique.
         """
+        assessment = self._archetype_assessment(
+            packet
+        )
+
         confidence = self.evaluate(
             packet
         )
@@ -546,6 +864,26 @@ class ContextConfidenceGate:
         return packet.model_copy(
             update={
                 "confidence": confidence,
+                "blocking_missing_fields": (
+                    unique_texts(
+                        [
+                            *packet
+                            .blocking_missing_fields,
+                            *assessment
+                            .blocking_missing_fields,
+                        ]
+                    )
+                ),
+                "critical_contradictions": (
+                    unique_texts(
+                        [
+                            *packet
+                            .critical_contradictions,
+                            *assessment
+                            .critical_contradictions,
+                        ]
+                    )
+                ),
             },
             deep=True,
         )
@@ -564,11 +902,26 @@ class ContextConfidenceGate:
             packet_or_confidence,
             ProjectContextPacketV3,
         ):
+            evaluated_packet = self.apply(
+                packet_or_confidence
+            )
+
+            if (
+                evaluated_packet
+                .blocking_missing_fields
+                or evaluated_packet
+                .critical_contradictions
+            ):
+                return False
+
             confidence = (
-                packet_or_confidence.confidence
+                evaluated_packet.confidence
             )
         else:
             confidence = packet_or_confidence
+
+        if confidence.blockers:
+            return False
 
         if (
             confidence.status
@@ -598,6 +951,30 @@ class ContextConfidenceGate:
 
         confidence = evaluated_packet.confidence
 
+        blockers = unique_texts(
+            [
+                *confidence.blockers,
+                *evaluated_packet
+                .blocking_missing_fields,
+                *(
+                    ["critical_contradictions"]
+                    if evaluated_packet
+                    .critical_contradictions
+                    else []
+                ),
+            ]
+        )
+
+        ready_for_agents = bool(
+            self.should_run_agents(
+                confidence
+            )
+            and not evaluated_packet
+            .blocking_missing_fields
+            and not evaluated_packet
+            .critical_contradictions
+        )
+
         return {
             "format": (
                 "context_confidence_gate_v1"
@@ -615,9 +992,7 @@ class ContextConfidenceGate:
                 self.policy.cautious_score
             ),
             "ready_for_agents": (
-                self.should_run_agents(
-                    confidence
-                )
+                ready_for_agents
             ),
             "missing_fields": list(
                 confidence.missing_fields
@@ -625,9 +1000,19 @@ class ContextConfidenceGate:
             "ambiguous_fields": list(
                 confidence.ambiguous_fields
             ),
-            "blockers": list(
-                confidence.blockers
+            "blocking_missing_fields": list(
+                evaluated_packet
+                .blocking_missing_fields
             ),
+            "critical_contradictions": list(
+                evaluated_packet
+                .critical_contradictions
+            ),
+            "archetype_confidence": (
+                evaluated_packet
+                .archetype_confidence
+            ),
+            "blockers": blockers,
             "questions": list(
                 confidence.clarification_questions
             ),
@@ -650,6 +1035,7 @@ class ContextConfidenceGate:
             ),
         }
 
+
     def evaluate_mapping(
         self,
         data: Mapping[str, Any],
@@ -667,6 +1053,662 @@ class ContextConfidenceGate:
 
         return self.to_runtime_payload(
             packet
+        )
+
+    def _archetype_assessment(
+        self,
+        packet: ProjectContextPacketV3,
+    ) -> ArchetypeGateAssessment:
+        """
+        Applique une matrice universelle d'exigences par archétype.
+
+        Les règles utilisent uniquement le type d'opération, les rôles,
+        les responsabilités et les informations explicites du projet.
+        Elles ne dépendent jamais du nom du projet.
+        """
+        archetype = self._canonical_archetype(
+            packet.primary_archetype
+        )
+
+        blocking = list(
+            packet.blocking_missing_fields
+        )
+
+        ambiguous: List[str] = []
+
+        contradictions = list(
+            packet.critical_contradictions
+        )
+
+        reasons: List[str] = []
+
+        if (
+            archetype
+            and archetype
+            != "generic_digital_product"
+        ):
+            archetype_confidence = float(
+                packet.archetype_confidence
+                or 0.0
+            )
+
+            if (
+                archetype_confidence
+                < self.policy
+                .blocking_archetype_confidence
+            ):
+                blocking.append(
+                    "archetype_confidence"
+                )
+
+                reasons.append(
+                    "The archetype confidence is too low "
+                    "to select reliable project-specific rules."
+                )
+
+            elif (
+                archetype_confidence
+                < self.policy
+                .minimum_specific_archetype_confidence
+            ):
+                ambiguous.append(
+                    "archetype_confidence"
+                )
+
+        for requirement in (
+            self.ARCHETYPE_BLOCKING_REQUIREMENTS.get(
+                archetype,
+                (),
+            )
+        ):
+            if self._requirement_is_present(
+                packet,
+                requirement,
+            ):
+                continue
+
+            blocking.append(
+                requirement
+            )
+
+            reason = (
+                self.REQUIREMENT_REASONS.get(
+                    requirement
+                )
+            )
+
+            if reason:
+                reasons.append(
+                    reason
+                )
+
+        for requirement in (
+            self.ARCHETYPE_AMBIGUOUS_REQUIREMENTS.get(
+                archetype,
+                (),
+            )
+        ):
+            if self._requirement_is_present(
+                packet,
+                requirement,
+            ):
+                continue
+
+            ambiguous.append(
+                requirement
+            )
+
+        contradictions.extend(
+            self._critical_contradictions(
+                packet
+            )
+        )
+
+        return ArchetypeGateAssessment(
+            blocking_missing_fields=tuple(
+                unique_texts(
+                    blocking
+                )
+            ),
+            ambiguous_fields=tuple(
+                unique_texts(
+                    ambiguous
+                )
+            ),
+            critical_contradictions=tuple(
+                unique_texts(
+                    contradictions
+                )
+            ),
+            reasons=tuple(
+                unique_texts(
+                    reasons
+                )
+            ),
+        )
+
+    def _requirement_is_present(
+        self,
+        packet: ProjectContextPacketV3,
+        requirement: str,
+    ) -> bool:
+        """
+        Résout une exigence universelle à partir du packet canonique.
+        """
+        transaction = packet.transaction_unit
+        workflow = packet.primary_workflow
+
+        if requirement == "supply_side":
+            return bool(
+                clean_text(
+                    transaction.supply_actor
+                )
+                or self._has_actor_role(
+                    packet,
+                    {
+                        ActorRole.PROVIDER,
+                    },
+                )
+            )
+
+        if requirement == "demand_side":
+            return bool(
+                clean_text(
+                    transaction.demand_actor
+                )
+                or self._has_actor_role(
+                    packet,
+                    {
+                        ActorRole.BUYER,
+                        ActorRole.USER,
+                        ActorRole.BENEFICIARY,
+                    },
+                )
+            )
+
+        if requirement == "transaction_unit":
+            return bool(
+                transaction.has_named_object
+            )
+
+        if requirement == "transaction_flow":
+            return bool(
+                clean_text(
+                    transaction.initiation_action
+                )
+                and clean_text(
+                    transaction.completion_action
+                )
+            )
+
+        if requirement == "payment_responsibility":
+            return self._concept_is_resolved(
+                packet=packet,
+                explicit_values=(
+                    transaction
+                    .payment_responsibility,
+                ),
+                markers=(
+                    self.REQUIREMENT_MARKERS[
+                        requirement
+                    ]
+                ),
+            )
+
+        if requirement == "fulfillment_logistics":
+            return self._concept_is_resolved(
+                packet=packet,
+                explicit_values=(
+                    transaction
+                    .fulfillment_responsibility,
+                    transaction.fulfillment_mode,
+                ),
+                markers=(
+                    self.REQUIREMENT_MARKERS[
+                        requirement
+                    ]
+                ),
+            )
+
+        if requirement == "trust_mechanism":
+            return self._concept_is_resolved(
+                packet=packet,
+                explicit_values=(
+                    transaction.trust_mechanism,
+                ),
+                markers=(
+                    self.REQUIREMENT_MARKERS[
+                        requirement
+                    ]
+                ),
+            )
+
+        if requirement == "dispute_responsibility":
+            return self._concept_is_resolved(
+                packet=packet,
+                explicit_values=(
+                    transaction
+                    .dispute_responsibility,
+                ),
+                markers=(
+                    self.REQUIREMENT_MARKERS[
+                        requirement
+                    ]
+                ),
+            )
+
+        if requirement in {
+            "return_refund_policy",
+            "human_oversight",
+            "moderation_model",
+        }:
+            return self._concept_is_resolved(
+                packet=packet,
+                explicit_values=(),
+                markers=(
+                    self.REQUIREMENT_MARKERS[
+                        requirement
+                    ]
+                ),
+            )
+
+        if requirement == "priority_workflow":
+            return bool(
+                workflow
+                and workflow.is_actionable
+            )
+
+        if requirement == "business_model":
+            return bool(
+                packet.business_model_hypotheses
+            )
+
+        if requirement == "operational_user":
+            return self._has_actor_role(
+                packet,
+                {
+                    ActorRole.USER,
+                    ActorRole.OPERATOR,
+                    ActorRole.BENEFICIARY,
+                },
+            )
+
+        if requirement == "decision_maker":
+            return bool(
+                packet.decision_maker_actor_names
+                or self._has_actor_role(
+                    packet,
+                    {
+                        ActorRole.DECISION_MAKER,
+                    },
+                )
+            )
+
+        if requirement == "payer":
+            return bool(
+                packet.payer_actor_names
+                or self._has_actor_role(
+                    packet,
+                    {
+                        ActorRole.PAYER,
+                        ActorRole.BUYER,
+                    },
+                )
+            )
+
+        if requirement == "deployment_environment":
+            return bool(
+                packet.deployment_environment
+            )
+
+        if requirement == "maintenance_model":
+            return self._contains_text_marker(
+                packet,
+                {
+                    "maintenance",
+                    "reparation",
+                    "réparation",
+                    "support terrain",
+                    "field support",
+                    "installateur",
+                },
+            )
+
+        if requirement == "operational_safety":
+            return self._contains_text_marker(
+                packet,
+                {
+                    "securite",
+                    "sécurité",
+                    "safety",
+                    "fiabilite",
+                    "fiabilité",
+                    "autonomie",
+                    "battery",
+                    "batterie",
+                    "energie",
+                    "énergie",
+                },
+            )
+
+        if requirement == "input_data":
+            return bool(
+                workflow
+                and clean_text(
+                    workflow.object
+                )
+            )
+
+        if requirement == "output_decision":
+            return bool(
+                workflow
+                and (
+                    clean_text(
+                        workflow.result
+                    )
+                    or clean_text(
+                        workflow.output
+                    )
+                )
+            )
+
+        if requirement == "target_region":
+            return bool(
+                clean_text(
+                    packet.target_region
+                )
+            )
+
+        if requirement == "regulated_provider":
+            return self._has_actor_role(
+                packet,
+                {
+                    ActorRole.PROVIDER,
+                    ActorRole.OPERATOR,
+                    ActorRole.MAINTAINER,
+                },
+            )
+
+        if requirement == "beneficiary":
+            return self._has_actor_role(
+                packet,
+                {
+                    ActorRole.BENEFICIARY,
+                    ActorRole.USER,
+                    ActorRole.BUYER,
+                },
+            )
+
+        if requirement == "regulatory_scope":
+            return bool(
+                packet.regulatory_flags
+                or packet.risk_domains
+            )
+
+        if requirement == "professional_responsibility":
+            return self._contains_text_marker(
+                packet,
+                {
+                    "responsabilite professionnelle",
+                    "responsabilité professionnelle",
+                    "licensed professional",
+                    "validation medicale",
+                    "validation médicale",
+                    "supervision humaine",
+                },
+            )
+
+        if requirement == "service_provider":
+            return self._has_actor_role(
+                packet,
+                {
+                    ActorRole.PROVIDER,
+                    ActorRole.OPERATOR,
+                    ActorRole.PARTNER,
+                },
+            )
+
+        if requirement == "service_client":
+            return self._has_actor_role(
+                packet,
+                {
+                    ActorRole.BUYER,
+                    ActorRole.USER,
+                    ActorRole.BENEFICIARY,
+                },
+            )
+
+        if requirement == "deliverable":
+            return bool(
+                workflow
+                and (
+                    clean_text(
+                        workflow.result
+                    )
+                    or clean_text(
+                        workflow.output
+                    )
+                    or clean_text(
+                        transaction.value_exchanged
+                    )
+                )
+            )
+
+        if requirement == "creator_side":
+            return self._contains_text_marker(
+                packet,
+                {
+                    "createur",
+                    "créateur",
+                    "auteur",
+                    "publisher",
+                    "contributor",
+                },
+            )
+
+        if requirement == "audience_side":
+            return self._contains_text_marker(
+                packet,
+                {
+                    "membre",
+                    "audience",
+                    "abonne",
+                    "abonné",
+                    "lecteur",
+                    "viewer",
+                    "community",
+                },
+            )
+
+        return False
+
+    def _critical_contradictions(
+        self,
+        packet: ProjectContextPacketV3,
+    ) -> List[str]:
+        """
+        Détecte les contradictions qui rendent le packet inexploitable.
+        """
+        transaction = packet.transaction_unit
+
+        supply_key = comparison_key(
+            transaction.supply_actor
+        )
+
+        demand_key = comparison_key(
+            transaction.demand_actor
+        )
+
+        contradictions: List[str] = []
+
+        if (
+            supply_key
+            and demand_key
+            and supply_key == demand_key
+        ):
+            contradictions.append(
+                "transaction_supply_and_demand_are_identical"
+            )
+
+        return unique_texts(
+            contradictions
+        )
+
+    def _canonical_archetype(
+        self,
+        value: Any,
+    ) -> str:
+        key = comparison_key(
+            value
+        )
+
+        if not key:
+            return "generic_digital_product"
+
+        return self.ARCHETYPE_ALIASES.get(
+            key,
+            clean_text(value),
+        )
+
+    def _has_actor_role(
+        self,
+        packet: ProjectContextPacketV3,
+        roles: set[ActorRole],
+    ) -> bool:
+        return any(
+            actor.role in roles
+            for actor in packet.actors
+        )
+
+    def _explicit_text(
+        self,
+        packet: ProjectContextPacketV3,
+    ) -> str:
+        """
+        Texte explicitement fourni ou conservé dans le packet.
+
+        Les responsabilités critiques ne doivent pas être considérées
+        définies uniquement parce qu'une ancienne couche a généré
+        une hypothèse générique.
+        """
+        return clean_text(
+            " ".join(
+                [
+                    packet.description,
+                    " ".join(
+                        packet.constraints
+                    ),
+                    " ".join(
+                        packet.assumptions
+                    ),
+                ]
+            )
+        )
+
+    def _contains_text_marker(
+        self,
+        packet: ProjectContextPacketV3,
+        markers: Iterable[str],
+    ) -> bool:
+        key = comparison_key(
+            self._explicit_text(
+                packet
+            )
+        )
+
+        return any(
+            comparison_key(marker)
+            in key
+            for marker in markers
+            if comparison_key(marker)
+        )
+
+    def _concept_is_resolved(
+        self,
+        *,
+        packet: ProjectContextPacketV3,
+        explicit_values: Sequence[Any],
+        markers: Iterable[str],
+    ) -> bool:
+        """
+        Vérifie qu'un concept est réellement défini.
+
+        Une phrase comme « le paiement n'est pas encore défini » ne
+        constitue jamais une preuve de complétude.
+        """
+        if any(
+            clean_text(value)
+            for value in explicit_values
+        ):
+            return True
+
+        marker_keys = {
+            comparison_key(marker)
+            for marker in markers
+            if comparison_key(marker)
+        }
+
+        if not marker_keys:
+            return False
+
+        relevant_sentences = [
+            sentence
+            for sentence in self._sentences(
+                self._explicit_text(
+                    packet
+                )
+            )
+            if any(
+                marker_key
+                in comparison_key(
+                    sentence
+                )
+                for marker_key
+                in marker_keys
+            )
+        ]
+
+        if not relevant_sentences:
+            return False
+
+        unresolved_keys = {
+            comparison_key(marker)
+            for marker in self.UNRESOLVED_MARKERS
+            if comparison_key(marker)
+        }
+
+        return any(
+            not any(
+                unresolved_key
+                in comparison_key(
+                    sentence
+                )
+                for unresolved_key
+                in unresolved_keys
+            )
+            for sentence in relevant_sentences
+        )
+
+    def _sentences(
+        self,
+        value: Any,
+    ) -> List[str]:
+        text = clean_text(
+            value
+        )
+
+        if not text:
+            return []
+
+        return unique_texts(
+            part
+            for part in re.split(
+                r"(?<=[.!?])\s+|\n+",
+                text,
+            )
+            if clean_text(
+                part
+            )
         )
 
     def _status_for(
@@ -1275,6 +2317,101 @@ class ContextConfidenceGate:
                 "Quels domaines proches doivent être exclus "
                 "de l’analyse ?"
             ),
+            "archetype_confidence": (
+                "Quel est le type principal du projet et quels "
+                "signaux le prouvent ?"
+            ),
+            "supply_side": (
+                "Qui fournit, vend ou exécute l’offre principale ?"
+            ),
+            "demand_side": (
+                "Qui recherche, réserve, achète ou reçoit cette offre ?"
+            ),
+            "transaction_unit": (
+                "Quel produit, service, lot, réservation ou résultat "
+                "constitue l’unité centrale de valeur ?"
+            ),
+            "transaction_flow": (
+                "Comment l’opération commence-t-elle et quand "
+                "est-elle terminée ?"
+            ),
+            "payment_responsibility": (
+                "Qui gère le paiement, sur la plateforme ou hors plateforme ?"
+            ),
+            "fulfillment_logistics": (
+                "Qui gère la livraison, le transport, la remise "
+                "ou l’exécution du service ?"
+            ),
+            "trust_mechanism": (
+                "Comment les acteurs, produits ou services seront-ils vérifiés ?"
+            ),
+            "dispute_responsibility": (
+                "Qui gère les litiges, réclamations ou remboursements ?"
+            ),
+            "return_refund_policy": (
+                "Quelle politique de retour, remboursement ou garantie s’applique ?"
+            ),
+            "operational_user": (
+                "Qui utilise concrètement le produit au quotidien ?"
+            ),
+            "decision_maker": (
+                "Qui décide de l’achat ou du déploiement ?"
+            ),
+            "payer": (
+                "Qui paie réellement le produit ou l’abonnement ?"
+            ),
+            "deployment_environment": (
+                "Dans quel environnement physique le produit sera-t-il déployé ?"
+            ),
+            "maintenance_model": (
+                "Qui installe, maintient et répare le produit ?"
+            ),
+            "operational_safety": (
+                "Quelles contraintes de sécurité, fiabilité, énergie "
+                "ou autonomie s’appliquent ?"
+            ),
+            "input_data": (
+                "Quelles données ou informations alimentent l’outil ?"
+            ),
+            "output_decision": (
+                "Quel résultat, recommandation ou décision l’outil produit-il ?"
+            ),
+            "human_oversight": (
+                "Quelle validation humaine est requise ?"
+            ),
+            "regulated_provider": (
+                "Quel professionnel ou organisme autorisé fournit le service ?"
+            ),
+            "beneficiary": (
+                "Qui bénéficie directement du service ?"
+            ),
+            "regulatory_scope": (
+                "Quelles règles ou autorisations s’appliquent ?"
+            ),
+            "professional_responsibility": (
+                "Qui porte la responsabilité professionnelle finale ?"
+            ),
+            "service_provider": (
+                "Qui réalise la prestation professionnelle ?"
+            ),
+            "service_client": (
+                "Qui commande et valide la prestation ?"
+            ),
+            "deliverable": (
+                "Quel livrable ou résultat marque la fin de la mission ?"
+            ),
+            "creator_side": (
+                "Qui crée ou publie le contenu principal ?"
+            ),
+            "audience_side": (
+                "Qui consulte ou interagit avec ce contenu ?"
+            ),
+            "moderation_model": (
+                "Qui modère les contenus et traite les signalements ?"
+            ),
+            "critical_contradictions": (
+                "Quelles informations contradictoires doivent être corrigées ?"
+            ),
         }
 
         english_questions = {
@@ -1322,6 +2459,97 @@ class ContextConfidenceGate:
                 "Which adjacent domains must be excluded "
                 "from the analysis?"
             ),
+            "archetype_confidence": (
+                "What is the project's main type and which signals prove it?"
+            ),
+            "supply_side": (
+                "Who supplies, sells, or performs the main offer?"
+            ),
+            "demand_side": (
+                "Who searches for, books, buys, or receives the offer?"
+            ),
+            "transaction_unit": (
+                "Which product, service, booking, asset, or result "
+                "is the central unit of value?"
+            ),
+            "transaction_flow": (
+                "How does the operation start and when is it complete?"
+            ),
+            "payment_responsibility": (
+                "Who manages payment, on or off the platform?"
+            ),
+            "fulfillment_logistics": (
+                "Who manages delivery, transport, handover, or fulfillment?"
+            ),
+            "trust_mechanism": (
+                "How will actors, products, or services be verified?"
+            ),
+            "dispute_responsibility": (
+                "Who manages disputes, complaints, or refunds?"
+            ),
+            "return_refund_policy": (
+                "Which return, refund, or warranty policy applies?"
+            ),
+            "operational_user": (
+                "Who uses the product in the daily workflow?"
+            ),
+            "decision_maker": (
+                "Who decides to buy or deploy the product?"
+            ),
+            "payer": (
+                "Who actually pays for the product or subscription?"
+            ),
+            "deployment_environment": (
+                "In which physical environment will the product be deployed?"
+            ),
+            "maintenance_model": (
+                "Who installs, maintains, and repairs the product?"
+            ),
+            "operational_safety": (
+                "Which safety, reliability, energy, or autonomy constraints apply?"
+            ),
+            "input_data": (
+                "Which data or information feeds the tool?"
+            ),
+            "output_decision": (
+                "Which result, recommendation, or decision does the tool produce?"
+            ),
+            "human_oversight": (
+                "Which human validation is required?"
+            ),
+            "regulated_provider": (
+                "Which licensed professional or organization provides the service?"
+            ),
+            "beneficiary": (
+                "Who directly benefits from the service?"
+            ),
+            "regulatory_scope": (
+                "Which rules or authorizations apply?"
+            ),
+            "professional_responsibility": (
+                "Who carries final professional responsibility?"
+            ),
+            "service_provider": (
+                "Who performs the professional service?"
+            ),
+            "service_client": (
+                "Who orders and validates the service?"
+            ),
+            "deliverable": (
+                "Which deliverable or result marks completion?"
+            ),
+            "creator_side": (
+                "Who creates or publishes the main content?"
+            ),
+            "audience_side": (
+                "Who views or interacts with the content?"
+            ),
+            "moderation_model": (
+                "Who moderates content and handles reports?"
+            ),
+            "critical_contradictions": (
+                "Which contradictory details must be corrected?"
+            ),
         }
 
         arabic_questions = {
@@ -1366,6 +2594,97 @@ class ContextConfidenceGate:
             "domain_integrity": (
                 "ما المجالات القريبة التي يجب استبعادها "
                 "من التحليل؟"
+            ),
+            "archetype_confidence": (
+                "ما النوع الرئيسي للمشروع وما المؤشرات التي تثبته؟"
+            ),
+            "supply_side": (
+                "من يوفّر أو يبيع أو ينفّذ العرض الرئيسي؟"
+            ),
+            "demand_side": (
+                "من يبحث عن العرض أو يحجزه أو يشتريه أو يستلمه؟"
+            ),
+            "transaction_unit": (
+                "ما المنتج أو الخدمة أو الحجز أو النتيجة التي تمثل "
+                "وحدة القيمة الأساسية؟"
+            ),
+            "transaction_flow": (
+                "كيف تبدأ العملية ومتى تعتبر مكتملة؟"
+            ),
+            "payment_responsibility": (
+                "من يدير الدفع، داخل المنصة أم خارجها؟"
+            ),
+            "fulfillment_logistics": (
+                "من يدير التسليم أو النقل أو تنفيذ الخدمة؟"
+            ),
+            "trust_mechanism": (
+                "كيف سيتم التحقق من الأطراف أو المنتجات أو الخدمات؟"
+            ),
+            "dispute_responsibility": (
+                "من يدير النزاعات والشكاوى والاسترداد؟"
+            ),
+            "return_refund_policy": (
+                "ما سياسة الإرجاع أو الاسترداد أو الضمان؟"
+            ),
+            "operational_user": (
+                "من يستخدم المنتج فعلياً في العمل اليومي؟"
+            ),
+            "decision_maker": (
+                "من يقرر الشراء أو النشر؟"
+            ),
+            "payer": (
+                "من يدفع فعلياً مقابل المنتج أو الاشتراك؟"
+            ),
+            "deployment_environment": (
+                "في أي بيئة مادية سيتم نشر المنتج؟"
+            ),
+            "maintenance_model": (
+                "من يركّب المنتج ويصونه ويصلحه؟"
+            ),
+            "operational_safety": (
+                "ما قيود السلامة والموثوقية والطاقة والاستقلالية؟"
+            ),
+            "input_data": (
+                "ما البيانات أو المعلومات التي تغذي الأداة؟"
+            ),
+            "output_decision": (
+                "ما النتيجة أو التوصية أو القرار الذي تنتجه الأداة؟"
+            ),
+            "human_oversight": (
+                "ما المراجعة البشرية المطلوبة؟"
+            ),
+            "regulated_provider": (
+                "من هو المهني أو الجهة المرخصة التي تقدم الخدمة؟"
+            ),
+            "beneficiary": (
+                "من يستفيد مباشرة من الخدمة؟"
+            ),
+            "regulatory_scope": (
+                "ما القواعد أو التراخيص المطبقة؟"
+            ),
+            "professional_responsibility": (
+                "من يتحمل المسؤولية المهنية النهائية؟"
+            ),
+            "service_provider": (
+                "من ينفذ الخدمة المهنية؟"
+            ),
+            "service_client": (
+                "من يطلب الخدمة ويعتمدها؟"
+            ),
+            "deliverable": (
+                "ما التسليم أو النتيجة التي تنهي المهمة؟"
+            ),
+            "creator_side": (
+                "من ينشئ أو ينشر المحتوى الرئيسي؟"
+            ),
+            "audience_side": (
+                "من يشاهد أو يتفاعل مع المحتوى؟"
+            ),
+            "moderation_model": (
+                "من يدير الإشراف على المحتوى والبلاغات؟"
+            ),
+            "critical_contradictions": (
+                "ما المعلومات المتناقضة التي يجب تصحيحها؟"
             ),
         }
 
