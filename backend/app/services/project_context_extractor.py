@@ -10,6 +10,7 @@ from app.schemas.analysis_context import (
     ProblemContext,
     ProjectContextPacketV3,
     SolutionContext,
+    TransactionUnitContext,
     WorkflowContext,
     clean_text,
     comparison_key,
@@ -293,6 +294,228 @@ class ProjectContextExtractor:
         "client payeur",
     }
 
+    ACTOR_HEAD_MARKERS = (
+        # Acteurs génériques
+        "acteur",
+        "acteurs",
+        "personne",
+        "personnes",
+        "utilisateur",
+        "utilisateurs",
+        "usager",
+        "usagers",
+        "client",
+        "clients",
+        "customer",
+        "customers",
+        "user",
+        "users",
+
+        # Organisations
+        "entreprise",
+        "entreprises",
+        "société",
+        "sociétés",
+        "societe",
+        "societes",
+        "company",
+        "companies",
+        "business",
+        "businesses",
+        "organisation",
+        "organisations",
+        "organization",
+        "organizations",
+        "coopérative",
+        "coopératives",
+        "cooperative",
+        "cooperatives",
+
+        # Offre et demande
+        "vendeur",
+        "vendeurs",
+        "vendeuse",
+        "vendeuses",
+        "seller",
+        "sellers",
+        "fournisseur",
+        "fournisseurs",
+        "supplier",
+        "suppliers",
+        "prestataire",
+        "prestataires",
+        "provider",
+        "providers",
+        "producteur",
+        "producteurs",
+        "producer",
+        "producers",
+        "acheteur",
+        "acheteurs",
+        "acheteuse",
+        "acheteuses",
+        "buyer",
+        "buyers",
+        "acquéreur",
+        "acquéreurs",
+        "acquereur",
+        "acquereurs",
+
+        # Décision et paiement
+        "payeur",
+        "payeurs",
+        "financeur",
+        "financeurs",
+        "décideur",
+        "décideurs",
+        "decideur",
+        "decideurs",
+        "responsable",
+        "responsables",
+        "manager",
+        "managers",
+        "directeur",
+        "directeurs",
+        "dirigeant",
+        "dirigeants",
+        "propriétaire",
+        "propriétaires",
+        "proprietaire",
+        "proprietaires",
+        "owner",
+        "owners",
+
+        # Opérations et maintenance
+        "technicien",
+        "techniciens",
+        "technician",
+        "technicians",
+        "opérateur",
+        "opérateurs",
+        "operateur",
+        "operateurs",
+        "operator",
+        "operators",
+        "ouvrier",
+        "ouvriers",
+        "employé",
+        "employés",
+        "employe",
+        "employes",
+        "employee",
+        "employees",
+        "mainteneur",
+        "mainteneurs",
+        "réparateur",
+        "réparateurs",
+        "reparateur",
+        "reparateurs",
+        "installateur",
+        "installateurs",
+        "intégrateur",
+        "intégrateurs",
+        "integrateur",
+        "integrateurs",
+
+        # Partenaires et autorités
+        "partenaire",
+        "partenaires",
+        "partner",
+        "partners",
+        "autorité",
+        "autorités",
+        "autorite",
+        "autorites",
+        "régulateur",
+        "régulateurs",
+        "regulateur",
+        "regulateurs",
+        "regulator",
+        "regulators",
+        "administration",
+        "administrations",
+
+        # Agriculture
+        "agriculteur",
+        "agriculteurs",
+        "farmer",
+        "farmers",
+        "exploitation",
+        "exploitations",
+        "ferme",
+        "fermes",
+        "pépinière",
+        "pépinières",
+        "pepiniere",
+        "pepinieres",
+
+        # Santé
+        "patient",
+        "patients",
+        "médecin",
+        "médecins",
+        "medecin",
+        "medecins",
+        "doctor",
+        "doctors",
+        "infirmier",
+        "infirmiers",
+        "infirmière",
+        "infirmières",
+        "clinique",
+        "cliniques",
+        "hôpital",
+        "hôpitaux",
+        "hopital",
+        "hopitaux",
+
+        # Éducation
+        "élève",
+        "élèves",
+        "eleve",
+        "eleves",
+        "étudiant",
+        "étudiants",
+        "etudiant",
+        "etudiants",
+        "student",
+        "students",
+        "enseignant",
+        "enseignants",
+        "teacher",
+        "teachers",
+        "école",
+        "écoles",
+        "ecole",
+        "ecoles",
+        "université",
+        "universités",
+        "universite",
+        "universites",
+
+        # Communauté
+        "bénéficiaire",
+        "bénéficiaires",
+        "beneficiaire",
+        "beneficiaires",
+        "citoyen",
+        "citoyens",
+        "membre",
+        "membres",
+        "member",
+        "members",
+        "créateur",
+        "créateurs",
+        "createur",
+        "createurs",
+        "creator",
+        "creators",
+        "modérateur",
+        "modérateurs",
+        "moderateur",
+        "moderateurs",
+    )
+
     def extract(
         self,
         *,
@@ -444,6 +667,19 @@ class ProjectContextExtractor:
             structured=structured,
         )
 
+        archetype_confidence = self._archetype_confidence(
+            primary_archetype=primary_archetype,
+            secondary_archetypes=secondary_archetypes,
+            description=description,
+            industry=industry,
+        )
+
+        transaction_unit = self._extract_transaction_unit(
+            sentences=sentences,
+            actors=actors,
+            workflows=workflows,
+        )
+
         payer_names = unique_texts(
             actor.name
             for actor in actors
@@ -501,6 +737,7 @@ class ProjectContextExtractor:
                 )
             ),
             primary_archetype=primary_archetype,
+            archetype_confidence=archetype_confidence,
             secondary_archetypes=secondary_archetypes,
             risk_domains=self._listify(
                 structured.get(
@@ -528,6 +765,7 @@ class ProjectContextExtractor:
                 == ActorRole.REGULATORY_BLOCKER
             ),
             priority_workflows=workflows,
+            transaction_unit=transaction_unit,
             mvp_scope=mvp_scope,
             deployment_environment=(
                 self._deployment_environment(
@@ -655,7 +893,7 @@ class ProjectContextExtractor:
                 )[0]
 
                 names.extend(
-                    self._split_list(
+                    self._split_actor_list(
                         value
                     )
                 )
@@ -677,7 +915,7 @@ class ProjectContextExtractor:
                     )[0]
 
                     names.extend(
-                        self._split_list(
+                        self._split_actor_list(
                             value
                         )
                     )
@@ -2071,92 +2309,661 @@ class ProjectContextExtractor:
             ),
         )
 
+
+    def _looks_like_actor_phrase(
+        self,
+        value: str,
+    ) -> bool:
+        """
+        Détermine si un fragment introduit probablement un nouvel acteur.
+
+        Un objet, un produit ou un matériel ne doit pas devenir un acteur
+        uniquement parce qu'il apparaît après une virgule ou « ou ».
+        """
+        text = clean_text(value)
+        key = comparison_key(text)
+
+        if not key:
+            return False
+
+        if self._actor_role(text) != ActorRole.OTHER:
+            return True
+
+        return any(
+            re.search(
+                rf"\b{re.escape(comparison_key(marker))}\b",
+                key,
+            )
+            is not None
+            for marker in self.ACTOR_HEAD_MARKERS
+            if comparison_key(marker)
+        )
+
+    def _split_actor_list(
+        self,
+        value: Any,
+    ) -> List[str]:
+        """
+        Découpe une liste d'acteurs sans transformer leurs objets
+        ou leurs catégories de produits en acteurs autonomes.
+
+        Exemple :
+
+        « entreprises vendeuses et entreprises acheteuses de pièces,
+        matériaux ou équipements »
+
+        devient deux acteurs, et non quatre.
+        """
+        text = clean_text(value)
+
+        if not text:
+            return []
+
+        fragments = [
+            clean_text(part)
+            for part in re.split(
+                r"\s*(?:,|;|\bet\b|\band\b|"
+                r"\bou\b|\bor\b|\+|/)\s*",
+                text,
+                flags=re.IGNORECASE,
+            )
+            if clean_text(part)
+        ]
+
+        actors: List[str] = []
+
+        for fragment in fragments:
+            if (
+                not actors
+                or self._looks_like_actor_phrase(
+                    fragment
+                )
+            ):
+                actors.append(fragment)
+                continue
+
+            actors[-1] = clean_text(
+                f"{actors[-1]}, {fragment}"
+            )
+
+        return actors
+
     def _actor_role(
         self,
         name: str,
     ) -> ActorRole:
-        key = comparison_key(
-            name
+        """
+        Résout le rôle métier à partir des signaux les plus précis.
+
+        Les mots génériques comme « entreprise » ou « société » ne
+        suffisent jamais à classer automatiquement un acteur comme acheteur.
+        """
+        key = comparison_key(name)
+
+        if not key:
+            return ActorRole.OTHER
+
+        role_signals = (
+            (
+                ActorRole.REGULATORY_BLOCKER,
+                (
+                    "autorite",
+                    "regulateur",
+                    "regulator",
+                    "administration",
+                    "ministere",
+                ),
+            ),
+            (
+                ActorRole.PAYER,
+                (
+                    "payeur",
+                    "payer",
+                    "financeur",
+                    "paie",
+                    "paye",
+                    "finance",
+                    "souscrit",
+                ),
+            ),
+            (
+                ActorRole.DECISION_MAKER,
+                (
+                    "decideur",
+                    "responsable achat",
+                    "responsable des achats",
+                    "procurement manager",
+                    "approbateur",
+                    "valideur",
+                ),
+            ),
+            (
+                ActorRole.PROVIDER,
+                (
+                    "vendeur",
+                    "vendeuse",
+                    "vendeurs",
+                    "vendeuses",
+                    "fournisseur",
+                    "supplier",
+                    "seller",
+                    "provider",
+                    "prestataire",
+                    "producteur",
+                    "offreur",
+                    "met en vente",
+                    "met a disposition",
+                    "publie ses",
+                ),
+            ),
+            (
+                ActorRole.BUYER,
+                (
+                    "acheteur",
+                    "acheteuse",
+                    "acheteurs",
+                    "acheteuses",
+                    "acquereur",
+                    "buyer",
+                    "purchaser",
+                    "client acheteur",
+                    "recherche des",
+                    "recherche les",
+                    "reserve",
+                    "commande",
+                ),
+            ),
+            (
+                ActorRole.MAINTAINER,
+                (
+                    "maintenance",
+                    "mainteneur",
+                    "reparateur",
+                    "installateur",
+                    "integrateur",
+                ),
+            ),
+            (
+                ActorRole.OPERATOR,
+                (
+                    "technicien",
+                    "ouvrier",
+                    "operateur",
+                    "operator",
+                    "employee",
+                    "employe",
+                    "agent terrain",
+                ),
+            ),
+            (
+                ActorRole.PARTNER,
+                (
+                    "partenaire",
+                    "partner",
+                    "centre de recherche",
+                    "universite",
+                ),
+            ),
+            (
+                ActorRole.BENEFICIARY,
+                (
+                    "beneficiaire",
+                    "patient",
+                    "eleve",
+                    "citoyen",
+                    "usager final",
+                ),
+            ),
         )
 
-        if any(
-            term in key
-            for term in (
-                "maintenance",
-                "mainteneur",
-                "integrateur",
-            )
-        ):
-            return ActorRole.MAINTAINER
+        for role, signals in role_signals:
+            if any(
+                comparison_key(signal) in key
+                for signal in signals
+            ):
+                return role
 
         if any(
-            term in key
+            comparison_key(term) in key
             for term in (
-                "autorite",
-                "regulator",
-                "regulateur",
-                "administration",
-            )
-        ):
-            return (
-                ActorRole.REGULATORY_BLOCKER
-            )
-
-        if any(
-            term in key
-            for term in (
+                "entreprise",
+                "societe",
+                "company",
+                "organisation",
+                "organization",
+                "cooperative",
+                "exploitation",
+                "pepiniere",
                 "proprietaire",
                 "owner",
                 "dirigeant",
                 "responsable",
                 "manager",
-                "cooperative",
-                "exploitation",
-                "pepiniere",
-                "entreprise",
-                "societe",
-                "company",
             )
         ):
-            return ActorRole.BUYER
+            return ActorRole.OTHER
 
         if any(
             term in key
             for term in (
-                "technicien",
-                "ouvrier",
-                "operateur",
-                "operator",
-                "employee",
-                "employe",
+                "utilisateur",
+                "user",
+                "usager",
+                "client",
+                "customer",
             )
         ):
-            return ActorRole.OPERATOR
+            return ActorRole.USER
 
-        if any(
-            term in key
-            for term in (
-                "fournisseur",
-                "provider",
-                "prestataire",
-                "chauffeur",
+        return ActorRole.OTHER
+
+    def _archetype_confidence(
+        self,
+        *,
+        primary_archetype: str,
+        secondary_archetypes: Sequence[str],
+        description: str,
+        industry: str,
+    ) -> float:
+        """
+        Estime la confiance d'archétype à partir de signaux explicites.
+        """
+        if (
+            not primary_archetype
+            or primary_archetype
+            == "generic_digital_product"
+        ):
+            return 0.25
+
+        searchable = comparison_key(
+            f"{industry} {description}"
+        )
+
+        marker_groups = {
+            "two_sided_marketplace": (
+                "marketplace",
+                "place de marche",
+                "mise en relation",
                 "vendeur",
-            )
-        ):
-            return ActorRole.PROVIDER
+                "acheteur",
+                "commission",
+            ),
+            "hardware_iot": (
+                "robot",
+                "hardware",
+                "iot",
+                "capteur",
+                "sensor",
+                "equipement",
+            ),
+            "b2b_workflow_saas": (
+                "saas",
+                "logiciel",
+                "workflow",
+                "tableau de bord",
+                "dashboard",
+                "abonnement",
+            ),
+            "analytics_ai_tool": (
+                "intelligence artificielle",
+                "machine learning",
+                "analytics",
+                "analyse predictive",
+                "computer vision",
+            ),
+            "ecommerce": (
+                "e commerce",
+                "boutique en ligne",
+                "panier",
+                "commande",
+                "livraison",
+            ),
+            "regulated_service": (
+                "patient",
+                "medecin",
+                "banque",
+                "assurance",
+                "juridique",
+                "reglemente",
+            ),
+            "professional_service": (
+                "consultant",
+                "cabinet",
+                "agence",
+                "prestation",
+                "audit",
+            ),
+            "content_community": (
+                "communaute",
+                "community",
+                "createur",
+                "reseau social",
+                "contenu",
+            ),
+        }
 
-        if any(
-            term in key
-            for term in (
-                "partenaire",
-                "partner",
-                "centre de recherche",
-                "universite",
+        matched = sum(
+            1
+            for marker in marker_groups.get(
+                primary_archetype,
+                (),
             )
-        ):
-            return ActorRole.PARTNER
+            if comparison_key(marker) in searchable
+        )
 
-        return ActorRole.USER
+        confidence = 0.55 + min(
+            0.35,
+            matched * 0.07,
+        )
+
+        if secondary_archetypes:
+            confidence -= min(
+                0.10,
+                len(secondary_archetypes) * 0.03,
+            )
+
+        return round(
+            max(
+                0.0,
+                min(
+                    0.95,
+                    confidence,
+                ),
+            ),
+            2,
+        )
+
+    def _extract_transaction_unit(
+        self,
+        *,
+        sentences: Sequence[str],
+        actors: Sequence[ActorContext],
+        workflows: Sequence[WorkflowContext],
+    ) -> TransactionUnitContext:
+        """
+        Extrait l'unité centrale de valeur ou d'opération du projet.
+        """
+        supply_actor = next(
+            (
+                actor.name
+                for actor in actors
+                if actor.role
+                == ActorRole.PROVIDER
+            ),
+            "",
+        )
+
+        demand_actor = next(
+            (
+                actor.name
+                for actor in actors
+                if actor.role
+                in {
+                    ActorRole.BUYER,
+                    ActorRole.USER,
+                    ActorRole.BENEFICIARY,
+                }
+            ),
+            "",
+        )
+
+        initiation_patterns = (
+            (
+                re.compile(
+                    r"\bpubl(?:ier|ie|ient|ies)?\b"
+                    r"|\bpost(?:e|ent|s|ed|ing)?\b",
+                    re.IGNORECASE,
+                ),
+                "publier",
+            ),
+            (
+                re.compile(
+                    r"\bpropos(?:er|e|ent)?\b"
+                    r"|\boffr(?:ir|e|ent)?\b"
+                    r"|\blist(?:s|ed|ing)?\b",
+                    re.IGNORECASE,
+                ),
+                "proposer",
+            ),
+            (
+                re.compile(
+                    r"\bsoumet(?:tre|s|tent)?\b"
+                    r"|\bdepos(?:er|e|ent)?\b"
+                    r"|\bdépos(?:er|e|ent)?\b",
+                    re.IGNORECASE,
+                ),
+                "soumettre",
+            ),
+            (
+                re.compile(
+                    r"\bdemand(?:er|e|ent)?\b"
+                    r"|\brequest(?:s|ed|ing)?\b",
+                    re.IGNORECASE,
+                ),
+                "demander",
+            ),
+        )
+
+        completion_patterns = (
+            (
+                re.compile(
+                    r"\bréserv(?:er|e|ent|ation)?\b"
+                    r"|\breserv(?:er|e|ent|ation)?\b"
+                    r"|\bbook(?:s|ed|ing)?\b",
+                    re.IGNORECASE,
+                ),
+                "réserver",
+            ),
+            (
+                re.compile(
+                    r"\bachet(?:er|e|ent)?\b"
+                    r"|\bbuy(?:s|ing)?\b"
+                    r"|\bbought\b",
+                    re.IGNORECASE,
+                ),
+                "acheter",
+            ),
+            (
+                re.compile(
+                    r"\bcommand(?:er|e|ent)?\b"
+                    r"|\border(?:s|ed|ing)?\b",
+                    re.IGNORECASE,
+                ),
+                "commander",
+            ),
+            (
+                re.compile(
+                    r"\bconclu(?:re|t|ent)?\b"
+                    r"|\bfinalis(?:er|e|ent)?\b"
+                    r"|\bcomplete(?:s|d|ing)?\b",
+                    re.IGNORECASE,
+                ),
+                "conclure la transaction",
+            ),
+            (
+                re.compile(
+                    r"\bvalid(?:er|e|ent)?\b"
+                    r"|\bapprouv(?:er|e|ent)?\b",
+                    re.IGNORECASE,
+                ),
+                "valider",
+            ),
+            (
+                re.compile(
+                    r"\bpay(?:er|e|ent)?\b"
+                    r"|\bpaie(?:nt)?\b"
+                    r"|\bpaiement\b"
+                    r"|\bpayment\b",
+                    re.IGNORECASE,
+                ),
+                "payer",
+            ),
+            (
+                re.compile(
+                    r"\blivr(?:er|e|ent|aison)?\b"
+                    r"|\bdeliver(?:s|ed|ing|y)?\b",
+                    re.IGNORECASE,
+                ),
+                "livrer",
+            ),
+        )
+
+        initiation_action = ""
+        initiation_sentence = ""
+        initiation_match: re.Match[str] | None = None
+
+        completion_action = ""
+        completion_sentence = ""
+
+        for sentence in sentences:
+            for pattern, action in initiation_patterns:
+                match = pattern.search(sentence)
+
+                if not match:
+                    continue
+
+                initiation_action = action
+                initiation_sentence = sentence
+                initiation_match = match
+                break
+
+            if initiation_action:
+                break
+
+        for sentence in sentences:
+            for pattern, action in completion_patterns:
+                if not pattern.search(sentence):
+                    continue
+
+                completion_action = action
+                completion_sentence = sentence
+                break
+
+            if completion_action:
+                break
+
+        object_text = ""
+
+        if (
+            initiation_sentence
+            and initiation_match is not None
+        ):
+            object_text = self._transaction_object(
+                initiation_sentence,
+                initiation_match,
+            )
+
+        if not object_text:
+            for workflow in workflows:
+                if workflow.object:
+                    object_text = workflow.object
+                    break
+
+        if not initiation_action and workflows:
+            initiation_action = workflows[0].action
+
+        if (
+            not object_text
+            and not initiation_action
+            and not completion_action
+        ):
+            return TransactionUnitContext()
+
+        parts: List[str] = []
+
+        if initiation_action and object_text:
+            parts.append(
+                f"{initiation_action} {object_text}"
+            )
+        elif object_text:
+            parts.append(object_text)
+        elif initiation_action:
+            parts.append(initiation_action)
+
+        if completion_action:
+            parts.append(completion_action)
+
+        description = clean_text(
+            ", puis ".join(parts)
+        )
+
+        signal_count = sum(
+            bool(value)
+            for value in (
+                object_text,
+                initiation_action,
+                completion_action,
+                supply_actor,
+                demand_actor,
+            )
+        )
+
+        return TransactionUnitContext(
+            name=description,
+            description=description,
+            object=object_text,
+            supply_actor=supply_actor,
+            demand_actor=demand_actor,
+            initiation_action=initiation_action,
+            completion_action=completion_action,
+            value_exchanged=object_text,
+            is_explicit=bool(
+                initiation_sentence
+                or completion_sentence
+            ),
+            confidence=round(
+                min(
+                    0.95,
+                    0.35
+                    + signal_count * 0.11,
+                ),
+                2,
+            ),
+        )
+
+    def _transaction_object(
+        self,
+        sentence: str,
+        action_match: re.Match[str],
+    ) -> str:
+        """
+        Extrait l'objet immédiat de l'action d'initiation.
+        """
+        tail = clean_text(
+            sentence[
+                action_match.end():
+            ]
+        )
+
+        tail = re.split(
+            r"\s+(?:avec|contenant|qui|afin de|pour|"
+            r"puis|ensuite|and|with|that)\s+",
+            tail,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
+
+        tail = re.split(
+            r"\s+et\s+(?:le|la|les|l['’])",
+            tail,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0]
+
+        tail = re.sub(
+            r"^(?:un|une|des|du|de la|de l['’]|le|la|les|"
+            r"a|an|the)\s+",
+            "",
+            tail.strip(
+                " .,:;"
+            ),
+            flags=re.IGNORECASE,
+        )
+
+        return self._compact(
+            tail,
+            120,
+        )
 
     def _preferred_actor(
         self,

@@ -437,6 +437,143 @@ class WorkflowContext(BaseModel):
         )
 
 
+class TransactionUnitContext(BaseModel):
+    """
+    Décrit l'unité de valeur ou d'échange principale du projet.
+
+    Cette structure est universelle. Elle peut représenter :
+
+    - un lot industriel échangé dans une marketplace ;
+    - une réservation de service ;
+    - une commande e-commerce ;
+    - une intervention de maintenance ;
+    - un dossier traité dans un SaaS ;
+    - une opération terrain réalisée par un équipement ;
+    - une analyse produite par un outil d'intelligence artificielle.
+
+    Elle ne doit jamais être remplacée par une formule générique comme
+    « transaction principale » lorsque l'objet réel est identifiable.
+    """
+
+    model_config = ConfigDict(
+        extra="ignore",
+        str_strip_whitespace=True,
+    )
+
+    name: str = ""
+
+    description: str = ""
+
+    object: str = ""
+
+    supply_actor: str = ""
+
+    demand_actor: str = ""
+
+    initiation_action: str = ""
+
+    completion_action: str = ""
+
+    value_exchanged: str = ""
+
+    payment_responsibility: str = ""
+
+    fulfillment_responsibility: str = ""
+
+    fulfillment_mode: str = ""
+
+    trust_mechanism: str = ""
+
+    dispute_responsibility: str = ""
+
+    is_explicit: bool = False
+
+    confidence: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+    )
+
+    @field_validator(
+        "name",
+        "description",
+        "object",
+        "supply_actor",
+        "demand_actor",
+        "initiation_action",
+        "completion_action",
+        "value_exchanged",
+        "payment_responsibility",
+        "fulfillment_responsibility",
+        "fulfillment_mode",
+        "trust_mechanism",
+        "dispute_responsibility",
+        mode="before",
+    )
+    @classmethod
+    def clean_fields(
+        cls,
+        value: Any,
+    ) -> str:
+        return clean_text(value)
+
+    @computed_field
+    @property
+    def sentence(self) -> str:
+        """
+        Produit une représentation lisible de l'unité transactionnelle.
+        """
+        if self.description:
+            return self.description
+
+        if self.name:
+            return self.name
+
+        base = clean_text(
+            " ".join(
+                part
+                for part in (
+                    self.initiation_action,
+                    self.object,
+                )
+                if part
+            )
+        )
+
+        if self.completion_action:
+            if base:
+                base = (
+                    f"{base}, puis "
+                    f"{self.completion_action}"
+                )
+            else:
+                base = self.completion_action
+
+        return clean_text(base)
+
+    @computed_field
+    @property
+    def has_named_object(self) -> bool:
+        """
+        Indique si l'objet réel de la transaction est identifié.
+        """
+        return bool(
+            self.object
+            or self.name
+        )
+
+    @computed_field
+    @property
+    def has_two_sides(self) -> bool:
+        """
+        Indique si les deux côtés de l'échange sont identifiés.
+        """
+        return bool(
+            self.supply_actor
+            and self.demand_actor
+        )
+
+
 class ContextConfidence(BaseModel):
     """
     Résultat du gate de qualité du contexte.
@@ -609,7 +746,17 @@ class ProjectContextPacketV3(BaseModel):
         "generic_digital_product"
     )
 
+    archetype_confidence: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+    )
+
     secondary_archetypes: List[str] = Field(
+        default_factory=list,
+    )
+
+    critical_contradictions: List[str] = Field(
         default_factory=list,
     )
 
@@ -647,6 +794,10 @@ class ProjectContextPacketV3(BaseModel):
 
     priority_workflows: List[WorkflowContext] = Field(
         default_factory=list,
+    )
+
+    transaction_unit: TransactionUnitContext = Field(
+        default_factory=TransactionUnitContext,
     )
 
     mvp_scope: List[str] = Field(
@@ -697,6 +848,10 @@ class ProjectContextPacketV3(BaseModel):
         default_factory=list,
     )
 
+    blocking_missing_fields: List[str] = Field(
+        default_factory=list,
+    )
+
     validation_warnings: List[str] = Field(
         default_factory=list,
     )
@@ -734,6 +889,7 @@ class ProjectContextPacketV3(BaseModel):
     @field_validator(
         "sector_labels",
         "secondary_archetypes",
+        "critical_contradictions",
         "risk_domains",
         "payer_actor_names",
         "decision_maker_actor_names",
@@ -751,6 +907,7 @@ class ProjectContextPacketV3(BaseModel):
         "target_terms",
         "forbidden_adjacent_domains",
         "assumptions",
+        "blocking_missing_fields",
         "validation_warnings",
         mode="before",
     )
@@ -927,6 +1084,45 @@ class ProjectContextPacketV3(BaseModel):
 
         return output
 
+    @field_validator(
+        "transaction_unit",
+        mode="before",
+    )
+    @classmethod
+    def normalize_transaction_unit(
+        cls,
+        value: Any,
+    ) -> Any:
+        """
+        Accepte le nouveau format structuré ainsi qu'une ancienne chaîne.
+
+        Une chaîne existante est conservée comme nom et description.
+        """
+        if value is None:
+            return {}
+
+        if isinstance(value, str):
+            text = clean_text(value)
+
+            if not text:
+                return {}
+
+            return {
+                "name": text,
+                "description": text,
+            }
+
+        if isinstance(
+            value,
+            (
+                dict,
+                TransactionUnitContext,
+            ),
+        ):
+            return value
+
+        return {}
+
     @model_validator(mode="after")
     def enforce_invariants(
         self,
@@ -1021,6 +1217,21 @@ class ProjectContextPacketV3(BaseModel):
                     )
                 )
 
+        if (
+            self.transaction_unit.supply_actor
+            and self.transaction_unit.demand_actor
+            and comparison_key(
+                self.transaction_unit.supply_actor
+            )
+            == comparison_key(
+                self.transaction_unit.demand_actor
+            )
+        ):
+            warnings.append(
+                "Transaction supply and demand actors "
+                "must not be identical."
+            )
+
         object.__setattr__(
             self,
             "validation_warnings",
@@ -1032,7 +1243,18 @@ class ProjectContextPacketV3(BaseModel):
     @computed_field
     @property
     def ready_for_agents(self) -> bool:
-        return self.confidence.ready_for_agents
+        """
+        Retourne la décision canonique disponible dans le packet.
+
+        Les champs bloquants et les contradictions critiques
+        ne peuvent jamais être ignorés, même si l'ancien objet
+        ContextConfidence indique READY ou READY_CAUTIOUS.
+        """
+        return bool(
+            self.confidence.ready_for_agents
+            and not self.blocking_missing_fields
+            and not self.critical_contradictions
+        )
 
     @computed_field
     @property
@@ -1117,6 +1339,13 @@ class ProjectContextPacketV3(BaseModel):
             else ""
         )
 
+        combined_blockers = unique_texts(
+            [
+                *self.blocking_missing_fields,
+                *self.confidence.blockers,
+            ]
+        )
+
         return {
             "schema_version": self.schema_version,
             "project_name": self.project_name,
@@ -1127,8 +1356,14 @@ class ProjectContextPacketV3(BaseModel):
             "market_region": self.target_region,
             "target_region": self.target_region,
             "project_archetype": self.primary_archetype,
+            "archetype_confidence": (
+                self.archetype_confidence
+            ),
             "secondary_archetypes": list(
                 self.secondary_archetypes
+            ),
+            "critical_contradictions": list(
+                self.critical_contradictions
             ),
             "problem": self.problem.pain,
             "solution": self.solution.mechanism,
@@ -1146,6 +1381,14 @@ class ProjectContextPacketV3(BaseModel):
             "priority_workflow": main_workflow,
             "main_use_case": main_workflow,
             "priority_workflows": workflow_sentences,
+            "transaction_unit": (
+                self.transaction_unit.model_dump(
+                    mode="json",
+                )
+            ),
+            "transaction_unit_text": (
+                self.transaction_unit.sentence
+            ),
             "mvp_scope": ", ".join(
                 self.mvp_scope
             ),
@@ -1196,6 +1439,10 @@ class ProjectContextPacketV3(BaseModel):
             "ambiguous_fields": list(
                 self.confidence.ambiguous_fields
             ),
+            "blocking_missing_fields": list(
+                self.blocking_missing_fields
+            ),
+            "blockers": combined_blockers,
             "ready_for_agents": (
                 self.ready_for_agents
             ),
