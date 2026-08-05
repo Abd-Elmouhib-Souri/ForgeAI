@@ -12,7 +12,8 @@
 # - ne pas hardcoder de résultats pour un projet précis ;
 # - ne pas inventer de concurrents ;
 # - aider ForgeCrawler à trouver des sources réelles si elles existent ;
-# - garder le fallback honnête si aucune source fiable n'est trouvée.
+# - garder le fallback honnête si aucune source fiable n'est trouvée ;
+# - ne jamais décider si les agents peuvent être lancés.
 # ============================================================
 
 from __future__ import annotations
@@ -2778,6 +2779,18 @@ class ProjectIntelligenceLayer:
         mvp_scope: str,
         idea_readiness: Dict[str, Any],
     ) -> Dict[str, Any]:
+        """
+        Produit un diagnostic non autoritaire de qualité du contexte
+        destiné à la planification des recherches et à l'observabilité.
+
+        Cette méthode ne décide jamais si les agents peuvent être lancés.
+        La décision canonique appartient exclusivement à
+        IdeaReadinessChecker et ContextConfidenceGate.
+
+        La clé publique ``context_confidence`` est conservée pour la
+        compatibilité avec les consommateurs Sprint 3, mais son contenu
+        est désormais explicitement descriptif et non décisionnel.
+        """
         missing_fields: List[str] = []
         ambiguous_fields: List[str] = []
 
@@ -2805,25 +2818,62 @@ class ProjectIntelligenceLayer:
         if not mvp_scope:
             ambiguous_fields.append("mvp_scope")
 
-        readiness_score = float(idea_readiness.get("score") or 0)
+        canonical_readiness_score = float(
+            idea_readiness.get("score")
+            or 0
+        )
 
         base_score = 1.0
-        base_score -= 0.10 * len(missing_fields)
-        base_score -= 0.04 * len(ambiguous_fields)
+        base_score -= (
+            0.10
+            * len(missing_fields)
+        )
+        base_score -= (
+            0.04
+            * len(ambiguous_fields)
+        )
 
-        if readiness_score > 0:
-            base_score = (base_score + readiness_score) / 2
+        if canonical_readiness_score > 0:
+            base_score = (
+                base_score
+                + canonical_readiness_score
+            ) / 2
 
-        score = round(max(0.0, min(1.0, base_score)), 2)
+        score = round(
+            max(
+                0.0,
+                min(
+                    1.0,
+                    base_score,
+                ),
+            ),
+            2,
+        )
 
         return {
-            "format": "context_confidence_v2",
+            "format": (
+                "context_confidence_v3_"
+                "non_authoritative"
+            ),
             "score": score,
-            "missing_fields": self._unique(missing_fields),
-            "ambiguous_fields": self._unique(ambiguous_fields),
-            "ready_for_agents": score >= 0.75,
-            "ready_for_strict_source_search": score >= 0.80,
-            "readiness_score": readiness_score,
+            "missing_fields": self._unique(
+                missing_fields
+            ),
+            "ambiguous_fields": self._unique(
+                ambiguous_fields
+            ),
+            "readiness_score": (
+                canonical_readiness_score
+            ),
+            "purpose": (
+                "source_discovery_diagnostics"
+            ),
+            "authority": "none",
+            "decision_owner": (
+                "idea_readiness_checker+"
+                "context_confidence_gate"
+            ),
+            "non_authoritative": True,
         }
 
     def _agent_instructions(self, language: str) -> Dict[str, str]:
