@@ -211,6 +211,18 @@ class Project(Base):
         nullable=True,
     )
 
+    analysis_run_id: Mapped[Optional[str]] = mapped_column(
+        String(36), nullable=True, index=True
+    )
+
+    analysis_heartbeat_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    analysis_attempt: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False
+    )
+
     user_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("users.id", ondelete="CASCADE"),
