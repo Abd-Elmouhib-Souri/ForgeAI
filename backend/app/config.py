@@ -79,4 +79,30 @@ class Settings(BaseSettings):
     PASSWORD_RESET_EXPIRE_HOURS: int = 1
 
 
+    # Runtime analysis and web-search configuration.
+    GEMINI_SEARCH_MODEL: str = "gemini-3-flash-preview"
+    ANALYSIS_MAX_CONCURRENT_RUNS: int = 2
+    ENABLE_TAVILY_SEARCH: bool = True
+    TAVILY_API_KEY: str = ""
+    TAVILY_SEARCH_URL: str = "https://api.tavily.com/search"
+    TAVILY_SEARCH_DEPTH: str = "basic"
+    TAVILY_MAX_RESULTS: int = 8
+    TAVILY_MIN_SCORE: float = 0.35
+    TAVILY_CHUNKS_PER_SOURCE: int = 2
+    TAVILY_INCLUDE_RAW_CONTENT: bool = False
+    TAVILY_SAFE_SEARCH: bool = False
+    TAVILY_MAX_CONCURRENT_REQUESTS: int = 3
+
+    ENABLE_GEMINI_GROUNDED_SEARCH: bool = False
+    ENABLE_DDGS_FALLBACK: bool = True
+    SEARCH_PRIMARY_PROVIDER: str = "tavily"
+    SEARCH_FALLBACK_PROVIDER: str = "ddgs"
+    SEARCH_MAX_RESULTS_PER_QUERY: int = 8
+    SEARCH_MIN_RESULTS: int = 4
+    SEARCH_PROVIDER_TIMEOUT_SECONDS: int = 35
+    SEARCH_CACHE_TTL_SECONDS: int = 21600
+    SEARCH_CIRCUIT_FAILURES: int = 2
+    SEARCH_CIRCUIT_COOLDOWN_SECONDS: int = 900
+    SEARCH_MAX_QUERIES_PER_ANALYSIS: int = 10
+
 settings = Settings()
