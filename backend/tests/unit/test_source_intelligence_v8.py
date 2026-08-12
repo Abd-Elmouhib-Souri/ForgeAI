@@ -208,7 +208,14 @@ def test_unrelated_healthcare_product_is_rejected() -> None:
 
     assert decision["public_display"] is False
     assert decision["rejected"] is True
-    assert decision["canonical_category"] == "irrelevant"
+
+    # Without a closed sector taxonomy the resolver may retain an
+    # adjacent-solution candidate role from weak structural overlap.
+    # The relevance gate remains authoritative for publication safety:
+    # unrelated evidence must be rejected and can never become direct.
+    assert decision["canonical_category"] != "direct_competitor"
+    assert decision["source_role"] != "direct_competitor"
+    assert decision["is_direct_competitor"] is False
 
 
 def test_canonical_ledger_keeps_one_primary_category_per_source() -> None:

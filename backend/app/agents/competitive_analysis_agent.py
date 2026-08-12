@@ -789,7 +789,25 @@ class CompetitiveAnalysisAgent:
             structured_project_context=structured_project_context,
             project_context=project_context,
         )
-        if not business_terms:
+        verified_direct = bool(
+            category == "direct_competitor"
+            and source_role == "direct_competitor"
+            and bool(
+                source.get(
+                    "is_direct_competitor"
+                )
+            )
+            and region_match == "local"
+        )
+
+        # SourceRelevanceGate may establish a direct competitor through
+        # deterministic operational equivalence even when the public page
+        # shares no literal project-domain token. Do not require a second
+        # lexical business-term proof after canonical verification.
+        if (
+            not business_terms
+            and not verified_direct
+        ):
             return "no_business_specific_term"
 
         evidence_categories = {
@@ -810,18 +828,18 @@ class CompetitiveAnalysisAgent:
         if not evidence_categories:
             return "missing_evidence_category"
 
-        # Only the direct-competitor category requires exact target, workflow
-        # and solution identity. Every other category is intentionally useful
-        # without satisfying that strict test.
-        if category == "direct_competitor":
-            if not bool(source.get("is_direct_competitor")):
-                return "direct_competitor_not_verified"
-            if not bool(source.get("same_or_close_target_user")):
-                return "direct_competitor_target_not_verified"
-            if not bool(source.get("same_or_close_use_case")):
-                return "direct_competitor_workflow_not_verified"
-            if not bool(source.get("same_or_close_solution_category")):
-                return "direct_competitor_solution_not_verified"
+        # SourceRelevanceGate is authoritative for direct-competitor
+        # verification. This final public-safety pass must not recalculate
+        # target, workflow or solution identity from lexical flags.
+        if (
+            category == "direct_competitor"
+            and not bool(
+                source.get(
+                    "is_direct_competitor"
+                )
+            )
+        ):
+            return "direct_competitor_not_verified"
 
         return ""
 
@@ -1055,12 +1073,16 @@ class CompetitiveAnalysisAgent:
             return False
 
         return (
-            score >= self.LOCAL_DIRECT_MIN_SCORE
-            and bool(source.get("is_direct_competitor"))
-            and bool(source.get("same_or_close_target_user"))
-            and bool(source.get("same_or_close_use_case"))
-            and bool(source.get("same_or_close_solution_category"))
-            and bool(source.get("url"))
+            score
+            >= self.LOCAL_DIRECT_MIN_SCORE
+            and bool(
+                source.get(
+                    "is_direct_competitor"
+                )
+            )
+            and bool(
+                source.get("url")
+            )
         )
 
     def _local_direct_source_items(
