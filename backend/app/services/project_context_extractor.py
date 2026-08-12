@@ -615,6 +615,7 @@ class ProjectContextExtractor:
             actors=actors,
             mvp_scope=mvp_scope,
             structured=structured,
+            language=language,
         )
 
         problem = ProblemContext(
@@ -846,6 +847,7 @@ class ProjectContextExtractor:
             confidence=confidence,
         )
 
+
     def _extract_explicit_actors(
         self,
         *,
@@ -854,8 +856,18 @@ class ProjectContextExtractor:
         analysis_data: Dict[str, Any],
     ) -> List[ActorContext]:
         """
-        Les acteurs explicitement écrits sont prioritaires.
+        Extract explicit actors without losing the role relation
+        stated by the user.
+
+        A sentence such as "the economic buyer is X" carries more
+        semantic authority than keywords contained inside X.
         """
+        declared_roles = (
+            self._declared_actor_roles(
+                description
+            )
+        )
+
         names = (
             self._listify(
                 project_context.get(
@@ -923,6 +935,39 @@ class ProjectContextExtractor:
         output: List[ActorContext] = []
         seen: set[str] = set()
 
+        # Explicit role declarations have highest authority.
+        for raw_name, role in declared_roles:
+            name = self._clean_actor(
+                raw_name
+            )
+
+            key = comparison_key(
+                name
+            )
+
+            if (
+                not name
+                or not key
+                or key in seen
+                or key in self.GENERIC_ACTORS
+            ):
+                continue
+
+            seen.add(
+                key
+            )
+
+            output.append(
+                ActorContext(
+                    name=name,
+                    role=role,
+                    is_explicit=True,
+                )
+            )
+
+        # Explicit target-user lists remain valid, but their role
+        # is inferred only from the actor name when no declaration
+        # already supplied a stronger role.
         for raw_name in names:
             name = self._clean_actor(
                 raw_name
@@ -953,6 +998,197 @@ class ProjectContextExtractor:
                     is_explicit=True,
                 )
             )
+
+        return output[:8]
+
+
+    def _declared_actor_roles(
+        self,
+        description: str,
+    ) -> List[Tuple[str, ActorRole]]:
+        """
+        Resolve actor roles from explicit linguistic relations.
+
+        The declaration itself has authority:
+        operational user, economic buyer, payer or decision-maker.
+        The industry never assigns the role.
+        """
+        patterns: Tuple[
+            Tuple[re.Pattern[str], ActorRole],
+            ...,
+        ] = (
+            (
+                re.compile(
+                    r"\b(?:the\s+)?"
+                    r"(?:main|primary)\s+"
+                    r"operational\s+user\s+"
+                    r"(?:"
+                    r"is"
+                    r"|would(?:\s+(?:probably|likely|typically))?\s+be"
+                    r"|will\s+be"
+                    r")\s+"
+                    r"(.+?)"
+                    r"(?="
+                    r"\s+(?:responsible\s+for|in\s+charge\s+of)\b"
+                    r"|,\s*(?:but|however|although)\b"
+                    r"|[.;]"
+                    r"|$"
+                    r")",
+                    re.IGNORECASE,
+                ),
+                ActorRole.USER,
+            ),
+            (
+                re.compile(
+                    r"\b(?:utilisateur|usager)\s+"
+                    r"op(?:e|\u00e9)rationnel\s+"
+                    r"(?:principal\s+)?"
+                    r"(?:est|serait|sera)"
+                    r"(?:\s+(?:probablement|vraisemblablement))?"
+                    r"\s+(.+?)"
+                    r"(?="
+                    r"\s+(?:responsable\s+de|charg(?:e|\u00e9)e?\s+de)\b"
+                    r"|,\s*(?:mais|cependant)\b"
+                    r"|[.;]"
+                    r"|$"
+                    r")",
+                    re.IGNORECASE,
+                ),
+                ActorRole.USER,
+            ),
+            (
+                re.compile(
+                    r"\b(?:the\s+)?"
+                    r"economic\s+buyer\s+"
+                    r"(?:"
+                    r"is"
+                    r"|would(?:\s+(?:probably|likely|typically))?\s+be"
+                    r"|will\s+be"
+                    r")\s+"
+                    r"(.+?)"
+                    r"(?="
+                    r",\s*(?:but|however|although)\b"
+                    r"|[.;]"
+                    r"|$"
+                    r")",
+                    re.IGNORECASE,
+                ),
+                ActorRole.PAYER,
+            ),
+            (
+                re.compile(
+                    r"\bacheteur\s+"
+                    r"(?:e|\u00e9)conomique\s+"
+                    r"(?:est|serait|sera)"
+                    r"(?:\s+(?:probablement|vraisemblablement))?"
+                    r"\s+(.+?)"
+                    r"(?="
+                    r",\s*(?:mais|cependant)\b"
+                    r"|[.;]"
+                    r"|$"
+                    r")",
+                    re.IGNORECASE,
+                ),
+                ActorRole.PAYER,
+            ),
+            (
+                re.compile(
+                    r"\b(?:the\s+)?"
+                    r"decision[ -]?maker\s+"
+                    r"(?:"
+                    r"is"
+                    r"|would(?:\s+(?:probably|likely))?\s+be"
+                    r"|will\s+be"
+                    r")\s+"
+                    r"(.+?)"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.DECISION_MAKER,
+            ),
+            (
+                re.compile(
+                    r"\bd(?:e|\u00e9)cideur\s+"
+                    r"(?:est|serait|sera)"
+                    r"(?:\s+(?:probablement|vraisemblablement))?"
+                    r"\s+(.+?)"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.DECISION_MAKER,
+            ),
+            (
+                re.compile(
+                    r"\b(?:the\s+)?payer\s+"
+                    r"(?:"
+                    r"is"
+                    r"|would(?:\s+(?:probably|likely))?\s+be"
+                    r"|will\s+be"
+                    r")\s+"
+                    r"(.+?)"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.PAYER,
+            ),
+            (
+                re.compile(
+                    r"\bpayeur\s+"
+                    r"(?:est|serait|sera)"
+                    r"(?:\s+(?:probablement|vraisemblablement))?"
+                    r"\s+(.+?)"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.PAYER,
+            ),
+        )
+
+        output: List[
+            Tuple[str, ActorRole]
+        ] = []
+
+        seen: set[
+            Tuple[str, str]
+        ] = set()
+
+        for sentence in self._sentences(
+            description
+        ):
+            for pattern, role in patterns:
+                match = pattern.search(
+                    sentence
+                )
+
+                if not match:
+                    continue
+
+                name = self._clean_actor(
+                    match.group(1)
+                )
+
+                key = (
+                    comparison_key(name),
+                    str(role.value),
+                )
+
+                if (
+                    not name
+                    or not key[0]
+                    or key in seen
+                ):
+                    continue
+
+                seen.add(
+                    key
+                )
+
+                output.append(
+                    (
+                        name,
+                        role,
+                    )
+                )
 
         return output
 
@@ -1149,6 +1385,7 @@ class ProjectContextExtractor:
             max_items=8,
         )
 
+
     def _extract_workflows(
         self,
         *,
@@ -1156,26 +1393,108 @@ class ProjectContextExtractor:
         actors: Sequence[ActorContext],
         mvp_scope: Sequence[str],
         structured: Dict[str, Any],
+        language: str,
     ) -> List[WorkflowContext]:
         """
-        Construit de vrais workflows métier.
+        Build canonical workflows from explicit user actions.
 
-        Les phrases de problème et de périmètre MVP sont exclues.
+        Multiple coordinated actions in the same sentence are treated
+        as separate workflows. Search/intelligence hints remain
+        secondary and never override explicit user actions.
         """
         actor_name = self._preferred_actor(
             actors
         )
 
         scope_keys = {
-            comparison_key(
-                item
-            )
+            comparison_key(item)
             for item in mvp_scope
         }
 
         candidates: List[
             Dict[str, Any]
         ] = []
+
+        def add_candidates(
+            sentence: str,
+            *,
+            index: int,
+            explicit: bool,
+        ) -> None:
+            occurrences = (
+                self._workflow_action_occurrences(
+                    sentence
+                )
+            )
+
+            for order, occurrence in enumerate(
+                occurrences
+            ):
+                match = occurrence["match"]
+
+                next_start = (
+                    occurrences[
+                        order + 1
+                    ]["match"].start()
+                    if order + 1
+                    < len(occurrences)
+                    else len(sentence)
+                )
+
+                clause = sentence[
+                    match.start():
+                    next_start
+                ]
+
+                clause = re.sub(
+                    r"(?:,\s*|\s+)"
+                    r"(?:and|et)\s*$",
+                    "",
+                    clause.strip(),
+                    flags=re.IGNORECASE,
+                )
+
+                clause = clause.strip(
+                    " ,;."
+                )
+
+                if not clause:
+                    continue
+
+                local_match = (
+                    occurrence["pattern"].search(
+                        clause
+                    )
+                )
+
+                if local_match is None:
+                    continue
+
+                candidates.append(
+                    {
+                        "sentence": clause,
+                        "action": occurrence[
+                            "action"
+                        ],
+                        "surface": occurrence[
+                            "surface"
+                        ],
+                        "match": local_match,
+                        "index": (
+                            index * 100
+                            + order
+                        ),
+                        "score": (
+                            self._workflow_score(
+                                clause,
+                                occurrence[
+                                    "action"
+                                ],
+                            )
+                        ),
+                        "explicit": explicit,
+                    }
+                )
 
         for index, sentence in enumerate(
             sentences
@@ -1190,32 +1509,19 @@ class ProjectContextExtractor:
             ):
                 continue
 
-            action, match = (
-                self._canonical_action_with_match(
-                    sentence
+            add_candidates(
+                sentence,
+                index=index,
+                explicit=True,
+            )
+
+        # Legacy structured workflows may still exist in old persisted
+        # packets. They remain lower-confidence compatibility inputs.
+        for offset, value in enumerate(
+            self._listify(
+                structured.get(
+                    "priority_workflows"
                 )
-            )
-
-            if not action or match is None:
-                continue
-
-            candidates.append(
-                {
-                    "sentence": sentence,
-                    "action": action,
-                    "match": match,
-                    "index": index,
-                    "score": self._workflow_score(
-                        sentence,
-                        action,
-                    ),
-                    "explicit": True,
-                }
-            )
-
-        for value in self._listify(
-            structured.get(
-                "priority_workflows"
             )
         ):
             if self._is_scope_only(
@@ -1228,31 +1534,18 @@ class ProjectContextExtractor:
             ):
                 continue
 
-            action, match = (
-                self._canonical_action_with_match(
-                    value
-                )
+            before = len(candidates)
+
+            add_candidates(
+                value,
+                index=10_000 + offset,
+                explicit=False,
             )
 
-            if not action or match is None:
-                continue
-
-            candidates.append(
-                {
-                    "sentence": value,
-                    "action": action,
-                    "match": match,
-                    "index": 10_000,
-                    "score": (
-                        self._workflow_score(
-                            value,
-                            action,
-                        )
-                        - 15
-                    ),
-                    "explicit": False,
-                }
-            )
+            for candidate in candidates[
+                before:
+            ]:
+                candidate["score"] -= 15
 
         if not candidates:
             return []
@@ -1270,76 +1563,9 @@ class ProjectContextExtractor:
 
         seen: set[str] = set()
 
-        primary = candidates[0]
-
-        primary_object = self._action_object(
-            primary["sentence"],
-            primary["match"],
-        )
-
-        primary_result = (
-            self._result_after_action(
-                primary["sentence"],
-                primary["match"],
-                primary["action"],
-            )
-        )
-
-        if not primary_result:
-            primary_result = (
-                self._supporting_result(
-                    candidates,
-                    primary,
-                )
-            )
-
-        primary_output = (
-            self._supporting_output(
-                candidates
-            )
-        )
-
-        primary_workflow = WorkflowContext(
-            name=self._workflow_name(
-                action=primary["action"],
-                object_text=primary_object,
-                result=primary_result,
-                output=primary_output,
-            ),
-            actor=actor_name,
-            action=primary["action"],
-            object=primary_object,
-            result=primary_result,
-            output=primary_output,
-            is_explicit=bool(
-                primary["explicit"]
-            ),
-            confidence=(
-                0.90
-                if primary["explicit"]
-                else 0.60
-            ),
-        )
-
-        primary_key = comparison_key(
-            primary_workflow.sentence
-        )
-
-        if (
-            primary_key
-            and primary_key
-            not in scope_keys
-            and primary_workflow.is_actionable
+        for candidate_index, candidate in enumerate(
+            candidates
         ):
-            output.append(
-                primary_workflow
-            )
-
-            seen.add(
-                primary_key
-            )
-
-        for candidate in candidates:
             object_text = self._action_object(
                 candidate["sentence"],
                 candidate["match"],
@@ -1353,25 +1579,28 @@ class ProjectContextExtractor:
                 )
             )
 
-            output_text = (
-                self._output_phrase(
-                    candidate["sentence"]
+            output_text = self._output_phrase(
+                candidate["sentence"]
+            )
+
+            localized_action = (
+                self._localized_workflow_action(
+                    candidate["action"],
+                    candidate["surface"],
+                    language,
                 )
             )
 
             workflow = WorkflowContext(
                 name=self._workflow_name(
-                    action=candidate[
-                        "action"
-                    ],
+                    action=localized_action,
                     object_text=object_text,
                     result=result_text,
                     output=output_text,
+                    language=language,
                 ),
                 actor=actor_name,
-                action=candidate[
-                    "action"
-                ],
+                action=localized_action,
                 object=object_text,
                 result=result_text,
                 output=output_text,
@@ -1379,11 +1608,18 @@ class ProjectContextExtractor:
                     candidate["explicit"]
                 ),
                 confidence=(
-                    0.82
-                    if candidate[
-                        "explicit"
-                    ]
-                    else 0.50
+                    0.90
+                    if (
+                        candidate["explicit"]
+                        and candidate_index == 0
+                    )
+                    else (
+                        0.82
+                        if candidate[
+                            "explicit"
+                        ]
+                        else 0.50
+                    )
                 ),
             )
 
@@ -1421,6 +1657,421 @@ class ProjectContextExtractor:
                 break
 
         return output
+
+
+    def _workflow_action_occurrences(
+        self,
+        sentence: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Find every actionable verb occurrence in a sentence.
+
+        ACTION_PATTERNS remain the shared vocabulary.
+        The extension below contains only generic workflow verbs;
+        it contains no sector, archetype or domain-specific object.
+        """
+        extra_patterns: Tuple[
+            Tuple[re.Pattern[str], str],
+            ...,
+        ] = (
+            (
+                re.compile(
+                    r"\bcreat(?:e|es|ed|ing)?\b"
+                    r"|\bcr(?:e|\u00e9)"
+                    r"(?:er|e|es|ent|ait|ant)?\b",
+                    re.IGNORECASE,
+                ),
+                "creer",
+            ),
+            (
+                re.compile(
+                    r"\brecord(?:s|ed|ing)?\b"
+                    r"|\benregistr"
+                    r"(?:er|e|\u00e9|ent|ait|ant)?\b",
+                    re.IGNORECASE,
+                ),
+                "enregistrer",
+            ),
+            (
+                re.compile(
+                    r"\bapprove(?:s|d|ing)?\b"
+                    r"|\bapprouv"
+                    r"(?:er|e|\u00e9|ent|ait|ant)?\b",
+                    re.IGNORECASE,
+                ),
+                "approuver",
+            ),
+            (
+                re.compile(
+                    r"\bexport(?:s|ed|ing)?\b"
+                    r"|\bexport"
+                    r"(?:er|e|\u00e9|ent|ait|ant)?\b",
+                    re.IGNORECASE,
+                ),
+                "exporter",
+            ),
+        )
+
+        raw: List[
+            Dict[str, Any]
+        ] = []
+
+        for pattern, action in (
+            tuple(self.ACTION_PATTERNS)
+            + extra_patterns
+        ):
+            for match in pattern.finditer(
+                sentence
+            ):
+                raw.append(
+                    {
+                        "pattern": pattern,
+                        "action": action,
+                        "match": match,
+                        "surface": match.group(0),
+                    }
+                )
+
+        raw.sort(
+            key=lambda item: (
+                item["match"].start(),
+                -(
+                    item["match"].end()
+                    - item["match"].start()
+                ),
+                -self.ACTION_PRIORITY.get(
+                    item["action"],
+                    50,
+                ),
+            )
+        )
+
+        output: List[
+            Dict[str, Any]
+        ] = []
+
+        occupied: List[
+            Tuple[int, int]
+        ] = []
+
+        for item in raw:
+            match = item["match"]
+
+            start = match.start()
+            end = match.end()
+
+            if any(
+                start < used_end
+                and end > used_start
+                for used_start, used_end
+                in occupied
+            ):
+                continue
+
+            if self._workflow_match_is_nominal(
+                sentence=sentence,
+                item=item,
+                accepted=output,
+            ):
+                continue
+
+            output.append(
+                item
+            )
+
+            occupied.append(
+                (
+                    start,
+                    end,
+                )
+            )
+
+        output.sort(
+            key=lambda item: (
+                item["match"].start(),
+                item["match"].end(),
+            )
+        )
+
+        return output
+
+
+    def _workflow_match_is_nominal(
+        self,
+        *,
+        sentence: str,
+        item: Dict[str, Any],
+        accepted: Sequence[Dict[str, Any]],
+    ) -> bool:
+        """
+        Reject noun matches and project-description meta actions.
+
+        Examples:
+        - "weekly schedules" is a noun phrase;
+        - "about schedule changes" is not a new action;
+        - "I want to create an application" describes the project,
+          not an end-user workflow.
+        """
+        action_key = comparison_key(
+            item["action"]
+        )
+
+        surface_key = comparison_key(
+            item["surface"]
+        )
+
+        match = item["match"]
+
+        prefix = sentence[
+            :match.start()
+        ].rstrip()
+
+        previous_word_match = re.search(
+            r"([^\W\d_]+)\s*$",
+            prefix,
+            flags=re.UNICODE,
+        )
+
+        previous_word = (
+            comparison_key(
+                previous_word_match.group(1)
+            )
+            if previous_word_match
+            else ""
+        )
+
+        if (
+            action_key == "planifier"
+            and surface_key.startswith(
+                "schedul"
+            )
+        ):
+            nominal_predecessors = {
+                "a",
+                "an",
+                "the",
+                "about",
+                "of",
+                "for",
+                "current",
+                "existing",
+                "weekly",
+                "daily",
+                "monthly",
+                "annual",
+                "yearly",
+                "shift",
+                "team",
+                "work",
+                "their",
+                "our",
+                "your",
+                "this",
+                "that",
+            }
+
+            if (
+                previous_word
+                in nominal_predecessors
+            ):
+                return True
+
+        if action_key == "creer":
+            prefix_key = comparison_key(
+                prefix
+            )
+
+            meta_creation_markers = (
+                "i want to",
+                "we want to",
+                "the idea is to",
+                "our idea is to",
+                "our goal is to",
+                "the project is to",
+                "we plan to",
+                "je veux",
+                "nous voulons",
+                "on veut",
+                "l idee est de",
+                "notre idee est de",
+                "notre objectif est de",
+                "le projet consiste a",
+                "nous prevoyons de",
+            )
+
+            if any(
+                prefix_key.endswith(
+                    marker
+                )
+                for marker
+                in meta_creation_markers
+            ):
+                return True
+
+        if (
+            action_key
+            in {
+                "enregistrer",
+                "exporter",
+            }
+            and previous_word
+            in {
+                "a",
+                "an",
+                "the",
+                "this",
+                "that",
+                "un",
+                "une",
+                "le",
+                "la",
+                "les",
+                "ce",
+                "cette",
+            }
+        ):
+            return True
+
+        if accepted:
+            previous = accepted[-1][
+                "match"
+            ]
+
+            between = sentence[
+                previous.end():
+                match.start()
+            ]
+
+            has_action_separator = bool(
+                re.search(
+                    r"[,;]"
+                    r"|\b(?:and|et)\b",
+                    between,
+                    flags=re.IGNORECASE,
+                )
+            )
+
+            if (
+                action_key
+                in {
+                    "creer",
+                    "enregistrer",
+                    "approuver",
+                    "exporter",
+                }
+                and not has_action_separator
+            ):
+                return True
+
+            if (
+                action_key == "planifier"
+                and surface_key.startswith(
+                    "schedul"
+                )
+                and not has_action_separator
+            ):
+                return True
+
+        return False
+
+
+    def _localized_workflow_action(
+        self,
+        action: str,
+        surface: str,
+        language: str,
+    ) -> str:
+        """
+        Localize a canonical action without changing its semantics.
+        """
+        action_key = comparison_key(
+            action
+        )
+
+        surface_key = comparison_key(
+            surface
+        )
+
+        if language == "en":
+            if action_key == "planifier":
+                if (
+                    surface_key.startswith(
+                        "creat"
+                    )
+                    or surface_key.startswith(
+                        "cre"
+                    )
+                ):
+                    return "create"
+
+                return "schedule"
+
+            if action_key == "alerter":
+                if surface_key.startswith(
+                    "notif"
+                ):
+                    return "notify"
+
+                return "alert"
+
+            if action_key == "transmettre":
+                if surface_key.startswith(
+                    "send"
+                ):
+                    return "send"
+
+                return "transmit"
+
+            english_actions = {
+                "creer": "create",
+                "inspecter": "inspect",
+                "detecter": "detect",
+                "surveiller": "monitor",
+                "reserver": "book",
+                "commander": "order",
+                "gerer": "manage",
+                "suivre": "track",
+                "mettre en relation": "connect",
+                "publier": "publish",
+                "classifier": "classify",
+                "analyser": "analyze",
+                "mesurer": "measure",
+                "enregistrer": "record",
+                "approuver": "approve",
+                "exporter": "export",
+            }
+
+            return english_actions.get(
+                action_key,
+                action,
+            )
+
+        french_actions = {
+            "creer": "cr\u00e9er",
+            "inspecter": "inspecter",
+            "detecter": "d\u00e9tecter",
+            "surveiller": "surveiller",
+            "reserver": "r\u00e9server",
+            "commander": "commander",
+            "planifier": "planifier",
+            "gerer": "g\u00e9rer",
+            "suivre": "suivre",
+            "mettre en relation": "mettre en relation",
+            "publier": "publier",
+            "classifier": "classifier",
+            "analyser": "analyser",
+            "mesurer": "mesurer",
+            "transmettre": "transmettre",
+            "alerter": "alerter",
+            "enregistrer": "enregistrer",
+            "approuver": "approuver",
+            "exporter": "exporter",
+        }
+
+        return french_actions.get(
+            action_key,
+            action,
+        )
 
     def _confidence(
         self,
@@ -3304,6 +3955,7 @@ class ProjectContextExtractor:
 
         return ""
 
+
     def _workflow_name(
         self,
         *,
@@ -3311,6 +3963,7 @@ class ProjectContextExtractor:
         object_text: str,
         result: str,
         output: str,
+        language: str = "fr",
     ) -> str:
         text = clean_text(
             " ".join(
@@ -3324,20 +3977,32 @@ class ProjectContextExtractor:
         )
 
         if result:
-            text = (
-                f"{text} afin de "
-                f"{result}"
-                if text
-                else result
-            )
+            if language == "en":
+                text = (
+                    f"{text} to {result}"
+                    if text
+                    else result
+                )
+            else:
+                text = (
+                    f"{text} afin de {result}"
+                    if text
+                    else result
+                )
 
         if output:
-            text = (
-                f"{text}, puis produire "
-                f"{output}"
-                if text
-                else output
-            )
+            if language == "en":
+                text = (
+                    f"{text}, then produce {output}"
+                    if text
+                    else output
+                )
+            else:
+                text = (
+                    f"{text}, puis produire {output}"
+                    if text
+                    else output
+                )
 
         return self._compact(
             text,

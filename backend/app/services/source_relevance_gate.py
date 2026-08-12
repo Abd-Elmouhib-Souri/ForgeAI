@@ -220,51 +220,20 @@ class SourceRelevanceGate:
         "technology", "technologie", "system", "système", "service",
     }
 
-    CROSS_SECTOR_PRODUCT_HINTS = {
-        "manufacturing", "factory", "industrial", "mes", "surgical",
-        "sterilization", "hospital", "medical device", "pharmaceutical",
-        "inventory manufacturing", "warehouse management", "automotive",
-    }
 
-    VERTICAL_SECTOR_GROUPS = {
-        "healthcare": {
-            "healthcare", "hospital", "hospitals", "clinic", "clinical",
-            "physician", "physicians", "nurse", "nurses", "medical",
-            "patient", "patients", "surgery", "surgical",
-        },
-        "education": {
-            "education", "school", "schools", "student", "students",
-            "teacher", "teachers", "university", "learning", "classroom",
-        },
-        "agriculture": {
-            "agriculture", "agricultural", "farm", "farms", "farmer",
-            "farmers", "crop", "crops", "livestock", "beekeeping",
-            "apiary", "hive", "hives", "apiculture",
-        },
-        "manufacturing": {
-            "manufacturing", "factory", "factories", "industrial",
-            "production line", "mes", "automotive", "warehouse",
-        },
-        "hospitality": {
-            "hospitality", "restaurant", "restaurants", "hotel", "hotels",
-            "cafe", "cafes", "retail", "store", "stores",
-        },
-        "mobility": {
-            "taxi", "driver", "drivers", "chauffeur", "chauffeurs",
-            "passenger", "passengers", "passager", "passagers",
-            "ride hailing", "e hailing", "taxi booking", "taxi dispatch",
-            "urban mobility", "mobilite urbaine", "mobilité urbaine",
-        },
-        "recruitment": {
-            "internship", "internships", "stage", "stages",
-            "recruitment", "recrutement", "job board", "career service",
-            "application candidate", "candidature", "employer", "recruiter",
-        },
-        "logistics": {
-            "freight", "warehouse", "shipping", "logistics", "logistique",
-            "transport management system", "tms software", "fleet logistics",
-            "maritime", "cargo", "supply chain",
-        },
+    RECRUITMENT_CONTEXT_TERMS = {
+        'application candidate',
+        'candidature',
+        'career service',
+        'employer',
+        'internship',
+        'internships',
+        'job board',
+        'recruiter',
+        'recruitment',
+        'recrutement',
+        'stage',
+        'stages',
     }
 
     RESEARCH_DOMAINS = {
@@ -545,29 +514,11 @@ class SourceRelevanceGate:
             same_target = False
             target_match_level = "none"
 
-        cross_sector_product = bool(
-            source_type in {"competitor", "pricing_page", "adjacent_solution", "technology_benchmark"}
-            and not same_sector
-            and target_match_level == "none"
-            and self._contains_any(source_text, self.CROSS_SECTOR_PRODUCT_HINTS)
-        )
-        if cross_sector_product:
-            source_type = "technology_benchmark" if matched_domain else "irrelevant"
-
-        mismatch_terms = self._vertical_mismatch_terms(
-            source_text=source_text,
-            title_url_text=title_url_text,
-            context=context,
-        )
-        sector_mismatch = bool(is_product_page and mismatch_terms)
-        if sector_mismatch and source_type in {
-            "competitor", "pricing_page", "adjacent_solution", "technology_benchmark"
-        }:
-            # A vertical product can remain a useful benchmark, but never a
-            # direct or high-confidence comparable solution for another sector.
-            source_type = "adjacent_solution"
-            same_target = False
-            target_match_level = "none"
+        # Sector mismatch is kept as neutral compatibility metadata.
+        # Competitor and benchmark classification is now driven entirely by
+        # positive project semantics, operation equivalence and geography.
+        mismatch_terms = []
+        sector_mismatch = False
 
         role_decision = source_role_resolver.resolve(
             source=source,
@@ -609,30 +560,65 @@ class SourceRelevanceGate:
             and matched_domain
             and not article_like
         )
+        matched_use_case_set = set(
+            matched_use_case
+        )
+        matched_solution_set = set(
+            matched_solution
+        )
+
+        # A compact local product page may expose only one workflow
+        # token while still providing independent business-domain
+        # evidence. This is sufficient for adjacent evidence, but
+        # never sufficient by itself for direct-competitor identity.
+        distinctive_domain_anchor = any(
+            term not in matched_use_case_set
+            and term not in matched_solution_set
+            for term in matched_domain
+        )
+
+        compact_local_operation_evidence = bool(
+            source_role == "adjacent_solution"
+            and is_product_page
+            and consumer_operation
+            and distinctive_domain_anchor
+            and (
+                matched_use_case
+                or matched_solution
+            )
+            and not sector_mismatch
+        )
+
         local_adjacent_evidence = bool(
             source_type == "adjacent_solution"
+            and source_role == "adjacent_solution"
             and region_match == "local"
             and matched_domain
             and (
                 same_use_case
                 or same_solution
-                or len(matched_domain) >= 2
                 or ai_adjacent_confirmation
                 or local_solution_announcement
+                or compact_local_operation_evidence
             )
         )
 
         if operation_equivalent and source_role == "direct_competitor":
-            # The role resolver established a narrow, archetype-aware identity
-            # between short consumer ride copy and the project's full workflow.
-            # Promote the semantic flags before evidence scoring so the source
-            # is evaluated as the exact local product it actually is.
-            same_target = True
-            target_match_level = "exact"
+            # Operational equivalence establishes workflow and solution
+            # proximity from deterministic project semantics. It does not
+            # invent an exact target-user identity.
             same_use_case = True
             same_solution = True
             is_product_page = True
             source_type = "competitor"
+
+        semantic_equivalence_evidence = bool(
+            operation_equivalent
+            and source_role == "direct_competitor"
+            and region_match == "local"
+            and consumer_operation
+            and not sector_mismatch
+        )
 
         matched_forbidden = self._blocking_forbidden_terms(
             terms=raw_matched_forbidden,
@@ -640,7 +626,7 @@ class SourceRelevanceGate:
             source_role=source_role,
             region_match=region_match,
             strong_business_match=bool(
-                matched_domain
+                (matched_domain or semantic_equivalence_evidence)
                 and (same_target or consumer_operation)
                 and (same_use_case or same_solution)
             ),
@@ -662,6 +648,9 @@ class SourceRelevanceGate:
             local_adjacent_evidence=local_adjacent_evidence,
         )
 
+        if semantic_equivalence_evidence and not evidence_categories:
+            evidence_categories = ["solution_benchmark"]
+
         clear_contextual_link = bool(
             (matched_domain and (same_use_case or same_solution))
             or (
@@ -669,7 +658,7 @@ class SourceRelevanceGate:
                 and consumer_operation
                 and matched_domain
             )
-            or len(matched_domain) >= 2
+            or semantic_equivalence_evidence
             or (
                 source_type in {
                     "market_article",
@@ -709,19 +698,15 @@ class SourceRelevanceGate:
             evidence_categories=evidence_categories,
         )
 
-        if sector_mismatch:
-            score = max(0.0, min(score - 0.08, 0.64))
-
         if (
             operation_equivalent
             and source_role == "direct_competitor"
             and region_match == "local"
         ):
-            # A narrow archetype-aware bridge already proved that this is a
-            # live consumer operation matching the project's core workflow.
-            # Preserve a moderate evidence floor so short product copy is not
-            # punished merely because it repeats only one canonical domain
-            # phrase such as "ride hailing".
+            # Deterministic operational equivalence already established
+            # that this live source performs the project's core workflow.
+            # Preserve a moderate evidence floor for compact product pages
+            # that expose only a subset of canonical terminology.
             score = max(score, 0.60)
 
         is_direct_competitor = self._is_direct_competitor(
@@ -754,6 +739,7 @@ class SourceRelevanceGate:
             product_signals=product_signals,
             evidence_categories=evidence_categories,
             local_adjacent_evidence=local_adjacent_evidence,
+            semantic_equivalence_evidence=semantic_equivalence_evidence,
         )
         rejected = bool(rejection_reason)
         display_threshold = self.PUBLIC_DISPLAY_THRESHOLD
@@ -769,8 +755,6 @@ class SourceRelevanceGate:
             display_threshold = 0.42
         elif source_type == "adjacent_solution" and region_match == "local":
             display_threshold = 0.32
-        elif source_type == "adjacent_solution" and sector_mismatch:
-            display_threshold = 0.55
         elif source_role in {
             "technology_provider",
             "regional_benchmark",
@@ -783,7 +767,6 @@ class SourceRelevanceGate:
             and score >= display_threshold
             and clear_contextual_link
             and evidence_categories
-            and not cross_sector_product
         )
         internal_threshold = self.INTERNAL_USE_THRESHOLD
         if source_type == "technology_benchmark":
@@ -840,11 +823,6 @@ class SourceRelevanceGate:
             internal_only=internal_only,
             rejection_reason=rejection_reason,
         )
-        if sector_mismatch:
-            why_relevant = (
-                f"{why_relevant} | sector_mismatch={','.join(mismatch_terms)}"
-            )[:900]
-
         return asdict(SourceRelevanceDecision(
             source_relevance_score=round(score, 2),
             public_display=public_display,
@@ -1041,118 +1019,8 @@ class SourceRelevanceGate:
             region_terms + title_terms + target_terms,
         )
 
-        # Cross-language semantic aliases are deliberately narrow and only
-        # activated when the locked project context contains the exact domain.
-        # This lets French local pages match an English project description
-        # without weakening the cross-sector gate.
-        semantic_text = self._normalize(
-            " ".join(domain_terms + sector_terms + target_terms + use_case_terms + solution_terms)
-        )
-        if self._contains_any(
-            semantic_text,
-            {
-                "beekeeping", "beekeeper", "apiary", "hive", "honey",
-                "apiculture", "apiculteur", "ruche", "miel", "abeille",
-            },
-        ):
-            domain_terms.extend([
-                "beekeeping", "apiculture", "apiary", "hive", "hives",
-                "ruche", "ruches", "honey", "miel", "bee", "abeille",
-                "beekeeping software", "application apicole",
-            ])
-            sector_terms.extend([
-                "beekeeping", "apiculture", "apiculteur", "apiculteurs",
-                "apiary", "hive", "hives", "ruche", "ruches", "bee",
-                "abeille", "abeilles", "hive management", "gestion ruches",
-                "honey traceability", "tracabilite miel",
-            ])
-            target_terms.extend([
-                "beekeeper", "beekeepers", "apiculteur", "apiculteurs",
-                "honey producer", "honey producers", "producteur miel",
-                "producteurs miel",
-            ])
-            use_case_terms.extend([
-                "hive inspection", "inspection ruche", "inspection ruches",
-                "monitor hives", "surveiller ruches", "surveiller les ruches",
-                "suivi ruches", "suivi des ruches", "suivre inspections",
-                "suivre les inspections", "record inspections",
-                "enregistrer inspections", "ruches", "inspections",
-            ])
-            solution_terms.extend([
-                "beekeeping application", "application apicole",
-                "application apiculteur", "application apiculteurs",
-                "application mobile apiculteurs", "apiary management",
-                "gestion rucher", "hive management", "gestion ruches",
-                "suivi ruches", "suivi des ruches",
-            ])
 
-        if self._contains_any(
-            semantic_text,
-            {
-                "taxi booking", "ride hailing", "e hailing",
-                "taxi dispatch", "application reservation taxi",
-                "application réservation taxi", "commande taxi",
-                "mise en relation taxi chauffeur",
-            },
-        ):
-            domain_terms.extend([
-                "taxi booking", "ride hailing", "e hailing",
-                "taxi dispatch", "online taxi reservation",
-                "application reservation taxi", "application réservation taxi",
-                "commande taxi", "course taxi", "taxi app",
-            ])
-            sector_terms.extend([
-                "taxi", "urban mobility", "mobilite urbaine",
-                "mobilité urbaine", "ride hailing", "e hailing",
-            ])
-            target_terms.extend([
-                "passenger", "passengers", "passager", "passagers",
-                "taxi driver", "taxi drivers", "chauffeur taxi",
-                "chauffeurs taxi",
-            ])
-            use_case_terms.extend([
-                "book taxi", "reserve taxi", "reserver taxi",
-                "réserver taxi", "request ride", "demande course",
-                "accept ride", "accepter course", "pickup passenger",
-                "prise en charge passager",
-            ])
-            solution_terms.extend([
-                "taxi booking app", "ride hailing platform",
-                "application reservation taxi", "application réservation taxi",
-                "taxi dispatch platform", "plateforme taxi",
-            ])
 
-        if self._contains_any(
-            semantic_text,
-            {
-                "internship platform", "internship job board",
-                "plateforme stages", "offres stage etudiants",
-                "offres stage étudiants", "student recruitment",
-            },
-        ):
-            domain_terms.extend([
-                "internship platform", "internship job board",
-                "student recruitment", "plateforme stages",
-                "offres de stage", "candidature stage",
-            ])
-            sector_terms.extend([
-                "internship", "stage", "recruitment", "recrutement",
-                "career services", "employability",
-            ])
-            target_terms.extend([
-                "student", "students", "etudiant", "etudiants",
-                "étudiant", "étudiants", "employer", "company recruiter",
-                "recruteur entreprise",
-            ])
-            use_case_terms.extend([
-                "find internship", "chercher stage", "apply internship",
-                "candidater stage", "publish internship offer",
-                "publier offre stage",
-            ])
-            solution_terms.extend([
-                "internship marketplace", "internship platform",
-                "plateforme mise en relation stages", "job board stages",
-            ])
 
         forbidden = set(self.DEFAULT_FORBIDDEN_DEMO_TERMS)
         forbidden.update(self._normalized_list(
@@ -1241,34 +1109,6 @@ class SourceRelevanceGate:
                 result.append(candidate)
         return self._unique(result)
 
-    def _vertical_mismatch_terms(
-        self,
-        *,
-        source_text: str,
-        title_url_text: str,
-        context: Dict[str, Any],
-    ) -> List[str]:
-        project_text = self._normalize(" ".join(
-            list(context.get("domain_terms") or [])
-            + list(context.get("sector_terms") or [])
-            + list(context.get("target_terms") or [])
-            + list(context.get("use_case_terms") or [])
-            + list(context.get("solution_terms") or [])
-        ))
-
-        project_groups = {
-            name
-            for name, terms in self.VERTICAL_SECTOR_GROUPS.items()
-            if self._contains_any(project_text, terms)
-        }
-        source_groups: set[str] = set()
-        for name, terms in self.VERTICAL_SECTOR_GROUPS.items():
-            title_matches = self._matched_terms(title_url_text, terms)
-            body_matches = self._matched_terms(source_text, terms)
-            if title_matches or len(body_matches) >= 3:
-                source_groups.add(name)
-
-        return sorted(source_groups - project_groups)
 
     # ========================================================
     # Classification and evidence categories
@@ -1383,10 +1223,10 @@ class SourceRelevanceGate:
         elif source_type == "technology_benchmark" and matched_domain_terms:
             categories.append("technology_benchmark")
 
-        # Locality, a target label and one sector word are not sufficient.
+        # Locality, target labels and repeated sector vocabulary are not sufficient.
         # A public adjacent solution must have deterministic workflow/solution
-        # proximity, multiple independent domain concepts, or a high-confidence
-        # AI classification confirming both product shape and sector proximity.
+        # proximity or a high-confidence AI classification confirming both
+        # product shape and sector proximity.
         if local_adjacent_evidence:
             categories.append("adjacent_solution")
 
@@ -1436,26 +1276,40 @@ class SourceRelevanceGate:
     ) -> bool:
         if source_role != "direct_competitor":
             return False
+
         if source_type not in {"competitor", "pricing_page"}:
             return False
+
         minimum_score = (
-            0.58 if operation_equivalent else self.DIRECT_COMPETITOR_THRESHOLD
+            0.58
+            if (
+                consumer_operation
+                or operation_equivalent
+            )
+            else self.DIRECT_COMPETITOR_THRESHOLD
         )
-        if region_match != "local" or score < minimum_score:
-            return False
-        if not same_use_case or not same_solution:
-            return False
-        minimum_domain_terms = 1 if operation_equivalent else 2
-        if len(matched_domain_terms) < minimum_domain_terms:
-            return False
+
         if (
-            len(product_signals) < 2
-            and not self._pricing_path(title_url_text)
-            and not (consumer_operation and operation_equivalent)
+            region_match != "local"
+            or score < minimum_score
         ):
             return False
-        if not same_target and not operation_equivalent:
+
+        # SourceRoleResolver is authoritative for the business
+        # relationship. Do not re-require lexical target identity
+        # after it has already established a direct local operation.
+        #
+        # The gate keeps only page/evidence safeguards here.
+        product_or_operation_evidence = bool(
+            len(product_signals) >= 2
+            or self._pricing_path(title_url_text)
+            or consumer_operation
+            or operation_equivalent
+        )
+
+        if not product_or_operation_evidence:
             return False
+
         return True
 
     def _classify_region(
@@ -1674,6 +1528,7 @@ class SourceRelevanceGate:
         product_signals: List[str],
         evidence_categories: List[str],
         local_adjacent_evidence: bool,
+        semantic_equivalence_evidence: bool,
     ) -> str:
         if matched_forbidden_terms:
             return "Rejected because the source matches forbidden off-topic terms."
@@ -1681,7 +1536,7 @@ class SourceRelevanceGate:
             return "Rejected because the title or URL is clearly off-topic."
         if source_type == "irrelevant" or source_role == "irrelevant":
             return "Rejected because no relevant evidence type could be established."
-        if not matched_domain_terms:
+        if not matched_domain_terms and not semantic_equivalence_evidence:
             return "Rejected because no project-specific domain concept was found."
         if not clear_contextual_link:
             return "Rejected because the contextual link to the exact project is insufficient."
@@ -1892,7 +1747,7 @@ class SourceRelevanceGate:
         )
         return self._contains_any(
             project_text,
-            self.VERTICAL_SECTOR_GROUPS.get("recruitment", set()),
+            self.RECRUITMENT_CONTEXT_TERMS,
         )
 
     def _looks_like_job_listing(self, source: Dict[str, Any]) -> bool:
@@ -1954,8 +1809,11 @@ class SourceRelevanceGate:
             f"{title} {normalized_text[:1200]}",
             self.SOLUTION_ANNOUNCEMENT_HINTS,
         )
+        # A local provider announcement still needs concrete workflow
+        # or solution proximity. Repeated sector/domain vocabulary alone
+        # must never promote a page into a public adjacent solution.
         semantic_proximity = bool(
-            same_use_case or same_solution or len(matched_domain_terms) >= 2
+            same_use_case or same_solution
         )
         named_solution = bool(
             re.search(r"\b[A-Z][A-Za-z0-9_-]{2,}\b", self._safe_text(source.get("title")))

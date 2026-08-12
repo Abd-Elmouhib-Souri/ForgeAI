@@ -1196,7 +1196,10 @@ class ProjectIntelligenceLayer:
             problem=problem,
             solution=solution,
             business_model=business_model,
-            workflows=[main_use_case, mvp_scope],
+            # Workflow authority belongs to ProjectContextExtractor.
+            # PIL must not promote its own search/use-case inference
+            # into resolver-owned structured workflow fields.
+            workflows=[],
         )
 
         # The structured packet must expose a concise revenue hypothesis, not
@@ -1346,7 +1349,7 @@ class ProjectIntelligenceLayer:
             solution=solution,
             language=language,
         )
-        priority_workflows = self._priority_workflows(
+        search_workflows = self._priority_workflows(
             explicit_mvp=explicit_mvp,
             mvp_scope=mvp_scope,
             solution=solution,
@@ -1414,10 +1417,13 @@ class ProjectIntelligenceLayer:
             "solution_type": solution_category or solution,
             "solution_category": solution_category,
             "solution_terms": solution_terms,
-            "main_use_case": priority_workflows[0] if priority_workflows else main_use_case,
-            "priority_workflow": priority_workflows[0] if priority_workflows else main_use_case,
-            "priority_workflows": priority_workflows,
-            "use_cases": priority_workflows or use_case_terms,
+            # Search/use-case inference is non-authoritative here.
+            # Canonical priority workflows are built later by
+            # ProjectContextExtractor.
+            "main_use_case": main_use_case,
+            "priority_workflow": "",
+            "priority_workflows": [],
+            "use_cases": use_case_terms,
             "use_case_terms": use_case_terms,
             "domain_concepts": domain_concepts,
             "search_concepts": search_concepts,
@@ -1446,7 +1452,7 @@ class ProjectIntelligenceLayer:
             language=language,
             search_concepts=search_concepts,
             domain_concepts=domain_concepts,
-            use_case_terms=priority_workflows + use_case_terms,
+            use_case_terms=search_workflows + use_case_terms,
             solution_terms=solution_terms,
             target_terms=target_terms,
             archetype_context=archetype_context,
@@ -3070,6 +3076,7 @@ class ProjectIntelligenceLayer:
             result.append(lowered)
         return self._unique(result)[:6]
 
+
     def _merge_actor_context(
         self,
         *,
@@ -3078,29 +3085,41 @@ class ProjectIntelligenceLayer:
         economic_buyer: str,
         language: str,
     ) -> Dict[str, Any]:
-        actors = dict(archetype_context.get("actors") or {})
-        archetype = str(archetype_context.get("project_archetype") or "")
-        primary = target_users[0] if target_users else actors.get("demand_side") or actors.get("primary_user") or ""
-        secondary = target_users[1:] if len(target_users) > 1 else []
+        """
+        Preserve actor information without assigning business roles.
 
-        actors["primary_user"] = primary
-        actors["target_users"] = target_users
-        actors["secondary_users"] = secondary
-        actors["payer"] = economic_buyer or actors.get("payer") or primary
+        Demand, supply, payer, operator and technical-maintainer roles
+        belong to the canonical context authority. List position,
+        archetype or sector must never create those roles here.
+        """
+        actors = dict(
+            archetype_context.get("actors")
+            or {}
+        )
 
-        if archetype == "two_sided_marketplace":
-            actors["demand_side"] = actors.get("demand_side") or primary
-            if not actors.get("supply_side") and secondary:
-                actors["supply_side"] = secondary[0]
-        elif archetype == "hardware_iot":
-            actors["demand_side"] = primary
-            actors["field_operator"] = primary
-            # Do not invent a supply-side role from another customer segment.
-            actors["supply_side"] = ""
-            actors.setdefault(
-                "technical_maintainer",
-                "Responsable technique ou mainteneur" if language != "en" else "Technical maintainer",
-            )
+        for role in (
+            "demand_side",
+            "supply_side",
+            "operator_or_partner",
+            "payer",
+        ):
+            actors.setdefault(role, "")
+
+        if economic_buyer:
+            actors["payer"] = economic_buyer
+
+        actors["explicit_targets"] = list(
+            actors.get("explicit_targets")
+            or target_users
+            or []
+        )
+
+        # Compatibility metadata only; no role assignment.
+        actors["target_users"] = list(
+            target_users
+            or []
+        )
+
         return actors
 
     def _priority_workflows(
@@ -3198,6 +3217,7 @@ class ProjectIntelligenceLayer:
             return normalized
         return (f"manage {normalized}" if language == "en" else f"gérer {normalized}")
 
+
     def _economic_buyer(
         self,
         *,
@@ -3207,30 +3227,34 @@ class ProjectIntelligenceLayer:
         language: str,
         archetype_context: Dict[str, Any] | None = None,
     ) -> str:
-        if explicit_buyer and self._is_actor_phrase(explicit_buyer):
-            return self._clean_actor_phrase(explicit_buyer)
-        archetype_context = archetype_context or {}
-        payer = self._clean_text((archetype_context.get("actors") or {}).get("payer"))
-        if payer:
-            return payer
-        priority_markers = (
-            "manager", "director", "owner", "cooperative", "organisation",
-            "organization", "company", "responsable", "directeur",
-            "propriétaire", "proprietaire", "coopérative", "cooperative",
+        """
+        Preserve an explicitly established payer only.
+
+        ProjectIntelligenceLayer is not an actor-role authority.
+        A target user, organization or industry label must never be
+        promoted automatically to economic buyer.
+        """
+        if (
+            explicit_buyer
+            and self._is_actor_phrase(explicit_buyer)
+        ):
+            return self._clean_actor_phrase(
+                explicit_buyer
+            )
+
+        archetype_context = (
+            archetype_context
+            or {}
         )
-        for target in target_users:
-            normalized = self._normalize_concept(target)
-            if any(marker in normalized for marker in priority_markers):
-                return self._clean_actor_phrase(target)
-        if len(target_users) > 1:
-            return self._clean_actor_phrase(target_users[1])
-        if target_users:
-            return self._clean_actor_phrase(target_users[0])
-        return (
-            f"Decision-maker in {industry}"
-            if language == "en"
-            else f"Décideur dans {industry}"
+
+        payer = self._clean_text(
+            (
+                archetype_context.get("actors")
+                or {}
+            ).get("payer")
         )
+
+        return payer
 
     def _build_value_proposition(
         self,
