@@ -1104,19 +1104,87 @@ class DebateRoomGraph:
             result.append(item)
         return result
 
-    def _claim_status(self, analysis: Dict[str, Any], category: str) -> str:
-        for claim in self._list(self._section(analysis, "fact_check_report").get("claims")):
-            if not isinstance(claim, dict):
+    def _claim_status(
+        self,
+        analysis: Dict[str, Any],
+        category: str,
+    ) -> str:
+        """Project canonical claim evidence into Debate Room semantics.
+
+        EvidenceLedger / FactChecker remain authoritative for claim evidence
+        status. Debate Room only performs the explicit presentation mapping:
+
+        sourced       -> supported
+        estimated     -> estimated
+        not_confirmed -> not_confirmed
+
+        Public labels and textual status heuristics must never participate in
+        this decision.
+        """
+        canonical_to_debate = {
+            "sourced": "supported",
+            "estimated": "estimated",
+            "not_confirmed": "not_confirmed",
+        }
+
+        category_key = str(
+            category or ""
+        ).casefold()
+
+        for claim in self._list(
+            self._section(
+                analysis,
+                "fact_check_report",
+            ).get("claims")
+        ):
+            if not isinstance(
+                claim,
+                dict,
+            ):
                 continue
-            haystack = f"{claim.get('category', '')} {claim.get('claim', '')}".lower()
-            if category.lower() not in haystack:
+
+            haystack = (
+                f"{claim.get('category', '')} "
+                f"{claim.get('claim', '')}"
+            ).casefold()
+
+            if (
+                category_key
+                and category_key not in haystack
+            ):
                 continue
-            status = str(claim.get("status") or claim.get("public_status") or "").lower()
-            if any(token in status for token in ("supported", "sourced", "verified", "confirm")) and "not" not in status:
-                return "supported"
-            if "estimate" in status:
-                return "estimated"
-            return "not_confirmed"
+
+            # Current canonical contract.
+            canonical_status = str(
+                claim.get(
+                    "evidence_status"
+                )
+                or ""
+            ).strip().casefold()
+
+            # Backward compatibility for older persisted reports:
+            # legacy `status` is accepted only when it already belongs to
+            # the canonical EvidenceLedger vocabulary.
+            if not canonical_status:
+                legacy_status = str(
+                    claim.get("status")
+                    or ""
+                ).strip().casefold()
+
+                if legacy_status in {
+                    "sourced",
+                    "estimated",
+                    "not_confirmed",
+                }:
+                    canonical_status = (
+                        legacy_status
+                    )
+
+            return canonical_to_debate.get(
+                canonical_status,
+                "not_confirmed",
+            )
+
         return "not_confirmed"
 
     def _evidence_level(self, analysis: Dict[str, Any]) -> str:
