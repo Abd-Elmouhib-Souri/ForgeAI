@@ -358,19 +358,22 @@ class FactCheckerAgent:
         )
         confidence_level = evidence_confidence["overall_evidence_confidence"]
 
-        base_claims = self._build_claims(
-            profile=profile,
-            evidence_groups=evidence_groups,
-            language=language,
+        # EvidenceLedger is the sole canonical authority for claims and
+        # evidence semantics. FactChecker only converts those claims into
+        # public presentation cards.
+        claim_registry = evidence_ledger.build(
+            analysis_data
         )
-        claim_registry = evidence_ledger.build(analysis_data)
-        registry_claims = self._claims_from_registry(
+
+        claims = self._claims_from_registry(
             registry=claim_registry,
             language=language,
             fallback_sources=relevant_sources,
         )
-        claims = self._merge_claim_sets(base_claims, registry_claims)
-        claims = self._clean_claims(claims)
+
+        claims = self._clean_claims(
+            claims
+        )
 
         source_summary = {
             "total_sources": source_count,
@@ -455,13 +458,33 @@ class FactCheckerAgent:
             "claim_registry_schema_version": claim_registry.get("schema_version"),
             "claim_coverage": {
                 "total": len(claims),
-                "section_specific": len(registry_claims),
-                "sourced": sum(1 for claim in claims if claim.get("status") == "sourced"),
-                "estimated": sum(1 for claim in claims if claim.get("status") == "estimated"),
+                "section_specific": len(claims),
+                "sourced": sum(
+                    1
+                    for claim in claims
+                    if (
+                        claim.get("evidence_status")
+                        or claim.get("status")
+                    )
+                    == "sourced"
+                ),
+                "estimated": sum(
+                    1
+                    for claim in claims
+                    if (
+                        claim.get("evidence_status")
+                        or claim.get("status")
+                    )
+                    == "estimated"
+                ),
                 "requires_validation": sum(
                     1
                     for claim in claims
-                    if claim.get("status") in {"field_validation_required", "not_confirmed"}
+                    if bool(
+                        claim.get(
+                            "validation_required"
+                        )
+                    )
                 ),
             },
             "claims": claims,
@@ -702,130 +725,355 @@ class FactCheckerAgent:
         language: str,
         fallback_sources: List[Dict[str, Any]] | None = None,
     ) -> List[Dict[str, Any]]:
-        """Convert the canonical claim registry into public fact-check cards.
+        """Convert canonical EvidenceLedger claims into public cards.
 
-        Publication policy:
-        - internal estimates never inherit broad market sources;
-        - non-confirmed claims show consulted sources separately;
-        - recommendations and audit conclusions are not presented as facts;
-        - project-derived market framing is labelled as project input;
-        - only supporting evidence remains under the Evidence heading.
+        EvidenceLedger remains authoritative for:
+        - evidence status;
+        - claim kind;
+        - validation requirement;
+        - source identifiers.
+
+        FactChecker only enriches presentation:
+        - public labels;
+        - compact source records;
+        - corrections / next validation action;
+        - consulted-vs-supporting source presentation.
         """
         source_index = registry.get("source_index") or {}
-        if not isinstance(source_index, dict):
+
+        if not isinstance(
+            source_index,
+            dict,
+        ):
             source_index = {}
 
         sources_by_url = {
-            self._safe_text(source.get("url"), "").lower(): dict(source)
-            for source in (fallback_sources or [])
-            if isinstance(source, dict) and self._safe_text(source.get("url"), "")
+            self._safe_text(
+                source.get("url"),
+                "",
+            ).lower(): dict(source)
+            for source in (
+                fallback_sources
+                or []
+            )
+            if (
+                isinstance(source, dict)
+                and self._safe_text(
+                    source.get("url"),
+                    "",
+                )
+            )
         }
 
-        results: List[Dict[str, Any]] = []
-        for item in registry.get("claims") or []:
-            if not isinstance(item, dict):
+        canonical_statuses = set(
+            getattr(
+                evidence_ledger,
+                "CANONICAL_EVIDENCE_STATUSES",
+                (
+                    "sourced",
+                    "estimated",
+                    "not_confirmed",
+                ),
+            )
+        )
+
+        canonical_claim_kinds = set(
+            getattr(
+                evidence_ledger,
+                "CANONICAL_CLAIM_KINDS",
+                (
+                    "evidence_claim",
+                    "hypothesis",
+                    "estimate",
+                    "recommendation",
+                    "audit_conclusion",
+                    "project_input",
+                ),
+            )
+        )
+
+        results: List[
+            Dict[str, Any]
+        ] = []
+
+        for item in (
+            registry.get("claims")
+            or []
+        ):
+            if not isinstance(
+                item,
+                dict,
+            ):
                 continue
 
-            claim_text = self._safe_text(item.get("claim"), "")
+            claim_text = self._safe_text(
+                item.get("claim"),
+                "",
+            )
+
             if not claim_text:
                 continue
 
-            path = self._safe_text(item.get("path"), "")
-            if path in {"problem", "proposed_solution"}:
-                continue
-            if path.startswith("market_study.demand_drivers["):
-                continue
-
-            raw_status = self._safe_text(item.get("status"), "not_confirmed")
-            status = {
-                "sourced": "sourced",
-                "estimated": "estimated",
-                "hypothesis": "estimated",
-                "recommendation": "recommendation",
-                "audit_conclusion": "audit_conclusion",
-                "project_input": "project_input",
-                "not_confirmed": "not_confirmed",
-                "field_validation_required": "field_validation_required",
-                "rejected": "not_confirmed",
-            }.get(raw_status, "field_validation_required")
-            status = self._status_for_claim_text(
-                status=status,
-                claim_text=claim_text,
+            path = self._safe_text(
+                item.get("path"),
+                "",
             )
 
-            confidence = self._safe_text(item.get("confidence"), "low").lower()
-            if confidence not in {"low", "medium", "high"}:
-                confidence = "low"
+            # Demand-driver rows remain internal detail rather than
+            # standalone Fact Checker cards. Problem and proposed solution
+            # are canonical EvidenceLedger claims and must remain visible.
+            if path.startswith(
+                "market_study.demand_drivers["
+            ):
+                continue
 
-            source_rows: List[Dict[str, Any]] = []
-            for source_id in item.get("source_ids") or []:
-                source = source_index.get(source_id)
-                if not isinstance(source, dict) or not source.get("url"):
-                    continue
-                source_row = dict(source)
-                canonical = sources_by_url.get(
-                    self._safe_text(source_row.get("url"), "").lower()
+            # --------------------------------------------------------
+            # Canonical evidence status.
+            # FactChecker does not infer or rewrite this value.
+            # --------------------------------------------------------
+
+            status = self._safe_text(
+                item.get(
+                    "evidence_status"
                 )
-                if canonical:
-                    source_row = self._merge_source_records(
-                        canonical,
-                        source_row,
-                    )
-                source_rows.append(source_row)
-
-            category = self._safe_text(item.get("category"), "general")
-            evidence = list(source_rows)
-            consulted_sources: List[Dict[str, Any]] = []
-
-            if path.startswith("financial_estimation."):
-                status = "estimated"
-                category = "finance"
-                confidence = "low"
-                evidence = []
-                consulted_sources = []
-            elif path == "market_study.local_context":
-                status = "recommendation"
-                category = "recommendation"
-                confidence = "low"
-                evidence = []
-                consulted_sources = []
-            elif path == "market_study.local_feasibility":
-                status = "audit_conclusion"
-                category = "evidence_audit"
-                confidence = "low"
-                evidence = []
-                consulted_sources = list(source_rows)
-            elif path == "market_study.market_overview":
-                status = "project_input"
-                category = "project_input"
-                confidence = "medium"
-                evidence = []
-                consulted_sources = []
-            elif path in {
-                "market_study.global_potential",
-                "market_study.global_market_assessment",
-            } and status != "sourced":
-                evidence = []
-                consulted_sources = list(source_rows)
-            elif status in {
+                or item.get("status"),
                 "not_confirmed",
-                "field_validation_required",
-            }:
-                # Keep the legacy evidence array for API compatibility, but
-                # explicitly mark it as consulted and insufficient. The
-                # frontend renders these cards under a separate heading.
-                evidence = list(source_rows)
-                consulted_sources = list(source_rows)
-            elif status in {"recommendation", "audit_conclusion", "project_input"}:
-                evidence = []
-                consulted_sources = list(source_rows) if status == "audit_conclusion" else []
+            ).lower()
 
-            correction = self._registry_correction(
-                path=path,
-                category=category,
-                status=status,
-                language=language,
+            if (
+                status
+                not in canonical_statuses
+            ):
+                # Contract safety only. We never promote an invalid value.
+                status = "not_confirmed"
+
+            # --------------------------------------------------------
+            # Canonical claim semantic kind.
+            # --------------------------------------------------------
+
+            claim_kind = self._safe_text(
+                item.get("claim_kind"),
+                "evidence_claim",
+            ).lower()
+
+            if (
+                claim_kind
+                not in canonical_claim_kinds
+            ):
+                claim_kind = (
+                    "evidence_claim"
+                )
+
+            # --------------------------------------------------------
+            # Canonical validation requirement.
+            # Current EvidenceLedger always provides this field.
+            # The fallback exists only for older registry payloads.
+            # --------------------------------------------------------
+
+            raw_validation_required = (
+                item.get(
+                    "validation_required"
+                )
             )
+
+            if isinstance(
+                raw_validation_required,
+                bool,
+            ):
+                validation_required = (
+                    raw_validation_required
+                )
+            else:
+                validation_required = (
+                    status != "sourced"
+                    and claim_kind
+                    not in {
+                        "recommendation",
+                        "project_input",
+                    }
+                )
+
+            confidence = self._safe_text(
+                item.get("confidence"),
+                "low",
+            ).lower()
+
+            if confidence not in {
+                "low",
+                "medium",
+                "high",
+            }:
+                confidence = "low"
+
+            source_ids = [
+                self._safe_text(
+                    source_id,
+                    "",
+                )
+                for source_id in (
+                    item.get(
+                        "source_ids"
+                    )
+                    or []
+                )
+                if self._safe_text(
+                    source_id,
+                    "",
+                )
+            ]
+
+            source_rows: List[
+                Dict[str, Any]
+            ] = []
+
+            for source_id in source_ids:
+                source = source_index.get(
+                    source_id
+                )
+
+                if (
+                    not isinstance(
+                        source,
+                        dict,
+                    )
+                    or not source.get(
+                        "url"
+                    )
+                ):
+                    continue
+
+                source_row = dict(
+                    source
+                )
+
+                canonical = (
+                    sources_by_url.get(
+                        self._safe_text(
+                            source_row.get(
+                                "url"
+                            ),
+                            "",
+                        ).lower()
+                    )
+                )
+
+                if canonical:
+                    source_row = (
+                        self._merge_source_records(
+                            canonical,
+                            source_row,
+                        )
+                    )
+
+                source_rows.append(
+                    source_row
+                )
+
+            category = self._safe_text(
+                item.get("category"),
+                "general",
+            )
+
+            evidence = list(
+                source_rows
+            )
+
+            consulted_sources: List[
+                Dict[str, Any]
+            ] = []
+
+            # --------------------------------------------------------
+            # Presentation rules only.
+            # None of these rules may change evidence status.
+            # --------------------------------------------------------
+
+            if path.startswith(
+                "financial_estimation."
+            ):
+                category = "finance"
+
+                # Internal financial estimates do not inherit broad
+                # external market sources.
+                evidence = []
+                consulted_sources = []
+
+            elif (
+                claim_kind
+                == "recommendation"
+            ):
+                category = (
+                    "recommendation"
+                )
+                evidence = []
+                consulted_sources = []
+
+            elif (
+                claim_kind
+                == "audit_conclusion"
+            ):
+                category = (
+                    "evidence_audit"
+                )
+
+                if status == "sourced":
+                    evidence = list(
+                        source_rows
+                    )
+                    consulted_sources = []
+                else:
+                    evidence = []
+                    consulted_sources = list(
+                        source_rows
+                    )
+
+            elif (
+                claim_kind
+                == "project_input"
+            ):
+                category = (
+                    "project_input"
+                )
+                evidence = []
+                consulted_sources = []
+
+            elif (
+                path
+                in {
+                    "market_study.global_potential",
+                    "market_study.global_market_assessment",
+                }
+                and status
+                != "sourced"
+            ):
+                evidence = []
+                consulted_sources = list(
+                    source_rows
+                )
+
+            elif (
+                status
+                == "not_confirmed"
+            ):
+                # For API compatibility we keep the historical evidence
+                # array while explicitly marking the same sources as
+                # consulted-but-insufficient.
+                evidence = list(
+                    source_rows
+                )
+                consulted_sources = list(
+                    source_rows
+                )
+
+            correction = (
+                self._registry_correction(
+                    path=path,
+                    category=category,
+                    status=status,
+                    claim_kind=claim_kind,
+                    language=language,
+                )
+            )
+
             card = self._claim(
                 claim=claim_text,
                 category=category,
@@ -836,26 +1084,48 @@ class FactCheckerAgent:
                 evidence=evidence,
                 consulted_sources=consulted_sources,
             )
+
             card.update(
                 {
-                    "claim_id": self._safe_text(item.get("claim_id"), ""),
+                    "claim_id": self._safe_text(
+                        item.get(
+                            "claim_id"
+                        ),
+                        "",
+                    ),
                     "path": path,
-                    "is_quantitative": bool(item.get("is_quantitative")),
+                    "source_ids": source_ids,
+                    "is_quantitative": bool(
+                        item.get(
+                            "is_quantitative"
+                        )
+                    ),
                     "evidence_quality": self._safe_text(
-                        item.get("evidence_quality"),
+                        item.get(
+                            "evidence_quality"
+                        ),
                         "low",
                     ),
+
+                    # Canonical semantic fields copied verbatim.
+                    "evidence_status": status,
+                    "claim_kind": claim_kind,
+                    "validation_required": validation_required,
+
                     "evidence_kind": (
                         "consulted_insufficient"
-                        if status in {
-                            "not_confirmed",
-                            "field_validation_required",
-                        }
+                        if (
+                            status
+                            == "not_confirmed"
+                        )
                         else "supporting"
                     ),
                 }
             )
-            results.append(card)
+
+            results.append(
+                card
+            )
 
         priority_prefixes = (
             "market_study.",
@@ -863,13 +1133,37 @@ class FactCheckerAgent:
             "competitive_analysis.",
             "improvement_suggestions[",
         )
+
         results.sort(
             key=lambda claim: (
-                0 if str(claim.get("path") or "").startswith(priority_prefixes) else 1,
-                0 if claim.get("is_quantitative") else 1,
-                str(claim.get("path") or ""),
+                (
+                    0
+                    if str(
+                        claim.get(
+                            "path"
+                        )
+                        or ""
+                    ).startswith(
+                        priority_prefixes
+                    )
+                    else 1
+                ),
+                (
+                    0
+                    if claim.get(
+                        "is_quantitative"
+                    )
+                    else 1
+                ),
+                str(
+                    claim.get(
+                        "path"
+                    )
+                    or ""
+                ),
             )
         )
+
         return results[:15]
 
     def _registry_correction(
@@ -878,52 +1172,71 @@ class FactCheckerAgent:
         path: str,
         category: str,
         status: str,
+        claim_kind: str,
         language: str,
     ) -> str:
+        # Claim semantics are independent from evidence strength.
+        if claim_kind == "recommendation":
+            return (
+                "Tester cette recommandation pendant un pilote limité avant de l’intégrer au plan définitif."
+                if language != "en"
+                else "Test this recommendation in a bounded pilot before adding it to the final plan."
+            )
+
+        if claim_kind == "audit_conclusion":
+            return (
+                "Cette conclusion décrit l’état des preuves disponibles ; si elle n’est pas sourcée, elle doit être validée avant toute décision."
+                if language != "en"
+                else "This conclusion describes the current evidence state; if it is not sourced, it must be validated before any decision."
+            )
+
+        if claim_kind == "project_input":
+            return (
+                "Cette formulation vient du contexte du projet et doit être distinguée d’une preuve externe."
+                if language != "en"
+                else "This statement comes from the project context and must be distinguished from external evidence."
+            )
+
         if status == "sourced":
             return (
                 "Vérifier la méthodologie, la date et la compatibilité géographique de la source."
                 if language != "en"
                 else "Check the source methodology, date and geographic compatibility."
             )
-        if status == "recommendation":
-            return (
-                "Tester cette recommandation pendant un pilote limité avant de l’intégrer au plan définitif."
-                if language != "en"
-                else "Test this recommendation in a bounded pilot before adding it to the final plan."
-            )
-        if status == "audit_conclusion":
-            return (
-                "Cette conclusion décrit la limite des preuves disponibles ; elle ne constitue pas une preuve de demande."
-                if language != "en"
-                else "This conclusion describes the limits of the available evidence; it is not proof of demand."
-            )
-        if status == "project_input":
-            return (
-                "Cette formulation vient du contexte du projet et doit être confirmée par des observations terrain."
-                if language != "en"
-                else "This statement comes from the project context and must be confirmed through field observation."
-            )
 
         normalized = f"{path} {category}".lower()
-        if "financial" in normalized or "finance" in normalized or "pricing" in normalized:
+
+        if (
+            "financial" in normalized
+            or "finance" in normalized
+            or "pricing" in normalized
+        ):
             return (
                 "Confirmer cette estimation avec des devis, coûts unitaires, hypothèses et tests de prix documentés."
                 if language != "en"
                 else "Confirm this estimate with quotes, unit costs, documented assumptions and pricing tests."
             )
-        if "local" in normalized or "market" in normalized:
+
+        if (
+            "local" in normalized
+            or "market" in normalized
+        ):
             return (
                 "Valider ce signal avec une source locale officielle ou indépendante et des entretiens terrain."
                 if language != "en"
                 else "Validate this signal with an official or independent local source and field interviews."
             )
-        if "technology" in normalized or "solution" in normalized:
+
+        if (
+            "technology" in normalized
+            or "solution" in normalized
+        ):
             return (
                 "Un benchmark prouve une possibilité technique, pas l’adoption ni la performance du projet ; tester le MVP."
                 if language != "en"
                 else "A benchmark shows technical possibility, not project adoption or performance; test the MVP."
             )
+
         return (
             "Traiter cette affirmation comme une hypothèse jusqu’à validation directe."
             if language != "en"
@@ -2059,14 +2372,23 @@ class FactCheckerAgent:
         self,
         claims: Any,
     ) -> List[Dict[str, Any]]:
-        if not isinstance(claims, list):
+        if not isinstance(
+            claims,
+            list,
+        ):
             return []
 
-        cleaned: List[Dict[str, Any]] = []
+        cleaned: List[
+            Dict[str, Any]
+        ] = []
+
         seen = set()
 
         for item in claims:
-            if not isinstance(item, dict):
+            if not isinstance(
+                item,
+                dict,
+            ):
                 continue
 
             claim_text = self._safe_text(
@@ -2074,90 +2396,185 @@ class FactCheckerAgent:
                 "",
             )
 
-            # Une affirmation vide ne doit jamais atteindre le frontend.
+            # Empty claims never reach the frontend.
             if not claim_text:
                 continue
 
-            key = claim_text.lower()
+            key = " ".join(
+                claim_text.casefold().split()
+            )
 
             if key in seen:
                 continue
 
-            seen.add(key)
-
-            evidence = item.get("evidence")
-            consulted = item.get("consulted_sources")
-            clean_evidence: List[Dict[str, Any]] = []
-            clean_consulted: List[Dict[str, Any]] = []
-
-            if isinstance(evidence, list):
-                for source in evidence:
-                    if not isinstance(source, dict):
-                        continue
-                    compact = self._compact_evidence(source)
-                    if compact.get("url"):
-                        clean_evidence.append(compact)
-
-            if isinstance(consulted, list):
-                for source in consulted:
-                    if not isinstance(source, dict):
-                        continue
-                    compact = self._compact_evidence(source)
-                    if compact.get("url"):
-                        clean_consulted.append(compact)
-
-            normalized_status = self._status_for_claim_text(
-                status=self._safe_text(
-                    item.get("status"),
-                    "not_confirmed",
-                ),
-                claim_text=claim_text,
+            seen.add(
+                key
             )
-            path = self._safe_text(item.get("path"), "")
+
+            evidence = item.get(
+                "evidence"
+            )
+
+            consulted = item.get(
+                "consulted_sources"
+            )
+
+            clean_evidence: List[
+                Dict[str, Any]
+            ] = []
+
+            clean_consulted: List[
+                Dict[str, Any]
+            ] = []
+
+            if isinstance(
+                evidence,
+                list,
+            ):
+                for source in evidence:
+                    if not isinstance(
+                        source,
+                        dict,
+                    ):
+                        continue
+
+                    compact = (
+                        self._compact_evidence(
+                            source
+                        )
+                    )
+
+                    if compact.get(
+                        "url"
+                    ):
+                        clean_evidence.append(
+                            compact
+                        )
+
+            if isinstance(
+                consulted,
+                list,
+            ):
+                for source in consulted:
+                    if not isinstance(
+                        source,
+                        dict,
+                    ):
+                        continue
+
+                    compact = (
+                        self._compact_evidence(
+                            source
+                        )
+                    )
+
+                    if compact.get(
+                        "url"
+                    ):
+                        clean_consulted.append(
+                            compact
+                        )
+
+            # Status is already authoritative upstream.
+            # No lexical inference is allowed here.
+            normalized_status = (
+                self._safe_text(
+                    item.get(
+                        "evidence_status"
+                    )
+                    or item.get(
+                        "status"
+                    ),
+                    "not_confirmed",
+                )
+            )
+
+            path = self._safe_text(
+                item.get("path"),
+                "",
+            )
 
             if normalized_status in {
                 "not_confirmed",
                 "field_validation_required",
             }:
-                clean_consulted.extend(clean_evidence)
+                clean_consulted.extend(
+                    clean_evidence
+                )
 
-            if path.startswith("financial_estimation."):
+            if path.startswith(
+                "financial_estimation."
+            ):
                 clean_evidence = []
                 clean_consulted = []
 
-            cleaned.append(
-                {
-                    **item,
-                    "claim": claim_text,
-                    "category": self._safe_text(
-                        item.get("category"),
-                        "general",
+            cleaned_item = {
+                **item,
+                "claim": claim_text,
+                "category": self._safe_text(
+                    item.get(
+                        "category"
                     ),
-                    "status": normalized_status,
-                    "confidence": self._safe_text(
-                        item.get("confidence"),
-                        "low",
+                    "general",
+                ),
+                "status": normalized_status,
+                "confidence": self._safe_text(
+                    item.get(
+                        "confidence"
                     ),
-                    "correction": self._safe_text(
-                        item.get("correction"),
-                        "",
+                    "low",
+                ),
+                "correction": self._safe_text(
+                    item.get(
+                        "correction"
                     ),
-                    "evidence": self._deduplicate_source_list(clean_evidence)[:3],
-                    "consulted_sources": self._deduplicate_source_list(
+                    "",
+                ),
+                "evidence": (
+                    self._deduplicate_source_list(
+                        clean_evidence
+                    )[:3]
+                ),
+                "consulted_sources": (
+                    self._deduplicate_source_list(
                         clean_consulted
-                    )[:3],
-                    "evidence_kind": (
-                        "consulted_insufficient"
-                        if normalized_status in {
-                            "not_confirmed",
-                            "field_validation_required",
-                        }
-                        else self._safe_text(
-                            item.get("evidence_kind"),
-                            "supporting",
-                        )
+                    )[:3]
+                ),
+                "evidence_kind": (
+                    "consulted_insufficient"
+                    if normalized_status
+                    in {
+                        "not_confirmed",
+                        "field_validation_required",
+                    }
+                    else self._safe_text(
+                        item.get(
+                            "evidence_kind"
+                        ),
+                        "supporting",
+                    )
+                ),
+            }
+
+            # Preserve the canonical field exactly when supplied by
+            # EvidenceLedger. Legacy base claims are left untouched.
+            if self._safe_text(
+                item.get(
+                    "evidence_status"
+                ),
+                "",
+            ):
+                cleaned_item[
+                    "evidence_status"
+                ] = self._safe_text(
+                    item.get(
+                        "evidence_status"
                     ),
-                }
+                    normalized_status,
+                )
+
+            cleaned.append(
+                cleaned_item
             )
 
         return cleaned
@@ -2235,11 +2652,14 @@ class FactCheckerAgent:
                     claim.get("claim") or "",
                 )
 
+            canonical_status = self._safe_text(
+                claim.get("evidence_status")
+                or claim.get("status"),
+                "not_confirmed",
+            )
+
             claim["public_status"] = self._public_status_label(
-                self._safe_text(
-                    claim.get("status"),
-                    "not_confirmed",
-                ),
+                canonical_status,
                 language,
             )
             claim["public_confidence"] = self._public_confidence_label(

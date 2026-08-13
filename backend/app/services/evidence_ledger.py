@@ -19,6 +19,9 @@ class EvidenceClaim:
     status: str
     confidence: str
     public_text: str
+    evidence_status: str
+    claim_kind: str
+    validation_required: bool
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,26 @@ class EvidenceLedger:
     benchmark proves feasibility, not local demand; a market-report landing
     page is a market signal, not an independently verified market size.
     """
+
+    # Canonical Evidence Ledger contract.
+    #
+    # ``status`` is temporarily retained as a backward-compatible alias
+    # of ``evidence_status``. Consumers must not introduce another
+    # evidence-status vocabulary.
+    CANONICAL_EVIDENCE_STATUSES = (
+        "sourced",
+        "estimated",
+        "not_confirmed",
+    )
+
+    CANONICAL_CLAIM_KINDS = (
+        "evidence_claim",
+        "hypothesis",
+        "estimate",
+        "recommendation",
+        "audit_conclusion",
+        "project_input",
+    )
 
     PRECISE_NUMBER_RE = re.compile(
         r"(?:\b\d[\d\s,.]*\b|thousands?|hundreds?|millions?|billions?|"
@@ -180,7 +203,6 @@ class EvidenceLedger:
     ANALYTICAL_PATH_PREFIXES = (
         "market_study.market_overview",
         "market_study.local_context",
-        "market_study.local_feasibility",
     )
 
     def build(self, analysis_data: dict[str, Any]) -> dict[str, Any]:
@@ -214,6 +236,10 @@ class EvidenceLedger:
             # Keep the historic format for frontend and test compatibility.
             "format": "evidence_ledger_v2_claim_aware",
             "schema_version": "evidence_ledger_v3_role_aware",
+            "status_contract": "canonical_evidence_status_v1",
+            "canonical_evidence_statuses": list(
+                self.CANONICAL_EVIDENCE_STATUSES
+            ),
             "claims": [asdict(item) for item in claims],
             "source_index": {
                 self._source_id(source): self._compact_source(source)
@@ -611,24 +637,54 @@ class EvidenceLedger:
         if non_confirmation:
             status = "not_confirmed"
             confidence = "low"
+
         elif spec.category == "solution_hypothesis":
+            # A product or strategy hypothesis is explicitly analytical.
+            # It is not an externally verified fact.
             status = "estimated"
             confidence = "low" if not source_ids else "medium"
+
         elif internal_estimate:
+            # Internal planning estimates remain estimates even without
+            # external evidence. They must never masquerade as sourced facts.
             status = "estimated"
             confidence = "low"
-        elif cautious_signal:
-            status = "estimated"
-            confidence = "low" if not source_ids else quality
+
         elif spec.path in self.ANALYTICAL_PATH_PREFIXES:
+            # Project framing, recommendations and cautious audit conclusions
+            # are analytical outputs, not factual external claims.
             status = "estimated"
             confidence = "low" if not source_ids else quality
+
+        elif cautious_signal and source_ids:
+            # A cautious signal backed by compatible evidence remains an
+            # estimate/signal rather than becoming a fully sourced assertion.
+            status = "estimated"
+            confidence = quality
+
         elif source_ids:
             status = "sourced"
             confidence = quality
+
         else:
-            status = "not_confirmed" if precise else "estimated"
+            # An external factual claim without compatible evidence is not
+            # an estimate. Its truth is simply not confirmed.
+            status = "not_confirmed"
             confidence = "low"
+
+        if status not in self.CANONICAL_EVIDENCE_STATUSES:
+            raise ValueError(
+                f"Unsupported canonical evidence status: {status}"
+            )
+
+        claim_kind = self._claim_kind(
+            spec
+        )
+
+        validation_required = self._validation_required(
+            status=status,
+            claim_kind=claim_kind,
+        )
 
         return EvidenceClaim(
             claim_id=spec.claim_id,
@@ -636,10 +692,57 @@ class EvidenceLedger:
             category=spec.category,
             claim=claim_text,
             source_ids=source_ids,
+            # Legacy compatibility alias.
             status=status,
             confidence=confidence,
             public_text=claim_text,
+            # Canonical semantic fields.
+            evidence_status=status,
+            claim_kind=claim_kind,
+            validation_required=validation_required,
         )
+
+    def _claim_kind(
+        self,
+        spec: ClaimSpec,
+    ) -> str:
+        """Classify claim semantics independently from evidence strength."""
+
+        if spec.path == "market_study.local_context":
+            return "recommendation"
+
+        if spec.path == "market_study.local_feasibility":
+            return "audit_conclusion"
+
+        if spec.path == "market_study.market_overview":
+            return "project_input"
+
+        if spec.path.startswith("financial_estimation."):
+            return "estimate"
+
+        if spec.category == "solution_hypothesis":
+            return "hypothesis"
+
+        return "evidence_claim"
+
+    def _validation_required(
+        self,
+        *,
+        status: str,
+        claim_kind: str,
+    ) -> bool:
+        """Keep validation need separate from evidence status."""
+
+        if claim_kind in {
+            "recommendation",
+            "project_input",
+        }:
+            return False
+
+        # Audit conclusions may summarize evidence, but they do not
+        # escape evidence requirements. An unsupported local feasibility
+        # conclusion still requires validation.
+        return status != "sourced"
 
     def _publish_or_neutralize(
         self,
