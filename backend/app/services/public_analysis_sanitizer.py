@@ -347,6 +347,7 @@ def sanitize_analysis_data_for_public(
     data = _sanitize_recursive(data, context)
     data = _sanitize_external_sources(data, raw_data, context)
     data = _sanitize_competitive_analysis(data, context)
+    data = _sanitize_final_report(data, context)
 
     # Preserve validated public source structures before the global
     # DomainIntegrityGuard pass. This prevents an unrelated text
@@ -364,6 +365,35 @@ def sanitize_analysis_data_for_public(
     # otherwise generic but required fields such as buying power, adoption
     # triggers and interview questions can be blanked independently.
     persona_builder_snapshot = deepcopy(data.get("persona_builder")) if isinstance(data.get("persona_builder"), dict) else None
+
+    # FinalReportBuilder emits a deterministic typed projection.
+    # Its embedded sources have already passed the public-source sanitizer
+    # above, so the generic DomainIntegrityGuard must not reinterpret
+    # evidence axes, source IDs, or authority identifiers as business text.
+    final_report_snapshot = (
+        deepcopy(
+            data.get(
+                "final_report"
+            )
+        )
+        if isinstance(
+            data.get(
+                "final_report"
+            ),
+            dict,
+        )
+        else None
+    )
+
+    if isinstance(
+        final_report_snapshot,
+        dict,
+    ):
+        data.pop(
+            "final_report",
+            None,
+        )
+
     data = _sanitize_public_limitations(data, context)
     data = _final_language_pass(data, language)
 
@@ -400,6 +430,8 @@ def sanitize_analysis_data_for_public(
         data["debate_room"] = debate_room_snapshot
     if isinstance(persona_builder_snapshot, dict):
         data["persona_builder"] = persona_builder_snapshot
+    if isinstance(final_report_snapshot, dict):
+        data["final_report"] = final_report_snapshot
 
     # Restored deterministic contracts must pass through the same UTF-8 and
     # public-language cleanup as the rest of the report.
@@ -975,6 +1007,218 @@ def _sanitize_competitive_item(
     cleaned.pop("search_query", None)
 
     return _sanitize_recursive(cleaned, project_context)
+
+
+def _sanitize_final_report_source(
+    source: Any,
+    project_context: Dict[str, Any],
+    *,
+    canonical_source_id: str = "",
+) -> Any:
+    """
+    Apply the normal public-source allowlist to a Final Report source.
+
+    `source_id` is traceability metadata, not business classification.
+    The caller-provided canonical ID has precedence.
+    """
+
+    if not isinstance(
+        source,
+        dict,
+    ):
+        return source
+
+    source_id = str(
+        canonical_source_id
+        or source.get("source_id")
+        or ""
+    ).strip()
+
+    cleaned = _sanitize_public_source(
+        source,
+        project_context,
+    )
+
+    if not isinstance(
+        cleaned,
+        dict,
+    ):
+        return cleaned
+
+    if source_id:
+        cleaned[
+            "source_id"
+        ] = source_id
+
+    return cleaned
+
+
+def _sanitize_final_report(
+    data: Dict[str, Any],
+    project_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Sanitize the deterministic Final Report contract before snapshotting it.
+
+    The report keeps canonical authority/evidence fields, while every embedded
+    source payload is reduced through the existing public-source allowlist.
+    """
+
+    final_report = data.get(
+        "final_report"
+    )
+
+    if not isinstance(
+        final_report,
+        dict,
+    ):
+        return data
+
+    report = _sanitize_recursive(
+        deepcopy(
+            final_report
+        ),
+        project_context,
+    )
+
+    def clean_node(
+        value: Any,
+    ) -> Any:
+        if isinstance(
+            value,
+            list,
+        ):
+            return [
+                clean_node(
+                    item
+                )
+                for item in value
+            ]
+
+        if not isinstance(
+            value,
+            dict,
+        ):
+            return value
+
+        cleaned: Dict[
+            str,
+            Any,
+        ] = {}
+
+        for key, item in value.items():
+            if (
+                key == "source_index"
+                and isinstance(
+                    item,
+                    dict,
+                )
+            ):
+                source_index: Dict[
+                    str,
+                    Dict[str, Any],
+                ] = {}
+
+                for raw_id, raw_source in (
+                    item.items()
+                ):
+                    source_id = str(
+                        raw_id
+                        or ""
+                    ).strip()
+
+                    if (
+                        not source_id
+                        or not isinstance(
+                            raw_source,
+                            dict,
+                        )
+                    ):
+                        continue
+
+                    public_source = (
+                        _sanitize_final_report_source(
+                            raw_source,
+                            project_context,
+                            canonical_source_id=
+                                source_id,
+                        )
+                    )
+
+                    if isinstance(
+                        public_source,
+                        dict,
+                    ):
+                        source_index[
+                            source_id
+                        ] = public_source
+
+                cleaned[
+                    key
+                ] = source_index
+                continue
+
+            if (
+                key
+                in {
+                    "supporting_evidence",
+                    "consulted_sources",
+                }
+                and isinstance(
+                    item,
+                    list,
+                )
+            ):
+                public_sources = []
+
+                for raw_source in item:
+                    if not isinstance(
+                        raw_source,
+                        dict,
+                    ):
+                        continue
+
+                    public_source = (
+                        _sanitize_final_report_source(
+                            raw_source,
+                            project_context,
+                        )
+                    )
+
+                    if isinstance(
+                        public_source,
+                        dict,
+                    ):
+                        public_sources.append(
+                            public_source
+                        )
+
+                cleaned[
+                    key
+                ] = public_sources
+                continue
+
+            cleaned[
+                key
+            ] = clean_node(
+                item
+            )
+
+        return cleaned
+
+    report = clean_node(
+        report
+    )
+
+    if isinstance(
+        report,
+        dict,
+    ):
+        data[
+            "final_report"
+        ] = report
+
+    return data
 
 
 def _sanitize_debate_room(

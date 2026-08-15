@@ -24,6 +24,9 @@ from app.services.project_context_builder import project_context_builder
 from app.services.public_analysis_sanitizer import sanitize_analysis_data_for_public
 from app.services.analysis_run_guard import analysis_run_guard
 from app.services.evidence_ledger import evidence_ledger
+from app.services.final_report_builder import (
+    final_report_builder,
+)
 from app.services.canonical_source_ledger import canonical_source_ledger
 
 logger = logging.getLogger(__name__)
@@ -1315,6 +1318,18 @@ async def run_project_analysis_background(project_id: int, run_id: str) -> None:
                     run_id,
                 )
                 return
+
+            # Final Report is a terminal projection only.
+            # It runs after Debate Room success/fallback and after the
+            # canonical EvidenceLedger publication gate.
+            final_analysis_data = dict(
+                final_analysis_data
+            )
+            final_analysis_data[
+                "final_report"
+            ] = final_report_builder.build(
+                final_analysis_data
+            )
 
             startup_meta = final_analysis_data.get("startup_evaluator_meta", {})
             startup_failed_steps = startup_meta.get("failed_steps", []) or []
