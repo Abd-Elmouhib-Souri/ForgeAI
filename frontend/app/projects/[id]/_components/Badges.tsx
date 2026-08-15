@@ -79,16 +79,28 @@ export function statusBadgeClass(status?: AnalysisStatus | null): string {
 }
 
 export function verdictBadgeClass(value?: string): string {
-  switch (value) {
-    case "POURSUIVRE":
-      return "border-emerald-200 bg-emerald-50 text-emerald-700";
-    case "PIVOTER":
-      return "border-yellow-200 bg-yellow-50 text-yellow-700";
-    case "ABANDONNER":
-      return "border-red-200 bg-red-50 text-red-700";
-    default:
-      return "border-slate-200 bg-white/70 text-slate-500";
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replaceAll("-", "_")
+    .replaceAll(" ", "_");
+
+  if (["go", "poursuivre", "continue"].includes(normalized)) {
+    return "border-emerald-200 bg-emerald-50 text-emerald-700";
   }
+  if (["conditional_go", "continue_with_conditions", "poursuivre_sous_conditions"].includes(normalized)) {
+    return "border-sky-200 bg-sky-50 text-sky-700";
+  }
+  if (["pivot", "pivoter"].includes(normalized)) {
+    return "border-yellow-200 bg-yellow-50 text-yellow-700";
+  }
+  if (["no_go", "stop", "abandon", "abandonner"].includes(normalized)) {
+    return "border-red-200 bg-red-50 text-red-700";
+  }
+  if (["insufficient_evidence", "preuves_insuffisantes"].includes(normalized)) {
+    return "border-violet-200 bg-violet-50 text-violet-700";
+  }
+  return "border-slate-200 bg-white/70 text-slate-500";
 }
 
 export function riskBadgeClass(value?: string): string {

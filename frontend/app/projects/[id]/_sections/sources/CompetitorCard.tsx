@@ -61,7 +61,7 @@ export default function CompetitorCard({
 
       <p className="mt-1 text-xs font-semibold text-slate-400">
         {reportLanguage === "en" ? "Region" : "Région"} :{" "}
-        {regionText(competitor.region, reportLanguage)}
+        {regionText(competitor.region || competitor.region_match, reportLanguage)}
       </p>
 
       {evidence && (

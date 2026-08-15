@@ -256,11 +256,21 @@ export default function SourcesAndCompetitorsSection({
     return <EmptyState text={t.noSources} />;
   }
 
+  const canonicalLedgerCandidate =
+    competitiveRecord.canonical_source_ledger ??
+    sourcesRecord.canonical_source_ledger;
+
+  const hasCanonicalLedger =
+    canonicalLedgerCandidate !== null &&
+    typeof canonicalLedgerCandidate === "object" &&
+    !Array.isArray(canonicalLedgerCandidate);
+
   const canonicalLedger = (
-    competitiveRecord.canonical_source_ledger ||
-    sourcesRecord.canonical_source_ledger ||
-    {}
+    hasCanonicalLedger
+      ? canonicalLedgerCandidate
+      : {}
   ) as Record<string, unknown>;
+
   const canonicalLedgerRoles = (canonicalLedger.roles || {}) as Record<string, unknown>;
   const canonicalLedgerSources = getPublicDisplaySources(
     asArray<SourceItem>(canonicalLedger.sources)
@@ -288,7 +298,6 @@ export default function SourcesAndCompetitorsSection({
     ...asArray<SourceItem>(competitiveRecord.market_sources),
   ]);
 
-  const hasCanonicalLedger = canonicalLedgerSources.length > 0;
   const allSources = uniqueSources(
     hasCanonicalLedger ? canonicalLedgerSources : fallbackSourceCandidates
   );
@@ -332,9 +341,11 @@ export default function SourcesAndCompetitorsSection({
         : [
             ...asArray<SourceItem>(sourcesRecord.international_benchmark_sources),
             ...asArray<SourceItem>(competitiveRecord.international_benchmark_sources),
-          ]
-    ).filter(
-      (source) => String(source.source_role || "").toLowerCase() !== "technology_provider"
+          ].filter(
+            (source) =>
+              String(source.source_role || "").toLowerCase() !==
+              "technology_provider"
+          )
     )
   );
 
@@ -373,26 +384,42 @@ export default function SourcesAndCompetitorsSection({
     ...asArray<VerifiedCompetitor>(competitiveRecord.verified_competitors),
   ]);
 
-  const directCompetitors =
-    directFromCompetitive.length > 0
+  const directCompetitors = hasCanonicalLedger
+    ? localSourceItems.map(sourceToCompetitor)
+    : directFromCompetitive.length > 0
       ? directFromCompetitive
       : localSourceItems.map(sourceToCompetitor);
 
-  const adjacent = uniqueCompetitors([
-    ...asArray<VerifiedCompetitor>(competitiveRecord.local_adjacent_solutions).filter(
-      (item) => String(item.region_match || item.region || "").toLowerCase() === "local"
-    ),
-    ...asArray<SourceItem>(canonicalLedgerRoles.adjacent_solution)
-      .filter((source) => String(source.region_match || "").toLowerCase() === "local")
-      .map(sourceToCompetitor),
-  ]);
+  const adjacent = hasCanonicalLedger
+    ? uniqueCompetitors(
+        asArray<SourceItem>(canonicalLedgerRoles.adjacent_solution)
+          .filter(
+            (source) =>
+              String(source.region_match || "").toLowerCase() ===
+              "local"
+          )
+          .map(sourceToCompetitor)
+      )
+    : uniqueCompetitors(
+        asArray<VerifiedCompetitor>(
+          competitiveRecord.local_adjacent_solutions
+        ).filter(
+          (item) =>
+            String(
+              item.region_match ||
+                item.region ||
+                ""
+            ).toLowerCase() === "local"
+        )
+      );
 
   const regionalFromCompetitive = uniqueCompetitors(
     asArray<VerifiedCompetitor>(competitiveRecord.regional_competitors)
   );
 
-  const regional =
-    regionalFromCompetitive.length > 0
+  const regional = hasCanonicalLedger
+    ? regionalSourceItems.map(sourceToCompetitor)
+    : regionalFromCompetitive.length > 0
       ? regionalFromCompetitive
       : regionalSourceItems.map(sourceToCompetitor);
 
@@ -400,16 +427,19 @@ export default function SourcesAndCompetitorsSection({
     asArray<VerifiedCompetitor>(competitiveRecord.international_benchmarks)
   );
 
-  const international =
-    internationalFromCompetitive.length > 0
+  const international = hasCanonicalLedger
+    ? internationalSourceItems.map(sourceToCompetitor)
+    : internationalFromCompetitive.length > 0
       ? internationalFromCompetitive
       : internationalSourceItems.map(sourceToCompetitor);
 
   const technologyFromCompetitive = uniqueCompetitors(
     asArray<VerifiedCompetitor>(competitiveRecord.technology_providers)
   );
-  const technologyProviders =
-    technologyFromCompetitive.length > 0
+
+  const technologyProviders = hasCanonicalLedger
+    ? technologySourceItems.map(sourceToCompetitor)
+    : technologyFromCompetitive.length > 0
       ? technologyFromCompetitive
       : technologySourceItems.map(sourceToCompetitor);
 
@@ -482,10 +512,14 @@ export default function SourcesAndCompetitorsSection({
         <CompetitorGroup
           title={context.directGroupTitle}
           competitors={directCompetitors}
-          fallbackItems={getPublicTextItems(
-            competitiveAnalysis?.direct_competitors || [],
-            reportLanguage
-          )}
+          fallbackItems={
+            hasCanonicalLedger
+              ? []
+              : getPublicTextItems(
+                  competitiveAnalysis?.direct_competitors || [],
+                  reportLanguage
+                )
+          }
           emptyText={context.directEmptyText}
           language={reportLanguage}
         />
@@ -544,7 +578,11 @@ export default function SourcesAndCompetitorsSection({
           title={
             context.isGlobal ? t.comparableSolutions : t.indirectCompetitors
           }
-          items={competitiveAnalysis?.indirect_competitors || []}
+          items={
+            hasCanonicalLedger
+              ? []
+              : competitiveAnalysis?.indirect_competitors || []
+          }
           language={reportLanguage}
         />
 

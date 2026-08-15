@@ -177,16 +177,28 @@ export function difficultyLabel(value?: string | null): string {
 }
 
 export function verdictLabel(value?: string): string {
-  switch (value) {
-    case "POURSUIVRE":
-      return "POURSUIVRE";
-    case "PIVOTER":
-      return "PIVOTER";
-    case "ABANDONNER":
-      return "ABANDONNER";
-    default:
-      return value || "—";
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replaceAll("-", "_")
+    .replaceAll(" ", "_");
+
+  if (["go", "poursuivre", "continue", "continued"].includes(normalized)) {
+    return "POURSUIVRE";
   }
+  if (["conditional_go", "continue_with_conditions", "poursuivre_sous_conditions"].includes(normalized)) {
+    return "POURSUIVRE SOUS CONDITIONS";
+  }
+  if (["pivot", "pivoter"].includes(normalized)) {
+    return "PIVOTER";
+  }
+  if (["no_go", "stop", "abandonner", "abandon"].includes(normalized)) {
+    return "NE PAS POURSUIVRE";
+  }
+  if (["insufficient_evidence", "preuves_insuffisantes"].includes(normalized)) {
+    return "PREUVES INSUFFISANTES";
+  }
+  return value || "—";
 }
 
 export function sourceTypeLabel(value?: string): string {

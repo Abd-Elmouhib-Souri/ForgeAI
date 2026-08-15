@@ -154,7 +154,6 @@ export default function FinalReportSection({
         <StartupScoreSection
           analysisData={analysisData}
           project={project}
-          startupScore={analysisData.startup_score}
           language={reportLanguage}
         />
       </ReportSection>

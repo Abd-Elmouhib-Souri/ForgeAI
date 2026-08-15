@@ -31,6 +31,9 @@ function sourceTypeText(value?: string | null, language: ForgeLang = "fr"): stri
     market_article: "Market source",
     directory: "Directory",
     regulation: "Regulation",
+    official_source: "Official source",
+    local_ecosystem: "Local ecosystem",
+    technology_benchmark: "Technology benchmark",
     benchmark: "Benchmark",
   };
 
@@ -41,6 +44,9 @@ function sourceTypeText(value?: string | null, language: ForgeLang = "fr"): stri
     market_article: "Source marché",
     directory: "Annuaire",
     regulation: "Réglementation",
+    official_source: "Source officielle",
+    local_ecosystem: "Écosystème local",
+    technology_benchmark: "Benchmark technologique",
     benchmark: "Benchmark",
   };
 

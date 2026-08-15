@@ -5,14 +5,12 @@ import type {
   BusinessModelCanvas,
   FinancialEstimation,
   Project,
-  StartupScore,
   SWOT,
   TextList,
 } from "../_types/project-detail.types";
 
 import {
   getConcreteSolution,
-  getOfficialStartupScore,
   getPublicLocalMarketAssessment,
   getPublicTextItems,
   getReportLanguage,
@@ -29,7 +27,6 @@ type CoreSectionProps = {
   swot?: SWOT | null;
   bmc?: BusinessModelCanvas | null;
   financialEstimation?: FinancialEstimation | null;
-  startupScore?: StartupScore | null;
   limitations?: TextList;
   [key: string]: unknown;
 };
@@ -346,8 +343,21 @@ export function ExecutiveSummarySection({
 }: CoreSectionProps) {
   if (!analysisData || !project) return null;
 
-  const lang = resolveLanguage({ project, analysisData, language });
+  const finalReport = analysisData.final_report;
+  if (!finalReport) return null;
+
+  const lang = resolveLanguage({
+    project,
+    analysisData,
+    language,
+  });
+
   const t = getCopy(lang);
+
+  const context = finalReport.context;
+  const summary = finalReport.executive_summary;
+  const decision = finalReport.decision;
+  const score = finalReport.startup_score;
 
   return (
     <SectionShell
@@ -359,22 +369,30 @@ export function ExecutiveSummarySection({
         <MetricCard
           label={t.sector}
           value={cleanText(
-            analysisData.detected_sector || project.industry || "—",
+            context?.sector ||
+              project.industry ||
+              "?",
             lang
           )}
           tone="sky"
         />
+
         <MetricCard
           label={t.region}
           value={cleanText(
-            analysisData.target_region || project.market_region || "—",
+            context?.target_region ||
+              project.market_region ||
+              "?",
             lang
           )}
           tone="emerald"
         />
+
         <MetricCard
           label={t.startupScore}
-          value={formatScore(getOfficialStartupScore(analysisData, project.startup_score))}
+          value={formatScore(
+            score?.global_score ?? null
+          )}
           tone="amber"
         />
       </div>
@@ -382,7 +400,10 @@ export function ExecutiveSummarySection({
       <div className="mt-5">
         <AnalysisBlock
           title={t.summary}
-          value={analysisData.summary}
+          value={
+            decision?.debate_synthesis ||
+            summary?.final_recommendation
+          }
           language={lang}
         />
       </div>
@@ -745,110 +766,76 @@ export const FinancialEstimationSection = FinancialSection;
 export function StartupScoreSection({
   analysisData,
   project,
-  startupScore,
   language,
 }: CoreSectionProps) {
-  const currentScore = startupScore || analysisData?.startup_score;
-  if (!currentScore && !project?.startup_score) return null;
+  const currentScore =
+    analysisData?.final_report?.startup_score;
 
-  const lang = resolveLanguage({ project, analysisData, language });
+  if (!currentScore) return null;
+
+  const lang = resolveLanguage({
+    project,
+    analysisData,
+    language,
+  });
+
   const t = getCopy(lang);
 
-  const officialScore = getOfficialStartupScore(
-    analysisData || null,
-    project?.startup_score ?? null
-  );
+  const breakdown = {
+    innovation: currentScore.innovation,
+    feasibility: currentScore.feasibility,
+    profitability: currentScore.profitability,
+    scalability: currentScore.scalability,
+  };
 
-  const breakdown =
-    currentScore?.criteria_scores ||
-    currentScore?.score_breakdown ||
-    currentScore?.breakdown ||
-    {};
-
-  const potentialScore = currentScore?.potential_score ?? officialScore;
-  const evidenceScore = currentScore?.evidence_confidence_score;
-  const executionScore = currentScore?.execution_readiness_score;
-  const evidenceLevel =
-    currentScore?.evidence_confidence_level ||
-    currentScore?.overall_evidence_confidence ||
-    currentScore?.confidence_level ||
-    "—";
+  const availableBreakdown =
+    Object.entries(
+      breakdown
+    ).filter(
+      (
+        entry
+      ): entry is [string, number] =>
+        typeof entry[1] === "number" &&
+        Number.isFinite(entry[1])
+    );
 
   return (
-    <SectionShell id="startup-score" title={t.sectionStartupScore}>
-      <div className="grid gap-5 md:grid-cols-3">
+    <SectionShell
+      id="startup-score"
+      title={t.sectionStartupScore}
+    >
+      <div className="grid gap-5 md:grid-cols-2">
         <MetricCard
-          label={lang === "en" ? "Potential score" : "Score de potentiel"}
-          value={formatScore(potentialScore)}
+          label={t.startupScore}
+          value={formatScore(
+            currentScore.global_score ?? null
+          )}
           tone="amber"
         />
-        <MetricCard
-          label={lang === "en" ? "Evidence confidence" : "Confiance des preuves"}
-          value={
-            typeof evidenceScore === "number"
-              ? formatScore(evidenceScore)
-              : cleanText(evidenceLevel, lang)
-          }
-          tone="sky"
-        />
-        <MetricCard
-          label={lang === "en" ? "Execution readiness" : "Préparation à l’exécution"}
-          value={formatScore(executionScore)}
-          tone="emerald"
+
+        <AnalysisBlock
+          title={t.summary}
+          value={currentScore.score_explanation}
+          language={lang}
         />
       </div>
 
-      <div className="mt-5 grid gap-5 md:grid-cols-3">
-        <MetricCard label={t.risk} value={riskLabel(currentScore?.risk_level, lang)} tone="rose" />
-        <MetricCard label={t.sourceConfidence} value={confidenceLabel(evidenceLevel, lang)} tone="sky" />
-        <MetricCard label={t.verdict} value={verdictLabel(
-            currentScore?.canonical_verdict_code ||
-              currentScore?.verdict_code ||
-              analysisData?.verdict_code ||
-              currentScore?.verdict,
-            lang
-          )} tone="emerald" />
-      </div>
-
-      {(currentScore?.summary || currentScore?.score_explanation) && (
-        <div className="mt-5">
-          <AnalysisBlock
-            title={t.summary}
-            value={currentScore.summary || currentScore.score_explanation}
-            language={lang}
-          />
-        </div>
-      )}
-
-      {Object.keys(breakdown).length > 0 && (
+      {availableBreakdown.length > 0 && (
         <div className="mt-5 grid gap-4 md:grid-cols-2">
-          {Object.entries(breakdown).map(([key, value]) => (
-            <MetricCard
-              key={key}
-              label={criterionLabel(key, lang)}
-              value={formatScore(typeof value === "number" ? value : null)}
-            />
-          ))}
+          {availableBreakdown.map(
+            ([key, value]) => (
+              <MetricCard
+                key={key}
+                label={criterionLabel(
+                  key,
+                  lang
+                )}
+                value={formatScore(value)}
+              />
+            )
+          )}
         </div>
       )}
-
-      <div className="mt-5 grid gap-5 md:grid-cols-2">
-        <ListBlock
-          title={t.strengths}
-          items={currentScore?.strengths || []}
-          language={lang}
-        />
-        <ListBlock
-          title={t.weaknesses}
-          items={currentScore?.weaknesses || []}
-          language={lang}
-        />
-        <ListBlock
-          title={t.nextActions}
-          items={currentScore?.next_actions || []}
-          language={lang}
-        />
-      </div>
     </SectionShell>
   );
 }
@@ -858,73 +845,55 @@ export function VerdictSection({
   project,
   language,
 }: CoreSectionProps) {
-  if (!analysisData?.debate_room?.judge && !analysisData?.startup_score) {
-    return null;
-  }
+  const decision =
+    analysisData?.final_report?.decision;
 
-  const lang = resolveLanguage({ project, analysisData, language });
+  if (!decision) return null;
+
+  const lang = resolveLanguage({
+    project,
+    analysisData,
+    language,
+  });
+
   const t = getCopy(lang);
-  const judge = analysisData?.debate_room?.judge;
-  const startupScore = analysisData?.startup_score;
-
-  const officialScore = getOfficialStartupScore(
-    analysisData || null,
-    project?.startup_score ?? null
-  );
 
   const finalRecommendation =
-    judge?.final_recommendation ||
-    judge?.debate_synthesis ||
-    startupScore?.summary ||
-    (lang === "en"
-      ? "Continue with a narrow MVP, validate real user adoption and prove willingness to pay before scaling."
-      : "Poursuivre avec un MVP réduit, valider l’adoption réelle et prouver la volonté de payer avant le passage à l’échelle.");
-
-  const improvedIdea =
-    judge?.improved_idea ||
-    (lang === "en"
-      ? "Focus the product on the first operational workflow, run a pilot with real target users, then expand features only after repeated usage is proven."
-      : "Centrer le produit sur le premier workflow opérationnel, lancer un pilote avec de vrais utilisateurs cibles, puis élargir les fonctionnalités seulement après preuve d’usage répété.");
-
-  const validatedOpportunities = judge?.validated_opportunities || [];
-  const potentialOpportunities =
-    judge?.potential_opportunities ||
-    analysisData.swot?.opportunities ||
-    [];
-
-  const criticalRisks =
-    toListItems(judge?.critical_risks || [], lang).length > 0
-      ? judge?.critical_risks || []
-      : analysisData.swot?.threats || startupScore?.weaknesses || [];
+    decision.final_recommendation ||
+    decision.debate_synthesis;
 
   return (
-    <SectionShell id="verdict" title={t.sectionVerdict}>
+    <SectionShell
+      id="verdict"
+      title={t.sectionVerdict}
+    >
       <div className="grid gap-5 md:grid-cols-3">
         <MetricCard
           label={t.verdict}
           value={verdictLabel(
-            analysisData?.verdict_code ||
-              judge?.verdict_code ||
-              startupScore?.canonical_verdict_code ||
-              startupScore?.verdict_code ||
-              judge?.verdict ||
-              startupScore?.verdict,
+            decision.verdict_code ||
+              decision.verdict,
             lang
           )}
           tone="emerald"
         />
+
         <MetricCard
           label={t.argumentScore}
           value={formatScore(
-            judge?.argument_strength_score ??
-              judge?.confidence_score ??
-              officialScore
+            decision.argument_strength_score ??
+              decision.confidence_score ??
+              null
           )}
           tone="sky"
         />
+
         <MetricCard
           label={t.risk}
-          value={riskLabel(judge?.risk_level || startupScore?.risk_level, lang)}
+          value={riskLabel(
+            decision.risk_level,
+            lang
+          )}
           tone="rose"
         />
       </div>
@@ -935,9 +904,10 @@ export function VerdictSection({
           value={finalRecommendation}
           language={lang}
         />
+
         <AnalysisBlock
           title={t.improvedIdea}
-          value={improvedIdea}
+          value={decision.improved_idea}
           language={lang}
         />
       </div>
@@ -945,27 +915,59 @@ export function VerdictSection({
       <div className="mt-5 grid gap-5 md:grid-cols-2">
         <ListBlock
           title={t.criticalRisks}
-          items={criticalRisks}
+          items={decision.critical_risks || []}
           language={lang}
         />
+
         <ListBlock
           title={t.validatedOpportunities}
-          items={validatedOpportunities}
+          items={
+            decision.validated_opportunities ||
+            []
+          }
           language={lang}
           emptyText={
             lang === "en"
               ? "No opportunity is considered validated without compatible evidence."
-              : "Aucune opportunité n’est considérée comme validée sans preuve compatible."
+              : "Aucune opportunit? n?est consid?r?e comme valid?e sans preuve compatible."
           }
         />
+
         <ListBlock
           title={t.potentialOpportunities}
-          items={potentialOpportunities}
+          items={
+            decision.potential_opportunities ||
+            []
+          }
           language={lang}
         />
+
+        <ListBlock
+          title={
+            lang === "en"
+              ? "GO conditions"
+              : "Conditions GO"
+          }
+          items={decision.go_conditions || []}
+          language={lang}
+        />
+
+        <ListBlock
+          title={
+            lang === "en"
+              ? "NO-GO conditions"
+              : "Conditions NO-GO"
+          }
+          items={decision.no_go_conditions || []}
+          language={lang}
+        />
+
         <ListBlock
           title={t.goNoGo}
-          items={judge?.go_no_go_conditions || []}
+          items={
+            decision.go_no_go_conditions ||
+            []
+          }
           language={lang}
         />
       </div>
@@ -978,24 +980,32 @@ export function ActionPlanSection({
   project,
   language,
 }: CoreSectionProps) {
-  if (!analysisData) return null;
+  const decision =
+    analysisData?.final_report?.decision;
 
-  const lang = resolveLanguage({ project, analysisData, language });
+  if (!decision) return null;
+
+  const lang = resolveLanguage({
+    project,
+    analysisData,
+    language,
+  });
+
   const t = getCopy(lang);
-  const judge = analysisData.debate_room?.judge;
 
-  const actions =
-    judge?.next_actions ||
-    judge?.action_plan ||
-    analysisData.recommendations ||
-    analysisData.startup_score?.next_actions ||
+  const items =
+    decision.next_actions ||
+    decision.action_plan ||
     [];
 
   return (
-    <SectionShell id="action-plan" title={t.sectionActionPlan}>
+    <SectionShell
+      id="action-plan"
+      title={t.sectionActionPlan}
+    >
       <ListBlock
         title={t.nextActions}
-        items={actions}
+        items={items}
         language={lang}
         emptyText={t.defaultLimitations}
       />
