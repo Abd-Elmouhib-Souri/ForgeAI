@@ -538,12 +538,31 @@ export interface DebateMemberPosition {
   summary?: string;
 }
 
+export interface DebateEvidenceUsedItem extends SourceItem {
+  source_id?: string;
+}
+
 export interface DebateQuestionAnswer {
   direct_answer?: string;
   reasoning_summary?: string;
   confidence?: number;
+
+  support_status?: string;
+
   evidence_status?: string;
+  claim_kind?: string;
+  validation_required?: boolean;
+
+  source_ids?: string[];
+
+  // Temporary backend compatibility alias.
   evidence_ids?: string[];
+
+  evidence_used?: DebateEvidenceUsedItem[];
+
+  canonical_claim_id?: string;
+  canonical_claim_found?: boolean;
+
   unresolved_point?: string;
 }
 
@@ -558,6 +577,7 @@ export interface DebateCommitteeQuestion {
   question_id?: string;
   asked_by?: string;
   addressed_to?: string;
+  answered_by?: string;
   question?: string;
   question_type?: string;
   answer?: DebateQuestionAnswer;
@@ -577,6 +597,8 @@ export interface DebateRoundMeetingPreparation {
   recommended_answers?: string[];
   proofs_to_prepare?: string[];
   answers_to_avoid?: string[];
+  unresolved_points?: string[];
+  follow_up_questions?: string[];
 }
 
 export interface DebateGlobalMeetingPreparation {
@@ -587,6 +609,8 @@ export interface DebateGlobalMeetingPreparation {
   proofs_to_prepare?: string[];
   answers_to_avoid?: string[];
   unresolved_questions?: string[];
+  unresolved_points?: string[];
+  follow_up_questions?: string[];
 }
 
 export interface DebateRoomDefender {
@@ -737,6 +761,185 @@ export interface DebateRoomData {
   evidence_packet_used?: Record<string, unknown>;
 }
 
+export interface FinalReportPublicSource extends SourceItem {
+  source_id?: string;
+}
+
+export type FinalReportEvidenceStatus =
+  | "sourced"
+  | "estimated"
+  | "not_confirmed"
+  | string;
+
+export type FinalReportClaimKind =
+  | "evidence_claim"
+  | "hypothesis"
+  | "estimate"
+  | "recommendation"
+  | "audit_conclusion"
+  | "project_input"
+  | string;
+
+export interface FinalReportClaim {
+  claim_id?: string;
+  path?: string;
+  category?: string;
+  claim?: string;
+  public_text?: string;
+  text?: string;
+  confidence?: string;
+  evidence_status?: FinalReportEvidenceStatus;
+  claim_kind?: FinalReportClaimKind;
+  validation_required?: boolean;
+  source_ids?: string[];
+  supporting_evidence?: FinalReportPublicSource[];
+  consulted_sources?: FinalReportPublicSource[];
+}
+
+export interface FinalReportContext {
+  schema_version?: string;
+  project_name?: string;
+  sector?: string;
+  target_region?: string;
+}
+
+export interface FinalReportAuthorityContract {
+  context?: string;
+  sources?: string;
+  evidence?: string;
+  decision?: string;
+  recalculates_readiness?: boolean;
+  reclassifies_sources?: boolean;
+  reclassifies_evidence?: boolean;
+  recalculates_verdict?: boolean;
+}
+
+export interface FinalReportExecutiveSummary {
+  decision_source?: string;
+  verdict_code?: string;
+  final_recommendation?: string;
+  evidence_counts?: {
+    sourced?: number;
+    estimated?: number;
+    not_confirmed?: number;
+    unclassified?: number;
+    validation_required?: number;
+  };
+  supported_claims?: FinalReportClaim[];
+  estimated_claims?: FinalReportClaim[];
+  not_confirmed_claims?: FinalReportClaim[];
+  unclassified_claims?: FinalReportClaim[];
+  validation_priorities?: FinalReportClaim[];
+}
+
+export interface FinalReportDecision {
+  available?: boolean;
+  format?: string;
+  status?: string;
+
+  source?: string;
+  verdict?: string;
+  verdict_code?: string;
+
+  final_recommendation?: string;
+  risk_level?: string;
+
+  argument_strength_score?: number;
+  confidence_score?: number;
+
+  debate_synthesis?: string;
+  improved_idea?: string;
+
+  next_actions?: string[];
+  action_plan?: string[];
+
+  critical_risks?: string[];
+  validated_findings?: string[];
+  validated_opportunities?: string[];
+  potential_opportunities?: string[];
+  missing_evidence?: string[];
+  weak_assumptions?: string[];
+
+  go_conditions?: string[];
+  no_go_conditions?: string[];
+  go_no_go_conditions?: string[];
+
+  decision_by_round?: DebateDecisionByRound[];
+  committee_vote?: unknown;
+  vetoes?: unknown;
+}
+
+export interface FinalReportCompetitive {
+  source_ledger_present?: boolean;
+  source_ledger_source?: string;
+  canonical_sources_count?: number;
+  counts?: Record<string, number>;
+
+  canonical_source_ids?: string[];
+  local_direct_competitor_source_ids?: string[];
+  direct_competitor_source_ids?: string[];
+  adjacent_solution_source_ids?: string[];
+  regional_benchmark_source_ids?: string[];
+  international_benchmark_source_ids?: string[];
+  technology_provider_source_ids?: string[];
+  technology_benchmark_source_ids?: string[];
+  local_ecosystem_source_ids?: string[];
+  ecosystem_actor_source_ids?: string[];
+  market_context_source_ids?: string[];
+  market_evidence_source_ids?: string[];
+  official_source_items_source_ids?: string[];
+  directory_source_ids?: string[];
+  evidence_source_ids?: string[];
+  benchmark_source_ids?: string[];
+}
+
+export interface FinalReportEvidence {
+  ledger_present?: boolean;
+  canonical_evidence_statuses?: string[];
+  status_contract?: Record<string, unknown>;
+  claims?: FinalReportClaim[];
+  source_index?: Record<
+    string,
+    FinalReportPublicSource
+  >;
+}
+
+export interface FinalReportStartupScore {
+  global_score?: number;
+  innovation?: number;
+  feasibility?: number;
+  profitability?: number;
+  scalability?: number;
+  score_explanation?: string;
+}
+
+export interface FinalReportMeetingPreparation {
+  title?: string;
+  project?: string;
+  top_questions?: string[];
+  recommended_answers?: string[];
+  proofs_to_prepare?: string[];
+  answers_to_avoid?: string[];
+  unresolved_questions?: string[];
+  unresolved_points?: string[];
+  follow_up_questions?: string[];
+}
+
+export interface FinalReportData {
+  format?: string;
+  schema_version?: string;
+
+  authority_contract?: FinalReportAuthorityContract;
+  context?: FinalReportContext;
+  executive_summary?: FinalReportExecutiveSummary;
+  decision?: FinalReportDecision;
+  competitive?: FinalReportCompetitive;
+  evidence?: FinalReportEvidence;
+  startup_score?: FinalReportStartupScore;
+  meeting_preparation?: FinalReportMeetingPreparation;
+  module_presence?: Record<string, boolean>;
+}
+
 export interface StartupEvaluatorMeta {
   completed_steps?: string[];
   failed_steps?: string[];
@@ -782,6 +985,7 @@ export interface AnalysisData {
 
   fact_check_report?: FactCheckReport;
   debate_room?: DebateRoomData;
+  final_report?: FinalReportData;
   startup_evaluator_meta?: StartupEvaluatorMeta;
   public_limitations?: string[];
   evidence_ledger?: {

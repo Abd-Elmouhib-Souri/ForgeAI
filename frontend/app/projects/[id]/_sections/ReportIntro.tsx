@@ -7,7 +7,6 @@ import type { AnalysisData, Project } from "../_types/project-detail.types";
 import { reportCopy } from "../_lib/report-copy";
 import { formatScore } from "../_lib/formatters";
 import {
-  getOfficialStartupScore,
   getReportLanguage,
 } from "../_lib/analysis-helpers";
 import { cleanText } from "../_lib/text-cleaning";
@@ -26,7 +25,10 @@ function verdictText(value?: string | null, language: ForgeLang = "fr"): string 
     if (normalized.includes("stop") || normalized.includes("abandon")) {
       return "Stop";
     }
-    return cleanText(value || "Continue", language);
+    return cleanText(
+      value || "Decision pending",
+      language
+    );
   }
 
   if (normalized.includes("conditional")) return "Poursuivre sous conditions";
@@ -38,7 +40,10 @@ function verdictText(value?: string | null, language: ForgeLang = "fr"): string 
     return "Abandonner";
   }
 
-  return cleanText(value || "Poursuivre", language);
+  return cleanText(
+    value || "D?cision en attente",
+    language
+  );
 }
 
 export default function ReportIntro({
@@ -52,20 +57,18 @@ export default function ReportIntro({
   const reportLanguage = getReportLanguage(project, analysisData, lang);
   const t = reportCopy[reportLanguage];
 
-  const judge = analysisData.debate_room?.judge;
-  const startupScore = analysisData.startup_score;
+  const finalReport =
+    analysisData.final_report;
 
-  const officialScore = getOfficialStartupScore(
-    analysisData,
-    project.startup_score
-  );
+  const decision =
+    finalReport?.decision;
+
+  const score =
+    finalReport?.startup_score?.global_score;
 
   const verdict =
-    judge?.verdict ||
-    startupScore?.verdict ||
-    (analysisData.debate_room?.rounds?.length
-      ? "Continue with conditions"
-      : "Continue");
+    decision?.verdict_code ||
+    decision?.verdict;
 
   return (
     <section className="forge-panel p-7">
@@ -81,18 +84,24 @@ export default function ReportIntro({
         <MiniMetric
           label={t.sector}
           value={cleanText(
-            analysisData.detected_sector || project.industry || "—",
+            finalReport?.context?.sector ||
+              project.industry ||
+              "\u2014",
             reportLanguage
           )}
         />
         <MiniMetric
           label={t.region}
           value={cleanText(
-            analysisData.target_region || project.market_region || "—",
+            finalReport?.context?.target_region ||
+              project.market_region ||
+              "\u2014",
             reportLanguage
           )}
         />
-        <MiniMetric label={t.startupScore} value={formatScore(officialScore)} />
+        <MiniMetric label={t.startupScore} value={formatScore(
+            score ?? null
+          )} />
         <MiniMetric
           label={t.verdict}
           value={verdictText(verdict, reportLanguage)}
