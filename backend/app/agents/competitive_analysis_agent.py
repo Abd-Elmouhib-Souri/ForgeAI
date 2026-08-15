@@ -118,7 +118,6 @@ class CompetitiveAnalysisAgent:
     }
 
     PUBLIC_MIN_SCORE = 0.70
-    LOCAL_DIRECT_MIN_SCORE = 0.58
 
     def __init__(self):
         self.crawler = ForgeCrawler(max_results_per_query=10, max_sources=8)
@@ -246,9 +245,13 @@ class CompetitiveAnalysisAgent:
             source_ledger.get("evidence_sources") or []
         )
 
-        local_direct_competitors = self._local_direct_competitors(
-            sources=safe_public_sources,
-            fallback_region=region,
+        # CanonicalSourceLedger already owns the local-direct grouping.
+        # CompetitiveAnalysisAgent only converts that canonical bucket into
+        # presentation cards; it must not recalculate directness.
+        local_direct_competitors = self._sources_to_competitor_cards(
+            sources=local_competitor_sources,
+            fallback_region=region or "Local",
+            limit=None,
         )
 
         regional_competitors = self._regional_competitors(
@@ -424,6 +427,7 @@ class CompetitiveAnalysisAgent:
 
             "indirect_competitors": self._build_indirect_competitors(
                 market_context_sources=market_context_cards,
+                adjacent_solutions=local_adjacent_solutions,
                 regional_competitors=regional_competitors,
                 international_benchmarks=international_benchmarks,
                 structured_project_context=structured_project_context,
@@ -1063,55 +1067,7 @@ class CompetitiveAnalysisAgent:
     # Canonical source groups
     # ========================================================
 
-    def _is_strict_direct_source(
-        self,
-        source: Dict[str, Any],
-    ) -> bool:
-        try:
-            score = float(source.get("source_relevance_score") or 0)
-        except (TypeError, ValueError):
-            return False
 
-        return (
-            score
-            >= self.LOCAL_DIRECT_MIN_SCORE
-            and bool(
-                source.get(
-                    "is_direct_competitor"
-                )
-            )
-            and bool(
-                source.get("url")
-            )
-        )
-
-    def _local_direct_source_items(
-        self,
-        *,
-        sources: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
-        result: List[Dict[str, Any]] = []
-
-        for source in sources:
-            source_type = str(source.get("source_type") or "").lower()
-            region_match = str(source.get("region_match") or "").lower()
-            score = float(source.get("source_relevance_score") or 0)
-
-            if region_match != "local":
-                continue
-
-            if str(source.get("source_role") or "").lower() != "direct_competitor":
-                continue
-
-            if source_type not in {"competitor", "pricing_page"}:
-                continue
-
-            if not self._is_strict_direct_source(source):
-                continue
-
-            result.append(source)
-
-        return result[:6]
 
     def _regional_source_items(
         self,
@@ -1182,47 +1138,6 @@ class CompetitiveAnalysisAgent:
     # Competitor cards
     # ========================================================
 
-    def _local_direct_competitors(
-        self,
-        *,
-        sources: List[Dict[str, Any]],
-        fallback_region: str,
-    ) -> List[Dict[str, Any]]:
-        competitors: List[Dict[str, Any]] = []
-
-        for source in sources:
-            source_type = str(source.get("source_type") or "").lower()
-            region_match = str(source.get("region_match") or "").lower()
-            score = float(source.get("source_relevance_score") or 0)
-
-            if region_match != "local":
-                continue
-
-            if source_type not in {"competitor", "pricing_page"}:
-                continue
-
-            if not self._is_strict_direct_source(source):
-                continue
-
-            competitors.append(
-                {
-                    "name": source.get("vendor_name") or source.get("title"),
-                    "title": source.get("title"),
-                    "url": source.get("url"),
-                    "source_url": source.get("url"),
-                    "region": fallback_region,
-                    "source_type": source_type,
-                    "confidence": source.get("confidence") or "medium",
-                    "source_relevance_score": score,
-                    "why_relevant": source.get("why_relevant") or "",
-                    "evidence": source.get("why_relevant") or "",
-                    "pricing_found": bool(source.get("pricing_found")),
-                    "vendor_key": source.get("vendor_key"),
-                    "canonical_vendor_domain": source.get("canonical_vendor_domain"),
-                }
-            )
-
-        return competitors[:5]
 
     def _regional_competitors(
         self,
@@ -1291,6 +1206,7 @@ class CompetitiveAnalysisAgent:
         *,
         sources: List[Dict[str, Any]],
         fallback_region: str,
+        limit: Optional[int] = 6,
     ) -> List[Dict[str, Any]]:
         competitors: List[Dict[str, Any]] = []
 
@@ -1322,7 +1238,10 @@ class CompetitiveAnalysisAgent:
                 }
             )
 
-        return competitors[:6]
+        if limit is None:
+            return competitors
+
+        return competitors[:limit]
 
     # ========================================================
     # Analysis text
@@ -1336,50 +1255,266 @@ class CompetitiveAnalysisAgent:
         international_benchmarks: List[Dict[str, Any]],
         structured_project_context: Dict[str, Any],
         language: str,
+        adjacent_solutions: Optional[List[Dict[str, Any]]] = None,
     ) -> List[str]:
+        """Build indirect alternatives without vertical-specific knowledge.
+
+        Canonical source buckets remain authoritative whenever real adjacent
+        solutions or benchmarks exist. When no named alternative is available,
+        the fallback describes structural substitutes derived only from the
+        locked project context: workflow, actors and transaction/value unit.
+
+        Editorial evidence is never converted into a competitor.
+        """
+
         names: List[str] = []
 
-        for item in regional_competitors + international_benchmarks:
-            name = item.get("name")
-            if name:
-                names.append(str(name))
+        canonical_alternatives = (
+            list(adjacent_solutions or [])
+            + list(regional_competitors or [])
+            + list(international_benchmarks or [])
+        )
 
-        # Editorial evidence is not a competitor. Market articles, reports,
-        # directories and regulations remain in market_context_sources only.
+        for item in canonical_alternatives:
+            name = str(
+                item.get("name")
+                or item.get("title")
+                or ""
+            ).strip()
+
+            if name:
+                names.append(
+                    name
+                )
 
         if names:
-            return self._unique(names)[:8]
+            return self._unique(
+                names
+            )[:8]
 
-        archetype = str(
-            structured_project_context.get("project_archetype") or ""
-        ).strip().lower()
-        vertical = str(
-            structured_project_context.get("vertical") or ""
-        ).strip().lower()
+        # Market articles, reports, directories and regulations are evidence,
+        # not competitors. The parameter is intentionally not used to create
+        # alternative names.
+        _ = market_context_sources
 
-        if archetype == "two_sided_marketplace" and vertical == "mobility_taxi":
-            if language == "en":
-                return [
-                    "Street hailing and taxi ranks",
-                    "Direct phone dispatch or a driver's personal customer network",
-                    "Existing local taxi and ride-hailing applications",
-                ]
-            return [
-                "Maraude dans la rue et stations de taxis",
-                "Réservation directe par téléphone ou réseau personnel du chauffeur",
-                "Applications locales existantes de taxi ou de ride-hailing",
-            ]
+        def _values(
+            value: Any,
+        ) -> List[str]:
+            if value is None:
+                return []
+
+            if isinstance(
+                value,
+                str,
+            ):
+                clean = value.strip()
+                return [clean] if clean else []
+
+            if isinstance(
+                value,
+                (
+                    list,
+                    tuple,
+                    set,
+                ),
+            ):
+                return self._unique(
+                    [
+                        str(item or "").strip()
+                        for item in value
+                        if str(item or "").strip()
+                    ]
+                )
+
+            return []
+
+        workflows = _values(
+            structured_project_context.get(
+                "priority_workflows"
+            )
+        )
+
+        for key in (
+            "priority_workflow",
+            "main_use_case",
+        ):
+            value = str(
+                structured_project_context.get(
+                    key
+                )
+                or ""
+            ).strip()
+
+            if value:
+                workflows.append(
+                    value
+                )
+
+        workflows = self._unique(
+            workflows
+        )
+
+        primary_workflow = (
+            workflows[0]
+            if workflows
+            else ""
+        )
+
+        actor_names = _values(
+            structured_project_context.get(
+                "target_users"
+            )
+        )
+
+        for actor in (
+            structured_project_context.get(
+                "actor_details"
+            )
+            or []
+        ):
+            if not isinstance(
+                actor,
+                dict,
+            ):
+                continue
+
+            name = str(
+                actor.get("name")
+                or ""
+            ).strip()
+
+            if name:
+                actor_names.append(
+                    name
+                )
+
+        actor_names = self._unique(
+            actor_names
+        )
+
+        transaction_text = str(
+            structured_project_context.get(
+                "transaction_unit_text"
+            )
+            or ""
+        ).strip()
+
+        if not transaction_text:
+            transaction = (
+                structured_project_context.get(
+                    "transaction_unit"
+                )
+                or {}
+            )
+
+            if isinstance(
+                transaction,
+                dict,
+            ):
+                transaction_text = str(
+                    transaction.get(
+                        "sentence"
+                    )
+                    or ""
+                ).strip()
+
+        alternatives: List[str] = []
 
         if language == "en":
-            return [
-                "Manual tools currently used by the target users",
-                "Existing specialist products or direct offline coordination",
-            ]
+            if primary_workflow:
+                alternatives.append(
+                    "Manual or offline execution of the core workflow: "
+                    + primary_workflow
+                )
+            else:
+                alternatives.append(
+                    "Manual or offline execution of the core workflow"
+                )
 
-        return [
-            "Outils manuels actuellement utilisés par la cible",
-            "Produits spécialisés existants ou coordination directe hors ligne",
-        ]
+            if len(actor_names) >= 2:
+                alternatives.append(
+                    "Direct coordination between "
+                    + actor_names[0]
+                    + " and "
+                    + actor_names[1]
+                    + " without the proposed product"
+                )
+            elif actor_names:
+                alternatives.append(
+                    "Direct coordination outside the proposed product for "
+                    + actor_names[0]
+                )
+            else:
+                alternatives.append(
+                    "Direct coordination outside the proposed product"
+                )
+
+            if (
+                transaction_text
+                and transaction_text.casefold()
+                != primary_workflow.casefold()
+            ):
+                alternatives.append(
+                    "General-purpose tools as substitutes for the same "
+                    "transaction or value unit: "
+                    + transaction_text
+                    + " (to validate in the target market)"
+                )
+            else:
+                alternatives.append(
+                    "General-purpose tools as substitutes for the same "
+                    "workflow (to validate in the target market)"
+                )
+
+        else:
+            if primary_workflow:
+                alternatives.append(
+                    "Exécution manuelle ou hors ligne du workflow principal : "
+                    + primary_workflow
+                )
+            else:
+                alternatives.append(
+                    "Exécution manuelle ou hors ligne du workflow principal"
+                )
+
+            if len(actor_names) >= 2:
+                alternatives.append(
+                    "Coordination directe entre "
+                    + actor_names[0]
+                    + " et "
+                    + actor_names[1]
+                    + " sans le produit proposé"
+                )
+            elif actor_names:
+                alternatives.append(
+                    "Coordination directe hors du produit proposé pour "
+                    + actor_names[0]
+                )
+            else:
+                alternatives.append(
+                    "Coordination directe hors du produit proposé"
+                )
+
+            if (
+                transaction_text
+                and transaction_text.casefold()
+                != primary_workflow.casefold()
+            ):
+                alternatives.append(
+                    "Outils généralistes comme substituts de la même "
+                    "transaction ou unité de valeur : "
+                    + transaction_text
+                    + " (à valider sur le marché cible)"
+                )
+            else:
+                alternatives.append(
+                    "Outils généralistes comme substituts du même workflow "
+                    "(à valider sur le marché cible)"
+                )
+
+        return self._unique(
+            alternatives
+        )[:8]
 
     def _competitive_advantages(
         self,
