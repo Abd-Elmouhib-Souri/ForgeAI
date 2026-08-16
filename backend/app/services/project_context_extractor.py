@@ -1448,7 +1448,7 @@ class ProjectContextExtractor:
 
                 clause = re.sub(
                     r"(?:,\s*|\s+)"
-                    r"(?:and|et)\s*$",
+                    r"(?:and|et|then|puis)\s*$",
                     "",
                     clause.strip(),
                     flags=re.IGNORECASE,
@@ -1499,7 +1499,7 @@ class ProjectContextExtractor:
         for index, sentence in enumerate(
             sentences
         ):
-            if self._is_scope_only(
+            if self._workflow_sentence_is_non_action_context(
                 sentence
             ):
                 continue
@@ -1583,6 +1583,23 @@ class ProjectContextExtractor:
                 candidate["sentence"]
             )
 
+            object_key = comparison_key(
+                object_text
+            )
+            output_key = comparison_key(
+                output_text
+            )
+
+            if (
+                object_key
+                and output_key
+                and (
+                    object_key == output_key
+                    or output_key in object_key
+                )
+            ):
+                output_text = ""
+
             localized_action = (
                 self._localized_workflow_action(
                     candidate["action"],
@@ -1659,6 +1676,150 @@ class ProjectContextExtractor:
         return output
 
 
+    def _workflow_sentence_is_non_action_context(
+        self,
+        sentence: str,
+    ) -> bool:
+        """
+        Exclude scope or constraint declarations without erasing
+        real actor workflows merely because the sentence mentions
+        an MVP, pilot, first version or prototype.
+
+        All matching below is performed on comparison_key(), so the
+        rule remains accent-insensitive and the source stays ASCII-safe.
+        """
+        text = clean_text(
+            sentence
+        )
+
+        if not text:
+            return True
+
+        key = comparison_key(
+            text
+        )
+
+        if re.match(
+            r"^"
+            r"(?:(?:"
+            r"the|les|des|our|nos|my|mes|"
+            r"your|vos|their|leurs"
+            r")\s+)?"
+            r"(?:(?:"
+            r"main|primary|key|major|"
+            r"technical|operational|regulatory|business|"
+            r"principal(?:e|es|aux)?"
+            r")\s+)*"
+            r"(?:constraints?|contraintes?)\b",
+            key,
+        ):
+            return True
+
+        scope_subject = re.match(
+            r"^\s*"
+            r"(?:(?:the|le|la)\s+)?"
+            r"(?:"
+            r"mvp"
+            r"|minimum\s+viable\s+product"
+            r"|first\s+version"
+            r"|initial\s+version"
+            r"|premiere\s+version"
+            r"|version\s+initiale"
+            r"|(?:first|premier|premiere)\s+"
+            r"(?:pilot|pilote)"
+            r"|pilot"
+            r"|pilote"
+            r"|prototype"
+            r")\b",
+            key,
+            flags=re.IGNORECASE,
+        )
+
+        if scope_subject is None:
+            return False
+
+        tail_key = key[
+            scope_subject.end():
+        ].strip(
+            " ,:;-"
+        )
+
+        if not tail_key:
+            return True
+
+        scope_predicate = re.compile(
+            r"^(?:"
+            r"cover(?:s|ed|ing)?"
+            r"|support(?:s|ed|ing)?"
+            r"|includ(?:e|es|ed|ing)"
+            r"|contain(?:s|ed|ing)?"
+            r"|compris(?:e|es|ed|ing)?"
+            r"|consist(?:s|ed|ing)?\s+of"
+            r"|focus(?:es|ed|ing)?\s+on"
+            r"|(?:is|are|was|were|will\s+be)\s+"
+            r"limited\s+to"
+            r"|(?:is|was|will\s+be)\s+"
+            r"designed\s+to"
+            r"|couvr(?:e|ent|ira|iront)"
+            r"|inclu(?:t|ent|ra|ront)"
+            r"|comprend(?:s|ent|ra|ront)?"
+            r"|contien(?:t|nent|dra|dront)"
+            r"|se\s+limit(?:e|ent|era|eront)\s+a"
+            r"|(?:est|sont|sera|seront)\s+"
+            r"limit(?:e|ee|es|ees)\s+a"
+            r"|se\s+concentr(?:e|ent|era|eront)\s+sur"
+            r"|porte(?:nt|ra|ront)?\s+sur"
+            r"|prend\s+en\s+charge"
+            r")\b",
+            flags=re.IGNORECASE,
+        )
+
+        if scope_predicate.match(
+            tail_key
+        ):
+            return True
+
+        occurrences = (
+            self._workflow_action_occurrences(
+                tail_key
+            )
+        )
+
+        if not occurrences:
+            return True
+
+        first_match = occurrences[
+            0
+        ]["match"]
+
+        prefix = tail_key[
+            : first_match.start()
+        ].strip()
+
+        # Direct capability of the scope artifact:
+        # "The MVP detects ...".
+        if not prefix:
+            return True
+
+        # Modal capability of the scope artifact:
+        # "The MVP will detect ...".
+        if re.fullmatch(
+            r"(?:"
+            r"will|would|can|could|must|should|may|shall"
+            r"|doit|doivent|devra|devront"
+            r"|peut|peuvent"
+            r"|va|vont"
+            r")",
+            prefix,
+        ):
+            return True
+
+        # A phrase remains before the first action:
+        # "pilot users inspect ..."
+        # "the MVP lets users upload ..."
+        # Therefore a real actor/delegation is present.
+        return False
+
     def _workflow_action_occurrences(
         self,
         sentence: str,
@@ -1709,6 +1870,56 @@ class ProjectContextExtractor:
                     re.IGNORECASE,
                 ),
                 "exporter",
+            ),
+            (
+                re.compile(
+                    r"\bupload(?:s|ed|ing)?\b"
+                    r"|\bimport"
+                    r"(?:er|e|es|ent|ait|ant)\b",
+                    re.IGNORECASE,
+                ),
+                "importer",
+            ),
+            (
+                re.compile(
+                    r"\breview(?:s|ed|ing)?\b"
+                    r"|\bexamin"
+                    r"(?:er|e|es|ent|ait|ant)\b",
+                    re.IGNORECASE,
+                ),
+                "examiner",
+            ),
+            (
+                re.compile(
+                    r"\brequest(?:s|ed|ing)?\b"
+                    r"|\bdemand"
+                    r"(?:er|e|es|ent|ait|ant)\b",
+                    re.IGNORECASE,
+                ),
+                "demander",
+            ),
+            (
+                re.compile(
+                    r"\b(?:choose|chooses|chose|chosen|choosing)\b"
+                    r"|\bselect(?:s|ed|ing)?\b"
+                    r"|\bchois"
+                    r"(?:ir|it|issent|issait|issant)\b"
+                    r"|\bs(?:e|\u00e9)lectionn"
+                    r"(?:er|e|ent|ait|ant)\b",
+                    re.IGNORECASE,
+                ),
+                "choisir",
+            ),
+            (
+                re.compile(
+                    r"\breceiv(?:e|es|ed|ing)\b"
+                    r"|\brecev"
+                    r"(?:oir|ez|ons|ait|ant)\b"
+                    r"|\bre(?:c|\u00e7)oi"
+                    r"(?:t|vent)\b",
+                    re.IGNORECASE,
+                ),
+                "recevoir",
             ),
         )
 
@@ -1958,6 +2169,7 @@ class ProjectContextExtractor:
                     "enregistrer",
                     "approuver",
                     "exporter",
+                    "demander",
                 }
                 and not has_action_separator
             ):
@@ -2023,6 +2235,11 @@ class ProjectContextExtractor:
                 return "transmit"
 
             english_actions = {
+            "importer": "upload",
+            "examiner": "review",
+            "demander": "request",
+            "choisir": "choose",
+            "recevoir": "receive",
                 "creer": "create",
                 "inspecter": "inspect",
                 "detecter": "detect",

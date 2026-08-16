@@ -126,27 +126,40 @@ def test_matching_spot_spraying_benchmark_is_retained() -> None:
     assert len(claim["source_ids"]) == 1
 
 
+
 def test_market_trend_requires_semantic_compatibility() -> None:
     ledger = EvidenceLedger().build(
         {
             "market_study": {
                 "market_trends": [
-                    "Utilisation de drones pour la surveillance des champs",
-                    "Modernisation agricole face au stress hydrique",
+                    (
+                        "Utilisation de drones pour "
+                        "la surveillance des champs"
+                    ),
+                    (
+                        "Modernisation agricole face "
+                        "au stress hydrique"
+                    ),
                 ]
             },
             "competitive_analysis": {
                 "sources": [
                     {
-                        "title": "DronIA pour la surveillance agricole en Tunisie",
+                        "title": (
+                            "DronIA pour la surveillance "
+                            "agricole en Tunisie"
+                        ),
                         "url": "https://example.com/dronia",
                         "snippet": (
-                            "Drones et vision artificielle pour surveiller "
-                            "les champs agricoles."
+                            "Drones et vision artificielle "
+                            "pour surveiller les champs "
+                            "agricoles."
                         ),
                         "source_type": "market_article",
                         "source_role": "market_evidence",
-                        "canonical_category": "market_evidence",
+                        "canonical_category": (
+                            "market_evidence"
+                        ),
                         "region_match": "local",
                         "public_display": True,
                         "evidence_categories": [
@@ -162,13 +175,50 @@ def test_market_trend_requires_semantic_compatibility() -> None:
     claims = {
         claim["path"]: claim
         for claim in ledger["claims"]
-        if claim["path"].startswith("market_study.market_trends[")
+        if claim["path"].startswith(
+            "market_study.market_trends["
+        )
     }
 
-    assert claims["market_study.market_trends[0]"]["status"] == "sourced"
-    assert claims["market_study.market_trends[0]"]["source_ids"]
-    assert claims["market_study.market_trends[1]"]["status"] == "estimated"
-    assert claims["market_study.market_trends[1]"]["source_ids"] == []
+    supported = claims[
+        "market_study.market_trends[0]"
+    ]
+
+    unsupported = claims[
+        "market_study.market_trends[1]"
+    ]
+
+    assert supported["status"] == "sourced"
+    assert (
+        supported["evidence_status"]
+        == "sourced"
+    )
+    assert supported["source_ids"]
+    assert (
+        supported["validation_required"]
+        is False
+    )
+
+    # An external evidence claim without semantically
+    # compatible evidence is not an internal estimate.
+    assert (
+        unsupported["status"]
+        == "not_confirmed"
+    )
+    assert (
+        unsupported["evidence_status"]
+        == "not_confirmed"
+    )
+    assert (
+        unsupported["claim_kind"]
+        == "evidence_claim"
+    )
+    assert (
+        unsupported["validation_required"]
+        is True
+    )
+    assert unsupported["source_ids"] == []
+
 
 
 def test_compact_evidence_preserves_human_readable_title_aliases() -> None:

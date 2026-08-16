@@ -625,3 +625,292 @@ def test_context_packet_general_invariants(
     assert_no_core_forbidden_terms(
         packet
     )
+
+def test_explicit_action_chains_exclude_scope_and_constraint_sentences() -> None:
+    cases = [
+        {
+            "title": "Inspection Device",
+            "industry": "Industrial inspection",
+            "region": "France",
+            "description": (
+                "Technicians inspect machines with a camera, "
+                "detect anomalies, then send results to a dashboard. "
+                "The MVP covers one production line and detects "
+                "three defect categories. "
+                "Constraints include battery autonomy, connectivity "
+                "and maintenance."
+            ),
+            "required": (
+                "inspect machines",
+                "detect anomalies",
+                "send results",
+            ),
+            "forbidden": (
+                "three defect categories",
+                "battery autonomy",
+            ),
+        },
+        {
+            "title": "InvoiceFlow",
+            "industry": "B2B SaaS",
+            "region": "Europe",
+            "description": (
+                "Accountants upload invoices, review extracted data, "
+                "then approve or reject each invoice. "
+                "The MVP supports PDF, PNG and JPEG files. "
+                "Constraints include processing latency, auditability "
+                "and integration cost."
+            ),
+            "required": (
+                "upload invoices",
+                "review extracted data",
+                "approve or reject each invoice",
+            ),
+            "forbidden": (
+                "supports pdf",
+                "processing latency",
+            ),
+        },
+        {
+            "title": "CareBooking",
+            "industry": "Healthcare services",
+            "region": "Europe",
+            "description": (
+                "Patients request an appointment, choose an available "
+                "slot, then receive a confirmation. "
+                "The first pilot covers one clinic and three specialties. "
+                "Constraints include staff availability, privacy "
+                "and scheduling capacity."
+            ),
+            "required": (
+                "request an appointment",
+                "choose an available slot",
+                "receive a confirmation",
+            ),
+            "forbidden": (
+                "pilot covers one clinic",
+                "scheduling capacity",
+            ),
+        },
+    ]
+
+    for case in cases:
+        packet = project_context_extractor.extract(
+            title=case["title"],
+            description=case["description"],
+            industry=case["industry"],
+            target_region=case["region"],
+            output_language="en",
+        )
+
+        workflow_text = " | ".join(
+            comparison_key(
+                workflow.sentence
+            )
+            for workflow
+            in packet.priority_workflows
+        )
+
+        for expected in case["required"]:
+            assert (
+                comparison_key(expected)
+                in workflow_text
+            ), (
+                case["title"],
+                expected,
+                workflow_text,
+            )
+
+        for forbidden in case["forbidden"]:
+            assert (
+                comparison_key(forbidden)
+                not in workflow_text
+            ), (
+                case["title"],
+                forbidden,
+                workflow_text,
+            )
+
+        for workflow in packet.priority_workflows:
+            workflow_key = comparison_key(
+                workflow.sentence
+            )
+
+            assert not workflow_key.endswith(
+                " then"
+            )
+
+            assert not workflow_key.endswith(
+                " puis"
+            )
+
+            object_key = comparison_key(
+                workflow.object
+            )
+            output_key = comparison_key(
+                workflow.output
+            )
+
+            if object_key and output_key:
+                assert output_key not in object_key
+
+        assert_no_scope_workflow_collision(
+            packet
+        )
+
+def test_action_word_inside_existing_action_object_does_not_split_workflow() -> None:
+    packet = project_context_extractor.extract(
+        title="AccessFlow",
+        description=(
+            "Reviewers approve access requests and notify users "
+            "when access changes. "
+            "The MVP supports one team. "
+            "Constraints include auditability."
+        ),
+        industry="Workflow software",
+        target_region="Europe",
+        output_language="en",
+    )
+
+    workflows = packet.priority_workflows
+
+    assert any(
+        workflow.action == "approve"
+        and "access request"
+        in workflow.object.lower()
+        for workflow in workflows
+    )
+
+    assert any(
+        workflow.action == "notify"
+        and "access change"
+        in workflow.object.lower()
+        for workflow in workflows
+    )
+
+    assert not any(
+        workflow.action == "request"
+        for workflow in workflows
+    )
+
+    assert_no_scope_workflow_collision(
+        packet
+    )
+
+def test_scope_labels_preserve_real_actor_actions_but_block_scope_subjects() -> None:
+    cases = (
+        (
+            "For the MVP, operators upload invoices and approve them.",
+            False,
+            {"importer", "approuver"},
+        ),
+        (
+            "The MVP lets users upload invoices and approve them.",
+            False,
+            {"importer", "approuver"},
+        ),
+        (
+            "Pilot users inspect machines and send results.",
+            False,
+            {"inspecter", "transmettre"},
+        ),
+        (
+            "The MVP covers one production line and detects three defect categories.",
+            True,
+            {"d\u00e9tecter"},
+        ),
+        (
+            "The MVP detects three defect categories.",
+            True,
+            {"d\u00e9tecter"},
+        ),
+    )
+
+    for sentence, expected_blocked, expected_actions in cases:
+        blocked = (
+            project_context_extractor
+            ._workflow_sentence_is_non_action_context(
+                sentence
+            )
+        )
+
+        occurrences = (
+            project_context_extractor
+            ._workflow_action_occurrences(
+                sentence
+            )
+        )
+
+        actions = {
+            item["action"]
+            for item in occurrences
+        }
+
+        assert blocked is expected_blocked, sentence
+
+        assert expected_actions.issubset(
+            actions
+        ), (
+            sentence,
+            expected_actions,
+            actions,
+        )
+
+def test_constraint_declarations_with_determiners_never_become_workflows() -> None:
+    constraint_sentences = (
+        (
+            "The main constraints are detection accuracy, "
+            "connectivity and maintenance."
+        ),
+        (
+            "Les contraintes principales sont la precision de la "
+            "d\u00e9tection, la connectivit\u00e9 et la maintenance."
+        ),
+        (
+            "Les principales contraintes sont la disponibilite, "
+            "la securite et la maintenance."
+        ),
+    )
+
+    for sentence in constraint_sentences:
+        assert (
+            project_context_extractor
+            ._workflow_sentence_is_non_action_context(
+                sentence
+            )
+            is True
+        ), sentence
+
+    packet = project_context_extractor.extract(
+        title="InspectionFlow",
+        description=(
+            "Technicians inspect equipment and send results. "
+            "Les contraintes principales sont la precision de la "
+            "d\u00e9tection, la connectivit\u00e9 et la maintenance."
+        ),
+        industry="Industrial operations",
+        target_region="Europe",
+        output_language="en",
+    )
+
+    workflow_text = comparison_key(
+        " | ".join(
+            workflow.sentence
+            for workflow in packet.priority_workflows
+        )
+    )
+
+    assert (
+        comparison_key("inspect equipment")
+        in workflow_text
+    )
+
+    assert (
+        comparison_key("connectivite")
+        not in workflow_text
+    )
+
+    assert (
+        comparison_key("maintenance")
+        not in workflow_text
+    )

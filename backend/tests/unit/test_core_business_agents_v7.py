@@ -5,6 +5,7 @@ import asyncio
 from app.agents.bmc_agent import BMCAgent
 from app.agents.financial_estimation_agent import FinancialEstimationAgent
 from app.agents.swot_agent import SWOTAgent
+from app.services.project_context_extractor import project_context_extractor
 from app.services.project_intelligence_layer import project_intelligence_layer
 
 
@@ -37,7 +38,19 @@ détecte correctement au moins 85 % des anomalies et réduit le temps
 d’inspection manuelle."""
 
 
-def _state() -> tuple[dict, dict]:
+def _state() -> tuple[object, dict]:
+    packet = project_context_extractor.extract(
+        title="GreenWatch Robot",
+        description=GREENWATCH_DESCRIPTION,
+        industry="Agriculture intelligente et robotique",
+        target_region="Tunisie",
+        output_language="fr",
+    )
+
+    canonical = packet.model_dump(
+        mode="json"
+    )
+
     intelligence = project_intelligence_layer.build(
         title="GreenWatch Robot",
         description=GREENWATCH_DESCRIPTION,
@@ -45,46 +58,98 @@ def _state() -> tuple[dict, dict]:
         target_region="Tunisie",
         output_language="fr",
     )
-    structured = intelligence["structured_project_context"]
-    context = project_intelligence_layer.merge_into_project_context(
-        base_project_context={},
-        intelligence=intelligence,
+
+    structured = intelligence[
+        "structured_project_context"
+    ]
+
+    context = (
+        project_intelligence_layer
+        .merge_into_project_context(
+            base_project_context=canonical,
+            intelligence=intelligence,
+        )
     )
+
     state = {
         "title": "GreenWatch Robot",
         "description": GREENWATCH_DESCRIPTION,
         "industry": "Agriculture intelligente et robotique",
         "region": "Tunisie",
         "output_language": "fr",
+        "project_context_packet": canonical,
         "project_context": context,
         "project_intelligence": intelligence,
         "structured_project_context": structured,
         "analysis_data": {
+            "project_context_packet": canonical,
             "project_intelligence": intelligence,
             "structured_project_context": structured,
         },
     }
-    return structured, state
+
+    return packet, state
 
 
 def test_greenwatch_context_separates_workflow_mvp_metrics_and_constraints():
-    structured, _ = _state()
+    packet, state = _state()
 
-    assert structured["project_archetype"] == "hardware_iot"
-    assert structured["target_users"] == [
-        "les propriétaires de serres",
-        "les responsables de pépinières",
-        "les coopératives agricoles",
+    assert (
+        packet.primary_archetype
+        == "hardware_iot"
+    )
+
+    actor_names = packet.actor_names()
+
+    for expected_actor in (
+        "propri\u00e9taires de serres",
+        "responsables de p\u00e9pini\u00e8res",
+        "coop\u00e9ratives agricoles",
+    ):
+        assert any(
+            expected_actor.lower()
+            in actor.lower()
+            for actor in actor_names
+        )
+
+    workflows = [
+        workflow.sentence
+        for workflow
+        in packet.priority_workflows
     ]
-    assert structured["priority_workflows"][:3] == [
-        "inspecter régulièrement les cultures avec une caméra et des capteurs",
-        "détecter les anomalies",
-        "transmettre les résultats à un tableau de bord avec des alertes",
+
+    assert workflows[:3] == [
+        "inspecter r\u00e9guli\u00e8rement les cultures avec une cam\u00e9ra et des capteurs",
+        "d\u00e9tecter les anomalies",
+        "transmettre les r\u00e9sultats \u00e0 un tableau de bord avec des alertes",
     ]
-    assert "85 %" not in structured["mvp_scope"]
-    assert any("85 %" in item for item in structured["success_metrics"])
-    assert "la maintenance du robot" in structured["constraints"]
-    assert structured["actors"]["supply_side"] == ""
+
+    assert all(
+        "85 %" not in item
+        for item in packet.mvp_scope
+    )
+
+    assert any(
+        "85 %" in item
+        for item in packet.success_metrics
+    )
+
+    assert any(
+        "maintenance du robot"
+        in item.lower()
+        for item in packet.constraints
+    )
+
+    # PIL remains enrichment only. It must not invent a
+    # supply-side actor absent from the user context.
+    structured = state[
+        "structured_project_context"
+    ]
+
+    assert (
+        structured["actors"]["supply_side"]
+        == ""
+    )
 
 
 def test_greenwatch_finance_has_budget_range_and_breakdown():
@@ -138,3 +203,58 @@ def test_greenwatch_swot_separates_internal_and_external_factors():
     assert "composants importés" in threats
     assert "maintenance" in weaknesses
     assert "réaliser l’opération terrain principale" not in str(swot).lower()
+
+def test_bmc_canonical_workflow_field_presence_beats_legacy_projection():
+    agent = BMCAgent()
+
+    state = {
+        "output_language": "en",
+        "project_context_packet": {
+            "schema_version": "project_context_v3",
+            "project_name": "Authority Probe",
+            "primary_archetype": "generic_digital_product",
+            "priority_workflows": [
+                {
+                    "name": "approve verified requests",
+                    "sentence": "approve verified requests",
+                    "action": "approve",
+                    "object": "verified requests",
+                    "is_explicit": True,
+                }
+            ],
+            "actors": [],
+        },
+        "structured_project_context": {
+            "project_name": "Legacy Projection",
+            "project_archetype": "generic_digital_product",
+            "priority_workflows": [
+                "legacy inferred workflow"
+            ],
+        },
+    }
+
+    context = agent._context(
+        state
+    )
+
+    assert context[
+        "priority_workflows"
+    ] == [
+        "approve verified requests"
+    ]
+
+    # Field presence is authoritative even when the canonical
+    # answer is intentionally empty.
+    state[
+        "project_context_packet"
+    ][
+        "priority_workflows"
+    ] = []
+
+    context = agent._context(
+        state
+    )
+
+    assert context[
+        "priority_workflows"
+    ] == []

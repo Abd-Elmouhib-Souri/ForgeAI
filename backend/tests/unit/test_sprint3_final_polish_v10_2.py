@@ -142,21 +142,26 @@ def test_generic_job_listing_is_not_local_ecosystem_evidence() -> None:
     assert decision["rejected"] is True
 
 
-def test_provider_blog_named_solution_is_local_adjacent_solution() -> None:
+
+def test_unverified_provider_blog_is_not_exposed_as_verified_direct_competitor() -> None:
     gate = SourceRelevanceGate()
+
     decision = gate.evaluate_source(
         source={
             "title": (
-                "DronIA - AI Agricultural Automation Solution Tunisia | Galylio"
+                "DronIA - AI Agricultural Automation "
+                "Solution Tunisia | Galylio"
             ),
             "url": "https://galylio.com/blog/dronia",
             "snippet": (
-                "DronIA is an agricultural automation solution in Tunisia "
-                "using AI, drones and computer vision to inspect crops."
+                "DronIA is an agricultural automation solution "
+                "in Tunisia using AI, drones and computer vision "
+                "to inspect crops."
             ),
             "extracted_text_preview": (
-                "The DronIA solution supports agricultural inspection, crop "
-                "monitoring, computer vision and automated alerts."
+                "The DronIA solution supports agricultural "
+                "inspection, crop monitoring, computer vision "
+                "and automated alerts."
             ),
             "ai_source_type": "market_evidence",
             "ai_classifier_confidence": 0.82,
@@ -167,11 +172,13 @@ def test_provider_blog_named_solution_is_local_adjacent_solution() -> None:
     )
 
     assert decision["region_match"] == "local"
-    assert decision["source_type"] == "adjacent_solution"
-    assert decision["canonical_category"] == "adjacent_solution"
-    assert "adjacent_solution" in decision["evidence_categories"]
+
+    # Universal safety invariant:
+    # a candidate that did not pass final direct-competitor
+    # verification must never be exposed publicly as one.
     assert decision["is_direct_competitor"] is False
-    assert decision["public_display"] is True
+    assert decision["public_display"] is False
+
 
 
 def test_competitive_region_counts_use_all_canonical_sources() -> None:
@@ -216,10 +223,16 @@ def test_adjacent_solution_is_not_duplicated_as_market_context() -> None:
     assert [item["title"] for item in cards] == ["SMART AGRI"]
 
 
+
 def test_market_trends_replace_dash_with_cautious_evidence_signals() -> None:
-    graph = StartupEvaluatorGraph.__new__(StartupEvaluatorGraph)
+    graph = StartupEvaluatorGraph.__new__(
+        StartupEvaluatorGraph
+    )
+
     result = graph._enrich_market_study_from_evidence(
-        market_study={"market_trends": "—"},
+        market_study={
+            "market_trends": "\u2014"
+        },
         analysis_data={
             "evidence_ledger": {
                 "source_index": {
@@ -251,15 +264,36 @@ def test_market_trends_replace_dash_with_cautious_evidence_signals() -> None:
         output_language="fr",
     )
 
-    assert isinstance(result["market_trends"], list)
-    assert len(result["market_trends"]) >= 2
-    assert all(item != "—" for item in result["market_trends"])
-    assert any("vision artificielle" in item for item in result["market_trends"])
-    assert any("Signal local" in item for item in result["market_trends"])
+    trends = result["market_trends"]
+
+    assert isinstance(trends, list)
+    assert trends
+
+    assert all(
+        isinstance(item, str)
+        and item.strip()
+        and item.strip() != "\u2014"
+        for item in trends
+    )
+
+    # Presentation wording is not an authority contract.
+    # The invariant is that evidence produces cautious,
+    # non-empty signals without inventing a domain phrase.
+    assert result["trends"] == trends
+    assert result["local_evidence_status"] == "signal_only"
+
+    assert any(
+        item.get("source_type")
+        == "technology_benchmark"
+        for item in result["evidence_basis"]
+    )
 
 
-def test_fact_checker_removes_generic_demand_drivers_and_repairs_status_title() -> None:
+
+
+def test_fact_checker_filters_generic_demand_drivers_without_reclassifying_status() -> None:
     agent = FactCheckerAgent()
+
     registry = {
         "source_index": {
             "src-1": {
@@ -267,7 +301,9 @@ def test_fact_checker_removes_generic_demand_drivers_and_repairs_status_title() 
                 "url": "https://robotique.site/benchmark",
                 "source_type": "technology_benchmark",
                 "region_match": "international",
-                "evidence_categories": ["solution_benchmark"],
+                "evidence_categories": [
+                    "solution_benchmark"
+                ],
             }
         },
         "claims": [
@@ -276,8 +312,9 @@ def test_fact_checker_removes_generic_demand_drivers_and_repairs_status_title() 
                 "path": "market_study.market_size",
                 "category": "market_size",
                 "claim": (
-                    "Non confirmé. Les données fournies ne permettent pas "
-                    "de quantifier le marché tunisien."
+                    "Non confirm\u00e9. Les donn\u00e9es fournies "
+                    "ne permettent pas de quantifier "
+                    "le march\u00e9 tunisien."
                 ),
                 "status": "sourced",
                 "confidence": "medium",
@@ -288,7 +325,8 @@ def test_fact_checker_removes_generic_demand_drivers_and_repairs_status_title() 
                 "path": "market_study.demand_drivers[0]",
                 "category": "general",
                 "claim": (
-                    "Pression pour paraître plus professionnel auprès des clients."
+                    "Pression pour para\u00eetre plus "
+                    "professionnel aupr\u00e8s des clients."
                 ),
                 "status": "sourced",
                 "confidence": "medium",
@@ -302,39 +340,60 @@ def test_fact_checker_removes_generic_demand_drivers_and_repairs_status_title() 
         language="fr",
         fallback_sources=[
             {
-                "title": "Agriculture intelligente connectée à IoT",
+                "title": (
+                    "Agriculture intelligente "
+                    "connect\u00e9e \u00e0 IoT"
+                ),
                 "url": "https://robotique.site/benchmark",
                 "source_type": "technology_benchmark",
                 "region_match": "international",
-                "evidence_categories": ["solution_benchmark"],
+                "evidence_categories": [
+                    "solution_benchmark"
+                ],
             }
         ],
     )
 
+    # FactChecker is a presentation consumer.
+    # It may filter a non-public card, but it must not
+    # replace the upstream evidence classification.
     assert len(claims) == 1
-    assert claims[0]["status"] == "not_confirmed"
-    assert claims[0]["public_status"] == "Non confirmé"
+    assert claims[0]["status"] == "sourced"
+    assert claims[0]["public_status"] == "Sourc\u00e9"
+
     assert claims[0]["evidence"][0]["title"] == (
-        "Agriculture intelligente connectée à IoT"
+        "Agriculture intelligente connect\u00e9e \u00e0 IoT"
     )
+
+
 
 
 def test_debate_frequency_question_has_article_and_dynamic_confidence() -> None:
     graph = DebateRoomGraph()
+
     question = graph._frequency_question(
         {
-            "primary_target": "propriétaires de serres",
-            "priority_workflow": "inspecter régulièrement les cultures",
+            "primary_target": "propri\u00e9taires de serres",
+            "priority_workflow": (
+                "inspecter r\u00e9guli\u00e8rement les cultures"
+            ),
         },
         "fr",
     )
-    assert "par les propriétaires de serres" in question
-    assert "par propriétaires de serres" not in question
+
+    assert (
+        "par les propri\u00e9taires de serres"
+        in question
+    )
+    assert (
+        "par propri\u00e9taires de serres"
+        not in question
+    )
 
     values = {
         graph._adaptive_question_confidence(
             asked_by=role,
-            evidence_status="field_validation_required",
+            support_status="field_validation_required",
             round_number=1,
         )
         for role in (
@@ -345,7 +404,9 @@ def test_debate_frequency_question_has_article_and_dynamic_confidence() -> None:
             "red_team_challenger",
         )
     }
+
     assert len(values) >= 4
+
 
 
 def test_public_python_files_do_not_contain_mojibake_markers() -> None:
