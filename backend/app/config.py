@@ -60,11 +60,17 @@ class Settings(BaseSettings):
      # 🤖 LLM PROVIDERS
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-3-flash-preview"
-    GEMINI_FALLBACK_MODEL: str = "gemini-3-flash-lite-preview"
+    GEMINI_FALLBACK_MODEL: str = ""
 
     GROQ_API_KEY: str = ""
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
     GROQ_FALLBACK_MODEL: str = "llama-3.1-8b-instant"
+
+    LLM_PRIMARY_PROVIDER: str = "gemini"
+    LLM_FALLBACK_PROVIDER: str = "groq"
+    LLM_REQUEST_TIMEOUT_SECONDS: int = 90
+    LLM_CIRCUIT_FAILURES: int = 3
+    LLM_CIRCUIT_COOLDOWN_SECONDS: int = 180
 
     ENABLE_PARALLEL_AGENTS: bool = False
 
@@ -104,5 +110,16 @@ class Settings(BaseSettings):
     SEARCH_CIRCUIT_FAILURES: int = 2
     SEARCH_CIRCUIT_COOLDOWN_SECONDS: int = 900
     SEARCH_MAX_QUERIES_PER_ANALYSIS: int = 10
+
+    # Optional source classifier:
+    # dedicated Gemini key -> Groq -> deterministic rules.
+    ENABLE_AI_SOURCE_CLASSIFIER: bool = True
+    GEMINI_SEARCH_CLASSIFIER_API_KEY: str = ""
+    GEMINI_SEARCH_CLASSIFIER_MODEL: str = "gemini-3-flash-preview"
+    SEARCH_CLASSIFIER_PRIMARY: str = "gemini"
+    SEARCH_CLASSIFIER_FALLBACK: str = "groq"
+    SEARCH_CLASSIFIER_TIMEOUT_SECONDS: int = 35
+    SEARCH_CLASSIFIER_MAX_SOURCES: int = 16
+
 
 settings = Settings()

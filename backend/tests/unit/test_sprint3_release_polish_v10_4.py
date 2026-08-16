@@ -177,6 +177,7 @@ def test_non_confirmed_claim_uses_consulted_sources_not_supporting_evidence() ->
     )
 
 
+
 def test_local_context_is_a_recommendation_not_a_sourced_fact() -> None:
     local_source = {
         **_market_source(),
@@ -190,30 +191,52 @@ def test_local_context_is_a_recommendation_not_a_sourced_fact() -> None:
             "local_market_signal",
         ],
     }
+
     ledger = EvidenceLedger().build(
         {
             "market_study": {
                 "local_context": (
-                    "En Tunisie, la première validation doit se concentrer "
-                    "sur des entretiens et des petits pilotes."
+                    "En Tunisie, la premi\u00e8re validation "
+                    "doit se concentrer sur des entretiens "
+                    "et des petits pilotes."
                 )
             },
-            "competitive_analysis": {"sources": [local_source]},
+            "competitive_analysis": {
+                "sources": [local_source]
+            },
         }
     )
+
     cards = FactCheckerAgent()._claims_from_registry(
         registry=ledger,
         language="fr",
         fallback_sources=[local_source],
     )
+
     card = next(
-        item for item in cards if item["path"] == "market_study.local_context"
+        item
+        for item in cards
+        if item["path"]
+        == "market_study.local_context"
     )
 
-    assert card["status"] == "recommendation"
-    assert card["category"] == "recommendation"
+    # Claim kind and evidence strength are separate axes.
+    assert card["status"] == "estimated"
+    assert (
+        card["evidence_status"]
+        == "estimated"
+    )
+    assert (
+        card["claim_kind"]
+        == "recommendation"
+    )
+    assert (
+        card["category"]
+        == "recommendation"
+    )
     assert card["evidence"] == []
-    assert card["public_status"] == "Recommandation"
+    assert card["public_status"] == "Estim\u00e9"
+
 
 
 def test_public_report_repair_drops_injected_unmatched_claims() -> None:
@@ -284,18 +307,61 @@ def test_document_host_page_cannot_be_an_adjacent_solution() -> None:
     assert "adjacent_solution" not in decision["evidence_categories"]
 
 
-def test_cautious_market_signals_survive_public_sanitization() -> None:
+
+def test_unsupported_cautious_market_signal_is_neutralized() -> None:
     signal = (
-        "Signal à valider : l’inspection agricole combine "
-        "automatisation, vision artificielle et capteurs connectés."
+        "Signal \u00e0 valider : l\u2019inspection agricole "
+        "combine automatisation, vision artificielle "
+        "et capteurs connect\u00e9s."
     )
+
     sanitized = EvidenceLedger().sanitize_public_claims(
         {
-            "market_study": {"market_trends": [signal]},
-            "competitive_analysis": {"sources": []},
+            "market_study": {
+                "market_trends": [signal]
+            },
+            "competitive_analysis": {
+                "sources": []
+            },
             "output_language": "fr",
         }
     )
 
-    assert sanitized["market_study"]["market_trends"] == [signal]
-    assert sanitized["market_study"]["trends"] == [signal]
+    trends = sanitized[
+        "market_study"
+    ]["market_trends"]
+
+    assert trends
+    assert (
+        sanitized["market_study"]["trends"]
+        == trends
+    )
+
+    # Cautious wording alone is not evidence.
+    # Unsupported external market claims must not
+    # survive publication as if they were supported.
+    assert trends != [signal]
+
+    claim = next(
+        item
+        for item
+        in sanitized[
+            "evidence_ledger"
+        ]["claims"]
+        if item["path"]
+        == "market_study.market_trends[0]"
+    )
+
+    assert (
+        claim["evidence_status"]
+        == "not_confirmed"
+    )
+    assert (
+        claim["claim_kind"]
+        == "evidence_claim"
+    )
+    assert (
+        claim["validation_required"]
+        is True
+    )
+    assert claim["source_ids"] == []

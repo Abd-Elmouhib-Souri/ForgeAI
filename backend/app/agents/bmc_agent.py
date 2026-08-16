@@ -406,7 +406,20 @@ class BMCAgent:
             "actors": actors,
             "actor_provenance": actor_provenance,
             "role_assignments": role_assignments,
-            "priority_workflows": self._list(structured.get("priority_workflows") or structured.get("priority_workflow") or canonical.get("priority_workflow")),
+            "priority_workflows": self._workflow_list(
+                                      (
+                                          canonical.get("priority_workflows")
+                                          if "priority_workflows" in canonical
+                                          else (
+                                              canonical.get("priority_workflow")
+                                              if "priority_workflow" in canonical
+                                              else (
+                                                  structured.get("priority_workflows")
+                                                  or structured.get("priority_workflow")
+                                              )
+                                          )
+                                      )
+                                  ),
             "success_metrics": self._list(structured.get("success_metrics") or canonical.get("success_metrics")),
             "constraints": self._list(structured.get("constraints") or canonical.get("constraints")),
             "risk_dimensions": self._list(structured.get("risk_dimensions") or project_context.get("risk_dimensions")),
@@ -542,6 +555,40 @@ class BMCAgent:
     def _specific_workflows(self, context: Dict[str, Any], language: str) -> List[str]:
         values = [item for item in context["priority_workflows"] if item and "opération terrain principale" not in item.lower() and "core action" not in item.lower()]
         return values or [self._core_action(context, language)]
+
+    def _workflow_list(self, value: Any) -> List[str]:
+        """
+        Read workflow values without losing canonical workflow sentences.
+
+        ProjectContextPacketV3 exposes priority_workflows as structured
+        WorkflowContext objects. Consumers must preserve their complete
+        sentence/name instead of collapsing them to the action verb.
+        """
+        if value is None:
+            return []
+
+        if isinstance(value, dict):
+            sentence = self._text(
+                value.get("sentence")
+                or value.get("name")
+            )
+
+            if sentence:
+                return [sentence]
+
+            return self._list(value)
+
+        if isinstance(value, (list, tuple, set)):
+            result: List[str] = []
+
+            for item in value:
+                result.extend(
+                    self._workflow_list(item)
+                )
+
+            return self._unique(result)
+
+        return self._list(value)
 
     def _packet_text(self, value: Any, fallback: str = "") -> str:
         if isinstance(value, dict):
