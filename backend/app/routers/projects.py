@@ -27,7 +27,6 @@ from app.services.evidence_ledger import evidence_ledger
 from app.services.final_report_builder import (
     final_report_builder,
 )
-from app.services.canonical_source_ledger import canonical_source_ledger
 
 logger = logging.getLogger(__name__)
 
@@ -284,6 +283,22 @@ def _safe_public_source_item(source: Any) -> dict:
         "is_direct_competitor",
         "technology_supplier",
         "canonical_source_id",
+        "canonical_category",
+        "canonical_classification",
+        "canonical_vendor_domain",
+        "source_category",
+        "vendor_key",
+        "vendor_name",
+        "name",
+        "provider",
+        "grounded",
+        "target_match_level",
+        "is_product_page",
+        "evidence_categories",
+        "evidence_quality",
+        "methodology_visible",
+        "public_reason",
+        "matched_use_case_terms",
         "why_relevant",
         "source_relevance_score",
         "public_display",
@@ -317,146 +332,690 @@ def _safe_public_source_list(value: Any) -> List[dict]:
     return result
 
 
+
+def _safe_public_canonical_source_ledger(
+    value: Any,
+) -> dict:
+    """
+    Produce a public-safe copy of an already canonical source ledger.
+
+    Important:
+    - does not classify sources;
+    - does not infer roles/categories;
+    - does not call CanonicalSourceLedger.build();
+    - preserves the persisted canonical bucket membership;
+    - removes rejected/internal-only source records.
+    """
+
+    if not isinstance(
+        value,
+        dict,
+    ):
+        return {}
+
+    result: dict = {}
+
+    if value.get("format"):
+        result["format"] = str(
+            value.get("format")
+        )
+
+    # Preserve already-canonical list buckets without reclassification.
+    for (
+        key,
+        item,
+    ) in value.items():
+        if key in {
+            "format",
+            "sources_count",
+            "canonical_sources_count",
+            "counts",
+            "roles",
+            "categories",
+        }:
+            continue
+
+        if (
+            isinstance(
+                item,
+                list,
+            )
+            and (
+                key == "sources"
+                or key.endswith("_sources")
+                or key == "official_source_items"
+            )
+        ):
+            result[key] = (
+                _safe_public_source_list(
+                    item
+                )
+            )
+
+    roles = value.get("roles")
+
+    if isinstance(
+        roles,
+        dict,
+    ):
+        result["roles"] = {
+            str(role): (
+                _safe_public_source_list(
+                    items
+                )
+            )
+            for (
+                role,
+                items,
+            ) in roles.items()
+            if isinstance(
+                items,
+                list,
+            )
+        }
+
+    categories = value.get(
+        "categories"
+    )
+
+    if isinstance(
+        categories,
+        dict,
+    ):
+        result["categories"] = {
+            str(category): (
+                _safe_public_source_list(
+                    items
+                )
+            )
+            for (
+                category,
+                items,
+            ) in categories.items()
+            if isinstance(
+                items,
+                list,
+            )
+        }
+
+    result.setdefault(
+        "sources",
+        [],
+    )
+
+    result["sources_count"] = len(
+        result["sources"]
+    )
+
+    result[
+        "canonical_sources_count"
+    ] = len(
+        result["sources"]
+    )
+
+    safe_roles = (
+        result.get("roles")
+        if isinstance(
+            result.get("roles"),
+            dict,
+        )
+        else {}
+    )
+
+    safe_categories = (
+        result.get("categories")
+        if isinstance(
+            result.get("categories"),
+            dict,
+        )
+        else {}
+    )
+
+    # Counts are derived only from already-persisted buckets.
+    # No source changes role/category here.
+    raw_counts = value.get("counts")
+    counts = {}
+
+    if isinstance(
+        raw_counts,
+        dict,
+    ):
+        counts = {
+            str(key): item
+            for (
+                key,
+                item,
+            ) in raw_counts.items()
+            if isinstance(
+                item,
+                int,
+            )
+            and not isinstance(
+                item,
+                bool,
+            )
+        }
+
+    counts.update(
+        {
+            "all":
+                len(
+                    result["sources"]
+                ),
+
+            "direct_competitors":
+                len(
+                    safe_categories.get(
+                        "direct_competitor",
+                        [],
+                    )
+                ),
+
+            "local_direct_competitors":
+                len(
+                    safe_roles.get(
+                        "local_direct_competitor",
+                        [],
+                    )
+                ),
+
+            "adjacent_solutions":
+                len(
+                    safe_categories.get(
+                        "adjacent_solution",
+                        [],
+                    )
+                ),
+
+            "technology_benchmarks":
+                len(
+                    safe_categories.get(
+                        "technology_benchmark",
+                        [],
+                    )
+                ),
+
+            "market_evidence":
+                len(
+                    safe_categories.get(
+                        "market_evidence",
+                        [],
+                    )
+                ),
+
+            "ecosystem_actors":
+                len(
+                    safe_categories.get(
+                        "ecosystem_actor",
+                        [],
+                    )
+                ),
+
+            "regional_benchmarks":
+                len(
+                    safe_roles.get(
+                        "regional_benchmark",
+                        [],
+                    )
+                ),
+
+            "international_benchmarks":
+                len(
+                    safe_roles.get(
+                        "international_benchmark",
+                        [],
+                    )
+                ),
+
+            "technology_providers":
+                len(
+                    safe_roles.get(
+                        "technology_provider",
+                        [],
+                    )
+                ),
+
+            "market_and_evidence":
+                len(
+                    result.get(
+                        "evidence_sources",
+                        [],
+                    )
+                ),
+        }
+    )
+
+    result["counts"] = counts
+
+    return result
+
+
 def restore_public_competitive_analysis(
     raw_analysis_data: Optional[dict],
     sanitized_analysis_data: Optional[dict],
 ) -> Optional[dict]:
     """
-    Restore public-safe competitive_analysis after global public sanitizer.
+    Restore public-safe competitive analysis from persisted authority.
 
-    Important :
-    - Ne restaure que les sources déjà filtrées par ForgeCrawler.
-    - Ne restaure pas les sources internes.
-    - Ne restaure pas les sources rejetées.
-    - Ne restaure pas le debug.
+    This function is a projection consumer only:
+    - no SourceRoleResolver rerun;
+    - no CanonicalSourceLedger.build();
+    - no new role/category inference;
+    - persisted canonical memberships are preserved;
+    - rejected/internal-only records remain hidden.
     """
 
-    if not isinstance(raw_analysis_data, dict):
+    if not isinstance(
+        raw_analysis_data,
+        dict,
+    ):
         return sanitized_analysis_data
 
-    if not isinstance(sanitized_analysis_data, dict):
+    if not isinstance(
+        sanitized_analysis_data,
+        dict,
+    ):
         return sanitized_analysis_data
 
-    raw_competitive = raw_analysis_data.get("competitive_analysis") or {}
-
-    if not isinstance(raw_competitive, dict):
-        return sanitized_analysis_data
-
-    raw_sources = _safe_public_source_list(
-        raw_competitive.get("sources")
-        or raw_competitive.get("public_sources")
+    raw_competitive = (
+        raw_analysis_data.get(
+            "competitive_analysis"
+        )
+        or {}
     )
-    source_ledger = canonical_source_ledger.build(raw_sources)
-    raw_sources = list(source_ledger.get("sources") or [])
+
+    if not isinstance(
+        raw_competitive,
+        dict,
+    ):
+        return sanitized_analysis_data
+
+    source_ledger = (
+        _safe_public_canonical_source_ledger(
+            raw_competitive.get(
+                "canonical_source_ledger"
+            )
+        )
+    )
+
+    # Legacy payloads may not yet contain canonical authority.
+    # They may expose their already-filtered source list, but a GET
+    # must never invent a new canonical classification for them.
+    if not source_ledger.get(
+        "sources"
+    ):
+        legacy_sources = (
+            _safe_public_source_list(
+                raw_competitive.get(
+                    "sources"
+                )
+                or raw_competitive.get(
+                    "public_sources"
+                )
+            )
+        )
+
+        if not legacy_sources:
+            return sanitized_analysis_data
+
+        sanitized = dict(
+            sanitized_analysis_data
+        )
+
+        public_competitive = dict(
+            sanitized.get(
+                "competitive_analysis"
+            )
+            or {}
+        )
+
+        public_competitive[
+            "sources"
+        ] = legacy_sources
+
+        public_competitive[
+            "public_sources"
+        ] = legacy_sources
+
+        public_competitive[
+            "sources_count"
+        ] = len(
+            legacy_sources
+        )
+
+        sanitized[
+            "competitive_analysis"
+        ] = public_competitive
+
+        return sanitized
+
+    raw_sources = list(
+        source_ledger.get(
+            "sources"
+        )
+        or []
+    )
+
     raw_local_sources = list(
-        source_ledger.get("local_direct_competitor_sources") or []
+        source_ledger.get(
+            "local_direct_competitor_sources"
+        )
+        or []
     )
+
     raw_adjacent_sources = list(
-        source_ledger.get("adjacent_solution_sources") or []
+        source_ledger.get(
+            "adjacent_solution_sources"
+        )
+        or []
     )
+
     raw_regional_sources = list(
-        source_ledger.get("regional_benchmark_sources") or []
+        source_ledger.get(
+            "regional_benchmark_sources"
+        )
+        or []
     )
+
     raw_international_sources = list(
-        source_ledger.get("international_benchmark_sources") or []
+        source_ledger.get(
+            "international_benchmark_sources"
+        )
+        or []
     )
+
     raw_technology_sources = list(
-        source_ledger.get("technology_provider_sources") or []
+        source_ledger.get(
+            "technology_provider_sources"
+        )
+        or []
     )
+
     raw_market_sources = list(
-        source_ledger.get("evidence_sources") or []
+        source_ledger.get(
+            "evidence_sources"
+        )
+        or source_ledger.get(
+            "market_evidence_sources"
+        )
+        or []
     )
 
-    restored_sources_count = int(source_ledger.get("sources_count") or len(raw_sources))
-    restored_local_count = len(raw_local_sources)
-    restored_regional_count = len(raw_regional_sources)
-    restored_international_count = len(raw_international_sources)
-    restored_technology_count = len(raw_technology_sources)
-    restored_market_count = len(raw_market_sources)
+    restored_sources_count = len(
+        raw_sources
+    )
 
-    if restored_sources_count <= 0:
-        return sanitized_analysis_data
+    restored_local_count = len(
+        raw_local_sources
+    )
 
-    sanitized = dict(sanitized_analysis_data)
-    public_competitive = dict(sanitized.get("competitive_analysis") or {})
+    restored_regional_count = len(
+        raw_regional_sources
+    )
+
+    restored_international_count = len(
+        raw_international_sources
+    )
+
+    restored_technology_count = len(
+        raw_technology_sources
+    )
+
+    restored_market_count = len(
+        raw_market_sources
+    )
+
+    sanitized = dict(
+        sanitized_analysis_data
+    )
+
+    public_competitive = dict(
+        sanitized.get(
+            "competitive_analysis"
+        )
+        or {}
+    )
 
     public_competitive.update(
         {
-            "format": raw_competitive.get("format")
-            or public_competitive.get("format")
-            or "competitive_analysis_public_restored",
-            "status": raw_competitive.get("status")
-            or public_competitive.get("status")
-            or "completed",
-            "confidence_level": raw_competitive.get("confidence_level")
-            or public_competitive.get("confidence_level")
-            or "medium",
-            "source_based": True,
-            "context_locked": bool(raw_competitive.get("context_locked", True)),
-            "target_region": raw_competitive.get("target_region")
-            or public_competitive.get("target_region"),
-            "sources_count": restored_sources_count,
-            "canonical_sources_count": restored_sources_count,
-            "canonical_source_ledger": source_ledger,
-            "local_competitors_found": restored_local_count > 0,
-            "local_competitors_count": restored_local_count,
-            "regional_competitors_count": restored_regional_count,
-            "international_benchmarks_count": restored_international_count,
-            "technology_providers_count": restored_technology_count,
-            "market_sources_count": restored_market_count,
-            "sources": raw_sources,
-            "public_sources": raw_sources,
-            "local_competitor_sources": raw_local_sources,
-            "regional_competitor_sources": raw_regional_sources,
-            "international_benchmark_sources": raw_international_sources,
-            "technology_provider_sources": raw_technology_sources,
-            "adjacent_solution_sources": raw_adjacent_sources,
-            "market_context_sources": raw_market_sources,
-            "no_verified_relevant_source_found": False,
-            "no_source_message": "",
-            "limitations": raw_competitive.get("limitations")
-            or public_competitive.get("limitations")
-            or [],
+            "format":
+                raw_competitive.get(
+                    "format"
+                )
+                or public_competitive.get(
+                    "format"
+                )
+                or "competitive_analysis_public_restored",
+
+            "status":
+                raw_competitive.get(
+                    "status"
+                )
+                or public_competitive.get(
+                    "status"
+                )
+                or "completed",
+
+            "confidence_level":
+                raw_competitive.get(
+                    "confidence_level"
+                )
+                or public_competitive.get(
+                    "confidence_level"
+                )
+                or "medium",
+
+            "source_based":
+                bool(
+                    raw_competitive.get(
+                        "source_based",
+                        True,
+                    )
+                ),
+
+            "context_locked":
+                bool(
+                    raw_competitive.get(
+                        "context_locked",
+                        True,
+                    )
+                ),
+
+            "target_region":
+                raw_competitive.get(
+                    "target_region"
+                )
+                or public_competitive.get(
+                    "target_region"
+                ),
+
+            "sources_count":
+                restored_sources_count,
+
+            "canonical_sources_count":
+                restored_sources_count,
+
+            "canonical_source_ledger":
+                source_ledger,
+
+            "local_competitors_found":
+                restored_local_count > 0,
+
+            "local_competitors_count":
+                restored_local_count,
+
+            "regional_competitors_count":
+                restored_regional_count,
+
+            "international_benchmarks_count":
+                restored_international_count,
+
+            "technology_providers_count":
+                restored_technology_count,
+
+            "market_sources_count":
+                restored_market_count,
+
+            "sources":
+                raw_sources,
+
+            "public_sources":
+                raw_sources,
+
+            "local_competitor_sources":
+                raw_local_sources,
+
+            "regional_competitor_sources":
+                raw_regional_sources,
+
+            "international_benchmark_sources":
+                raw_international_sources,
+
+            "technology_provider_sources":
+                raw_technology_sources,
+
+            "adjacent_solution_sources":
+                raw_adjacent_sources,
+
+            "market_context_sources":
+                raw_market_sources,
+
+            "no_verified_relevant_source_found":
+                bool(
+                    raw_competitive.get(
+                        "no_verified_relevant_source_found",
+                        restored_sources_count <= 0,
+                    )
+                ),
+
+            "no_source_message":
+                raw_competitive.get(
+                    "no_source_message"
+                )
+                or "",
+
+            "limitations":
+                raw_competitive.get(
+                    "limitations"
+                )
+                or public_competitive.get(
+                    "limitations"
+                )
+                or [],
         }
     )
 
-    # Aliases pour compatibilité avec différentes versions frontend.
-    public_competitive["verified_competitors"] = raw_local_sources
-    public_competitive["local_competitors"] = raw_local_sources
-    public_competitive["regional_competitors"] = raw_regional_sources
-    public_competitive["international_benchmarks"] = raw_international_sources
-    public_competitive["technology_providers"] = raw_technology_sources
-    public_competitive["local_adjacent_solutions"] = raw_adjacent_sources
-    public_competitive["market_sources"] = raw_market_sources
+    # Compatibility aliases consume canonical buckets.
+    # They do not reclassify any source.
+    public_competitive[
+        "verified_competitors"
+    ] = raw_local_sources
 
-    public_competitive["external_sources"] = {
-        "sources_count": restored_sources_count,
-        "canonical_sources_count": restored_sources_count,
-        "local_competitors_count": restored_local_count,
-        "local_adjacent_solutions_count": len(raw_adjacent_sources),
-        "regional_competitors_count": restored_regional_count,
-        "international_benchmarks_count": restored_international_count,
-        "technology_providers_count": restored_technology_count,
-        "market_sources_count": restored_market_count,
-        "canonical_source_ledger": source_ledger,
-        "sources": raw_sources,
-        "public_sources": raw_sources,
-        "local_competitor_sources": raw_local_sources,
-        "regional_competitor_sources": raw_regional_sources,
-        "international_benchmark_sources": raw_international_sources,
-        "technology_provider_sources": raw_technology_sources,
-        "adjacent_solution_sources": raw_adjacent_sources,
-        "market_context_sources": raw_market_sources,
-        "verified_competitors": raw_local_sources,
-        "local_competitors": raw_local_sources,
-        "regional_competitors": raw_regional_sources,
-        "international_benchmarks": raw_international_sources,
-        "technology_providers": raw_technology_sources,
-        "local_adjacent_solutions": raw_adjacent_sources,
-        "market_sources": raw_market_sources,
+    public_competitive[
+        "local_competitors"
+    ] = raw_local_sources
+
+    public_competitive[
+        "regional_competitors"
+    ] = raw_regional_sources
+
+    public_competitive[
+        "international_benchmarks"
+    ] = raw_international_sources
+
+    public_competitive[
+        "technology_providers"
+    ] = raw_technology_sources
+
+    public_competitive[
+        "local_adjacent_solutions"
+    ] = raw_adjacent_sources
+
+    public_competitive[
+        "market_sources"
+    ] = raw_market_sources
+
+    public_competitive[
+        "external_sources"
+    ] = {
+        "sources_count":
+            restored_sources_count,
+
+        "canonical_sources_count":
+            restored_sources_count,
+
+        "local_competitors_count":
+            restored_local_count,
+
+        "local_adjacent_solutions_count":
+            len(
+                raw_adjacent_sources
+            ),
+
+        "regional_competitors_count":
+            restored_regional_count,
+
+        "international_benchmarks_count":
+            restored_international_count,
+
+        "technology_providers_count":
+            restored_technology_count,
+
+        "market_sources_count":
+            restored_market_count,
+
+        "canonical_source_ledger":
+            source_ledger,
+
+        "sources":
+            raw_sources,
+
+        "public_sources":
+            raw_sources,
+
+        "local_competitor_sources":
+            raw_local_sources,
+
+        "regional_competitor_sources":
+            raw_regional_sources,
+
+        "international_benchmark_sources":
+            raw_international_sources,
+
+        "technology_provider_sources":
+            raw_technology_sources,
+
+        "adjacent_solution_sources":
+            raw_adjacent_sources,
+
+        "market_context_sources":
+            raw_market_sources,
+
+        "verified_competitors":
+            raw_local_sources,
+
+        "local_competitors":
+            raw_local_sources,
+
+        "regional_competitors":
+            raw_regional_sources,
+
+        "international_benchmarks":
+            raw_international_sources,
+
+        "technology_providers":
+            raw_technology_sources,
+
+        "local_adjacent_solutions":
+            raw_adjacent_sources,
+
+        "market_sources":
+            raw_market_sources,
     }
 
-    sanitized["competitive_analysis"] = public_competitive
+    sanitized[
+        "competitive_analysis"
+    ] = public_competitive
 
     return sanitized
 

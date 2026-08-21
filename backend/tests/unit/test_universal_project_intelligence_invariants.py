@@ -287,64 +287,91 @@ def test_industrial_marketplace_exposes_a_project_specific_transaction_unit() ->
     )
 
 
-def test_marketplace_critical_unknowns_block_agent_execution() -> None:
+
+def test_marketplace_operational_unknowns_are_non_blocking_when_core_transaction_is_known() -> None:
     """
-    Un score numérique suffisant ne doit pas masquer des inconnues
-    opérationnelles critiques propres à une marketplace.
+    Operational details that can be decided during validation must
+    remain visible as clarification items without preventing analysis
+    once the marketplace structure itself is understood.
     """
     result = idea_readiness_checker.evaluate(
         title="ReUseHub Tunisie",
         description=INCOMPLETE_MARKETPLACE_DESCRIPTION,
-        industry="Économie circulaire / Marketplace B2B",
+        industry="\u00c9conomie circulaire / Marketplace B2B",
         target_region="Tunisie",
         output_language="fr",
     )
 
-    blockers = list(
+    assert (
+        result["ready_for_agents"]
+        is True
+    )
+
+    blockers = set(
         result.get("blockers")
         or []
     )
 
-    blocker_key = _joined_normalized(
-        blockers
+    for field in (
+        "payment_responsibility",
+        "fulfillment_logistics",
+        "trust_mechanism",
+        "dispute_responsibility",
+    ):
+        assert field not in blockers
+
+    ambiguous = set(
+        result.get(
+            "ambiguous_fields"
+        )
+        or []
     )
 
-    assert result["ready_for_agents"] is False, (
-        "L'analyse a été autorisée malgré des responsabilités critiques "
-        "de paiement, transport, vérification et litige non définies."
+    for field in (
+        "payment_responsibility",
+        "fulfillment_logistics",
+        "trust_mechanism",
+        "dispute_responsibility",
+    ):
+        assert field in ambiguous
+
+
+def test_marketplace_missing_structural_side_still_blocks_agent_execution() -> None:
+    description = (
+        "ProviderOnly est une marketplace de services en France. "
+        "Les premiers clients cibles sont les prestataires de services. "
+        "Les prestataires publient des offres de service. "
+        "Le probl\u00e8me est leur manque de visibilit\u00e9. "
+        "La solution permet de publier et organiser les offres."
     )
 
-    assert any(
-        marker in blocker_key
-        for marker in (
-            "payment responsibility",
-            "responsabilite paiement",
-            "responsable paiement",
-            "payment flow",
-        )
-    ), blockers
+    result = idea_readiness_checker.evaluate(
+        title="ProviderOnly",
+        description=description,
+        industry="marketplace de services",
+        target_region="France",
+        output_language="fr",
+    )
 
-    assert any(
-        marker in blocker_key
-        for marker in (
-            "fulfillment",
-            "logistics",
-            "logistique",
-            "transport",
-            "delivery model",
-        )
-    ), blockers
+    assert (
+        result["ready_for_agents"]
+        is False
+    )
 
-    assert any(
-        marker in blocker_key
-        for marker in (
-            "trust model",
-            "verification",
-            "confiance",
-            "dispute",
-            "litige",
-        )
-    ), blockers
+    blockers = set(
+        result.get("blockers")
+        or []
+    )
+
+    assert (
+        "supply_side"
+        not in blockers
+    )
+
+    assert (
+        "demand_side"
+        in blockers
+    )
 
 
 def test_context_packet_contract_exposes_blocking_fields_and_archetype_confidence() -> None:

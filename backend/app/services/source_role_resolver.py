@@ -515,22 +515,78 @@ class SourceRoleResolver:
             same_use_case = True
             same_solution = True
 
+        target_compatible = self._target_compatible(
+            source_text=source_text,
+            context=context,
+            same_target=same_target,
+        )
+
+        target_evidence_available = bool(
+            same_target
+            or context.get(
+                "target_terms"
+            )
+        )
+
+        # Missing actor authority is UNKNOWN, not a proven mismatch.
+        #
+        # Actor compatibility belongs to local directness. It must not
+        # erase a legitimate regional/international benchmark whose
+        # workflow and solution are otherwise strongly comparable.
+        target_not_mismatched = bool(
+            target_compatible
+            or not target_evidence_available
+        )
+
         product_or_operation = bool(
             product_page
             or consumer_operation
         )
 
-        exact_business_match = bool(
+        operational_business_match = bool(
             (
-                same_target
-                or consumer_operation
-                or operation_equivalent
-            )
-            and (
-                same_use_case
+                operation_equivalent
+                or same_use_case
                 or same_solution
             )
             and not sector_mismatch
+        )
+
+        # Upstream lexical/classifier proximity is useful evidence,
+        # but cannot establish local direct competition on its own.
+        #
+        # Direct competition requires source-side corroboration:
+        # either canonical operational equivalence, or evidence across
+        # at least two independent semantic axes.
+        #
+        # Benchmark classification deliberately keeps the broader
+        # operational_business_match contract.
+        local_direct_overlap = (
+            self._semantic_overlap(
+                source_text=source_text,
+                context=context,
+            )
+        )
+
+        local_direct_corroborated = bool(
+            operation_equivalent
+            or (
+                local_direct_overlap.get(
+                    "semantic_axes",
+                    0,
+                )
+                >= 2
+            )
+        )
+
+        local_direct_match = bool(
+            target_not_mismatched
+            and operational_business_match
+            and local_direct_corroborated
+        )
+
+        benchmark_match = (
+            operational_business_match
         )
 
         if source_type in self.OFFICIAL_TYPES:
@@ -578,15 +634,19 @@ class SourceRoleResolver:
         elif (
             region_match == "local"
             and product_or_operation
-            and exact_business_match
+            and local_direct_match
         ):
             source_role = "direct_competitor"
             comparison_scope = "local_direct"
             legacy_type = "competitor"
 
         elif (
-            product_or_operation
-            and exact_business_match
+            region_match in {
+                "regional",
+                "international",
+            }
+            and product_or_operation
+            and benchmark_match
         ):
             source_role = (
                 "regional_benchmark"
@@ -680,6 +740,176 @@ class SourceRoleResolver:
     # Universal operational equivalence
     # ================================================================
 
+    def _target_compatible(
+        self,
+        *,
+        source_text: str,
+        context: Dict[str, Any],
+        same_target: bool,
+    ) -> bool:
+        """
+        Confirm target compatibility independently from workflow,
+        solution and domain similarity.
+
+        Operational equivalence must never invent actor identity.
+        """
+
+        if same_target:
+            return True
+
+        target_terms = self._unique_terms(
+            context.get(
+                "target_terms"
+            )
+            or []
+        )
+
+        if not target_terms:
+            return False
+
+        overlap = self._semantic_overlap(
+            source_text=source_text,
+            context=context,
+        )
+
+        # Exact/strong target phrase evidence remains authoritative.
+        if overlap.get(
+            "target_matches"
+        ):
+            return True
+
+        source_tokens = set(
+            self._significant_tokens(
+                source_text
+            )
+        )
+
+        if not source_tokens:
+            return False
+
+        # These broad heads are not sufficient by themselves to prove
+        # business-actor compatibility. Exact target phrase matching
+        # above may still confirm them.
+        generic_actor_heads = {
+            "user",
+            "users",
+            "utilisateur",
+            "utilisateurs",
+            "customer",
+            "customers",
+            "client",
+            "clients",
+            "consumer",
+            "consumers",
+            "company",
+            "companies",
+            "business",
+            "businesses",
+            "organization",
+            "organizations",
+            "organisation",
+            "organisations",
+            "enterprise",
+            "enterprises",
+            "entreprise",
+            "entreprises",
+            "individual",
+            "individuals",
+            "person",
+            "people",
+        }
+
+        def forms(
+            token: str,
+        ) -> set[str]:
+            values = {
+                token
+            }
+
+            if (
+                token.endswith(
+                    "ies"
+                )
+                and len(
+                    token
+                ) > 4
+            ):
+                values.add(
+                    token[:-3]
+                    + "y"
+                )
+
+            elif (
+                token.endswith(
+                    "es"
+                )
+                and len(
+                    token
+                ) > 5
+            ):
+                values.add(
+                    token[:-2]
+                )
+
+            elif (
+                token.endswith(
+                    "s"
+                )
+                and len(
+                    token
+                ) > 4
+            ):
+                values.add(
+                    token[:-1]
+                )
+
+            return values
+
+        source_forms: set[str] = set()
+
+        for token in source_tokens:
+            source_forms.update(
+                forms(
+                    token
+                )
+            )
+
+        for target in target_terms:
+            tokens = [
+                token
+                for token in self._significant_tokens(
+                    target
+                )
+                if token
+            ]
+
+            if not tokens:
+                continue
+
+            # The final significant token normally carries the actor
+            # role head: managers, supervisors, students, technicians,
+            # responsables, op?rateurs, etc.
+            head = tokens[-1]
+
+            head_forms = forms(
+                head
+            )
+
+            if (
+                head_forms
+                & generic_actor_heads
+            ):
+                continue
+
+            if (
+                head_forms
+                & source_forms
+            ):
+                return True
+
+        return False
+
+
     def _is_consumer_operation(
         self,
         *,
@@ -704,9 +934,9 @@ class SourceRoleResolver:
             context=context,
         )
 
-        if same_use_case or same_solution:
-            return True
-
+        # Upstream lexical/classifier proximity is only a hint.
+        # Consumer-operation authority must be corroborated by evidence
+        # found in the source itself.
         if overlap["strong_phrase_matches"]:
             return True
 
@@ -761,9 +991,10 @@ class SourceRoleResolver:
             context=context,
         )
 
-        if same_use_case and same_solution:
-            return True
-
+        # Upstream same-use-case / same-solution flags cannot establish
+        # operational equivalence by themselves. The source must expose
+        # project-specific workflow, use-case, solution, domain, target,
+        # or sufficiently strong multi-action semantic evidence.
         if (
             overlap["workflow_matches"]
             or overlap["use_case_matches"]
@@ -779,11 +1010,49 @@ class SourceRoleResolver:
         ):
             return True
 
-        # Short live-service pages often expose only a compact category
-        # phrase plus two or more end-user actions.
+        # Short live-service pages can expose a compact canonical
+        # business-domain phrase plus limited operation detail.
+        #
+        # Two explicit source actions preserve the historical compact-page
+        # fallback. With only one action, the action itself must also be
+        # present in canonical workflow/use-case/solution context.
+        context_operation_text = " ".join(
+            self._text_values(
+                context.get(
+                    "use_case_terms"
+                )
+            )
+            + self._text_values(
+                context.get(
+                    "workflow_terms"
+                )
+            )
+            + self._text_values(
+                context.get(
+                    "solution_terms"
+                )
+            )
+        )
+
+        context_actions = set(
+            self._operation_action_hits(
+                context_operation_text
+            )
+        )
+
+        shared_operation_actions = (
+            set(actions)
+            & context_actions
+        )
+
         if (
             overlap["strong_domain_matches"]
-            and len(actions) >= 2
+            and (
+                len(actions) >= 2
+                or bool(
+                    shared_operation_actions
+                )
+            )
         ):
             return True
 
@@ -1143,6 +1412,11 @@ class SourceRoleResolver:
                         "domain_concepts"
                     )
                 )
+                + self._text_values(
+                    project_context.get(
+                        "domain_concepts"
+                    )
+                )
             )
         )
 
@@ -1188,6 +1462,11 @@ class SourceRoleResolver:
                         "use_case_terms"
                     )
                 )
+                + self._text_values(
+                    project_context.get(
+                        "use_case_terms"
+                    )
+                )
             )
         )
 
@@ -1200,6 +1479,11 @@ class SourceRoleResolver:
                 )
                 + self._text_values(
                     packet.get(
+                        "priority_workflows"
+                    )
+                )
+                + self._text_values(
+                    project_context.get(
                         "priority_workflows"
                     )
                 )
@@ -1223,6 +1507,11 @@ class SourceRoleResolver:
                         "solution_category"
                     )
                 )
+                + self._text_values(
+                    project_context.get(
+                        "solution_terms"
+                    )
+                )
             )
         )
 
@@ -1235,6 +1524,16 @@ class SourceRoleResolver:
                 )
                 + self._text_values(
                     packet.get(
+                        "target_terms"
+                    )
+                )
+                + self._text_values(
+                    project_context.get(
+                        "target_users"
+                    )
+                )
+                + self._text_values(
+                    project_context.get(
                         "target_terms"
                     )
                 )

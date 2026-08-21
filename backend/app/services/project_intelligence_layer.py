@@ -23,7 +23,7 @@ from typing import Any, Dict, List
 
 from app.services.domain_integrity_guard import normalize_output_language
 from app.services.project_archetype_resolver import project_archetype_resolver
-
+from app.services.scope_polarity import is_scope_exclusion_statement
 
 class ProjectIntelligenceLayer:
     DEFAULT_WEAK_TERMS = {
@@ -1155,11 +1155,13 @@ class ProjectIntelligenceLayer:
             detected.get("solution"),
             self._extract_sentence(description, self.SOLUTION_HINTS()),
         )
-        main_use_case = self._first_available_text(
-            detected.get("main_use_case"),
-            project_context.get("main_use_case"),
-            project_context.get("use_case"),
-            solution,
+        main_use_case = (
+            self._first_available_non_scope_exclusion(
+                detected.get("main_use_case"),
+                project_context.get("main_use_case"),
+                project_context.get("use_case"),
+                solution,
+            )
         )
         business_model = self._first_available_text(
             explicit_business_model,
@@ -1167,11 +1169,16 @@ class ProjectIntelligenceLayer:
             detected.get("business_model"),
             self._extract_sentence(description, self.BUSINESS_HINTS()),
         )
-        mvp_scope = self._first_available_text(
-            explicit_mvp,
-            project_context.get("mvp_scope"),
-            detected.get("mvp_scope"),
-            self._extract_sentence(description, self.MVP_HINTS()),
+        mvp_scope = (
+            self._first_available_non_scope_exclusion(
+                explicit_mvp,
+                project_context.get("mvp_scope"),
+                detected.get("mvp_scope"),
+                self._extract_sentence(
+                    description,
+                    self.MVP_HINTS(),
+                ),
+            )
         )
 
         explicit_workflows = self._extract_explicit_workflows(
@@ -1238,9 +1245,16 @@ class ProjectIntelligenceLayer:
                 archetype_context.get("business_model_hypothesis")
             )
 
-        if not mvp_scope and inferred_workflows:
-            mvp_scope = ", ".join(inferred_workflows[:3])
-
+        # MVP scope is a product-scope declaration, not a synonym for
+        # a workflow or use case.
+        #
+        # Project Intelligence may infer workflows for search and
+        # analysis support, but it must never promote those inferred
+        # actions into canonical MVP scope when the user has not
+        # actually declared a first-version boundary.
+        #
+        # Keep an absent MVP absent. Readiness may surface it as an
+        # unknown/ambiguous field without inventing product scope.
         sector_tags = self._sector_tags(industry)
         sector_profile = self._sector_profile(sector_tags)
 
@@ -1249,13 +1263,25 @@ class ProjectIntelligenceLayer:
             max_items=20,
             prefer_short=True,
         )
+        # Canonical workflows and solution semantics may enrich
+        # search concepts. MVP/product scope must remain separate.
+        #
+        # Example:
+        #   "The first MVP must include only X"
+        # is product scope, not a primary use case.
         use_case_terms = self._extract_concepts(
-            values=[main_use_case, mvp_scope, solution],
+            values=[
+                main_use_case,
+                *inferred_workflows,
+                solution,
+            ],
             max_items=16,
             prefer_short=False,
         )
         solution_terms = self._extract_concepts(
-            values=[solution, mvp_scope],
+            values=[
+                solution,
+            ],
             max_items=14,
             prefer_short=False,
         )
@@ -1813,31 +1839,89 @@ class ProjectIntelligenceLayer:
             return ""
         return value[0].upper() + value[1:] if len(value) > 1 else value.upper()
 
-    def _extract_sentence(self, text: str, hints: set[str]) -> str:
-        clean_text = self._clean_text(text)
+    def _hint_matches(
+        self,
+        text: str,
+        hint: str,
+    ) -> bool:
+        """
+        Match semantic hints only as complete words / expressions.
+
+        A short hint such as "tool" must match "tool", but must never
+        match a product name such as "ToolShare". The same protection
+        applies universally to app/platform/system and every other
+        hint used by the intelligence layer.
+        """
+        normalized_text = self._clean_text(
+            text
+        ).casefold()
+
+        normalized_hint = self._clean_text(
+            hint
+        ).casefold()
+
+        if (
+            not normalized_text
+            or not normalized_hint
+        ):
+            return False
+
+        return bool(
+            re.search(
+                rf"(?<!\w)"
+                rf"{re.escape(normalized_hint)}"
+                rf"(?!\w)",
+                normalized_text,
+                flags=re.IGNORECASE,
+            )
+        )
+
+    def _extract_sentence(
+        self,
+        text: str,
+        hints: set[str],
+    ) -> str:
+        clean_text = self._clean_text(
+            text
+        )
 
         if not clean_text:
             return ""
 
-        sentences = re.split(r"(?<=[.!?])\s+|\n+", clean_text)
+        sentences = re.split(
+            r"(?<=[.!?])\s+|\n+",
+            clean_text,
+        )
 
         best_sentence = ""
         best_score = 0
 
         for sentence in sentences:
-            sentence = self._clean_text(sentence)
-            lower = sentence.lower()
+            sentence = self._clean_text(
+                sentence
+            )
 
             if len(sentence) < 20:
                 continue
 
-            score = sum(1 for hint in hints if hint in lower)
+            score = sum(
+                1
+                for hint in hints
+                if self._hint_matches(
+                    sentence,
+                    hint,
+                )
+            )
 
             if score > best_score:
                 best_score = score
                 best_sentence = sentence
 
-        return best_sentence if best_score > 0 else ""
+        return (
+            best_sentence
+            if best_score > 0
+            else ""
+        )
 
     def _sector_tags(self, industry: str) -> List[str]:
         lower = self._clean_text(industry).lower()
@@ -2992,7 +3076,19 @@ class ProjectIntelligenceLayer:
         mvp_scope: str,
         language: str,
     ) -> List[str]:
-        text = self._clean_text(". ".join([solution, mvp_scope, description]))
+        # Canonical invariant:
+        # MVP/product scope is not workflow authority.
+        #
+        # Keep ``mvp_scope`` in the signature for compatibility,
+        # but do not parse it as an explicit user workflow.
+        text = self._clean_text(
+            ". ".join(
+                [
+                    solution,
+                    description,
+                ]
+            )
+        )
         if not text:
             return []
         lowered_text = text.lower()
@@ -3060,6 +3156,12 @@ class ProjectIntelligenceLayer:
         result: List[str] = []
         for clause in clauses:
             clean = clause.strip(" .,:;-")
+
+            if is_scope_exclusion_statement(
+                clean
+            ):
+                continue
+
             if len(clean) < 8 or len(clean.split()) > 22:
                 continue
             lowered = clean.lower()
@@ -3147,15 +3249,32 @@ class ProjectIntelligenceLayer:
                 if len(result) >= 6:
                     break
 
-        if len(result) < 3:
-            for value in (explicit_mvp, mvp_scope):
-                raw_items.extend(self._split_items(value))
-        if not raw_items and not result:
-            raw_items.extend(use_case_terms)
-        if self._workflows_are_generic(candidate_archetype_workflows):
-            raw_items.extend(candidate_archetype_workflows)
+        # Never manufacture workflow authority from MVP/product
+        # scope merely because fewer than three workflows exist.
+        #
+        # Search-oriented use-case terms remain a cautious fallback
+        # only when no workflow authority survived.
+        if not result:
+            raw_items.extend(
+                use_case_terms
+            )
+
+        if (
+            not result
+            and self._workflows_are_generic(
+                candidate_archetype_workflows
+            )
+        ):
+            raw_items.extend(
+                candidate_archetype_workflows
+            )
 
         for item in raw_items:
+            if is_scope_exclusion_statement(
+                item
+            ):
+                continue
+
             workflow = self._normalize_workflow_label(item, language)
             if not workflow or workflow.casefold() in {value.casefold() for value in result}:
                 continue
@@ -3279,6 +3398,36 @@ class ProjectIntelligenceLayer:
             f"{title or 'Le projet'} aide {target} à résoudre un problème opérationnel précis "
             f"grâce à : {solution or 'la solution proposée'}."
         )
+
+    def _first_available_non_scope_exclusion(
+        self,
+        *values: Any,
+    ) -> str:
+        """
+        Return the first usable value that is not an explicit
+        MVP/product-scope exclusion.
+
+        Project Intelligence may use this value for search/use-case
+        enrichment, but exclusions must never become positive use cases
+        or MVP scope.
+        """
+        for value in values:
+            clean = self._clean_text(
+                value
+            )
+
+            if not clean:
+                continue
+
+            if is_scope_exclusion_statement(
+                clean
+            ):
+                continue
+
+            return clean
+
+        return ""
+
 
     def _first_available_text(self, *values: Any) -> str:
         for value in values:

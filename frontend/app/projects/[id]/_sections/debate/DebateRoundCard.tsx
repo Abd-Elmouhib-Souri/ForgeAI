@@ -89,6 +89,99 @@ function evidenceStatusLabel(value: string | undefined, language: ForgeLang): st
   return cleanText(value || (language === "en" ? "Unclassified" : "Non classé"), language);
 }
 
+function authorityLabel(
+  value: string | undefined,
+  language: ForgeLang
+): string {
+  const mode = String(value || "").toLowerCase();
+
+  const labels: Record<string, [string, string]> = {
+    claim: [
+      "Canonical claim",
+      "Claim canonique",
+    ],
+    sources: [
+      "Canonical sources",
+      "Sources canoniques",
+    ],
+    context: [
+      "Structured project context",
+      "Contexte structuré du projet",
+    ],
+    synthesis: [
+      "Committee synthesis",
+      "Synthèse du comité",
+    ],
+    none: [
+      "No evidence authority attached",
+      "Aucune autorité de preuve attachée",
+    ],
+    legacy_category: [
+      "Legacy evidence projection",
+      "Projection de preuve historique",
+    ],
+  };
+
+  const label = labels[mode];
+
+  if (label) {
+    return language === "en"
+      ? label[0]
+      : label[1];
+  }
+
+  return language === "en"
+    ? "Authority not specified"
+    : "Autorité non spécifiée";
+}
+
+
+function authorityExplanation(
+  value: string | undefined,
+  language: ForgeLang
+): string {
+  const mode = String(value || "").toLowerCase();
+
+  if (mode === "claim") {
+    return language === "en"
+      ? "This answer projects an explicitly selected canonical evidence claim."
+      : "Cette réponse projette un claim de preuve canonique explicitement sélectionné.";
+  }
+
+  if (mode === "sources") {
+    return language === "en"
+      ? "This answer consumes explicitly selected canonical sources. Claim evidence status is not used to classify those sources."
+      : "Cette réponse consomme des sources canoniques explicitement sélectionnées. Le statut de preuve d'un claim n'est pas utilisé pour classifier ces sources.";
+  }
+
+  if (mode === "context") {
+    return language === "en"
+      ? "This answer is based on the canonical structured project context. No independent evidence claim is attached."
+      : "Cette réponse repose sur le contexte structuré canonique du projet. Aucun claim de preuve indépendant n'est attaché.";
+  }
+
+  if (mode === "synthesis") {
+    return language === "en"
+      ? "This answer is a committee synthesis. No evidence claim or source is artificially attached."
+      : "Cette réponse est une synthèse du comité. Aucun claim ni aucune source n'est artificiellement attaché.";
+  }
+
+  if (mode === "none") {
+    return language === "en"
+      ? "No canonical evidence authority is attached to this answer."
+      : "Aucune autorité de preuve canonique n'est attachée à cette réponse.";
+  }
+
+  if (mode === "legacy_category") {
+    return language === "en"
+      ? "This historical answer uses the legacy category-based evidence projection."
+      : "Cette réponse historique utilise la projection de preuve par catégorie héritée.";
+  }
+
+  return "";
+}
+
+
 function confidenceLabel(value: number | string | undefined, language: ForgeLang): string {
   if (typeof value === "number" && Number.isFinite(value)) {
     return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
@@ -198,6 +291,16 @@ function QuestionCard({
   const prep = item.meeting_preparation || {};
   const proofs = cleanedItems(prep.proofs_to_prepare || [], language);
 
+
+  const authorityMode =
+    answer.authority_mode ||
+    "legacy_category";
+
+  const authorityText = authorityExplanation(
+    authorityMode,
+    language
+  );
+
   const canonicalSourceIds =
     answer.source_ids?.length
       ? answer.source_ids
@@ -227,7 +330,7 @@ function QuestionCard({
           ).trim();
 
           if (title && sourceId) {
-            return `${title} ? ${sourceId}`;
+            return `${title} · ${sourceId}`;
           }
 
           return title || sourceId;
@@ -244,15 +347,15 @@ function QuestionCard({
             {language === "en" ? `Committee question ${index + 1}` : `Question du comité ${index + 1}`}
           </p>
           <p className="mt-1 text-xs font-bold text-slate-500">
-            {language === "en" ? "Asked by" : "Question pos?e par"}:{" "}
+            {language === "en" ? "Asked by" : "Question posée par"}:{" "}
             {roleLabel(item.asked_by, language)}
-            {" ? "}
-            {language === "en" ? "Addressed to" : "Adress?e ?"}:{" "}
+            {" · "}
+            {language === "en" ? "Addressed to" : "Adressée à"}:{" "}
             {roleLabel(item.addressed_to, language)}
             {item.answered_by && (
               <>
-                {" ? "}
-                {language === "en" ? "Answered by" : "R?ponse par"}:{" "}
+                {" · "}
+                {language === "en" ? "Answered by" : "Réponse par"}:{" "}
                 {roleLabel(item.answered_by, language)}
               </>
             )}
@@ -260,10 +363,30 @@ function QuestionCard({
         </div>
         <div className="flex flex-wrap gap-2">
           <span className="rounded-full bg-white px-3 py-1 text-[11px] font-black text-slate-600 shadow-sm">
-            {evidenceStatusLabel(answer.evidence_status, language)}
+            {language === "en" ? "Authority" : "Autorité"}:{" "}
+            {authorityLabel(
+              authorityMode,
+              language
+            )}
           </span>
+
+          {(authorityMode === "claim" ||
+            authorityMode === "legacy_category") && (
+            <span className="rounded-full bg-white px-3 py-1 text-[11px] font-black text-slate-600 shadow-sm">
+              {language === "en" ? "Evidence" : "Preuve"}:{" "}
+              {evidenceStatusLabel(
+                answer.evidence_status,
+                language
+              )}
+            </span>
+          )}
+
           <span className="rounded-full bg-white px-3 py-1 text-[11px] font-black text-slate-600 shadow-sm">
-            {language === "en" ? "Confidence" : "Confiance"}: {confidenceLabel(answer.confidence, language)}
+            {language === "en" ? "Confidence" : "Confiance"}:{" "}
+            {confidenceLabel(
+              answer.confidence,
+              language
+            )}
           </span>
         </div>
       </div>
@@ -273,6 +396,30 @@ function QuestionCard({
       </h5>
 
       <div className="mt-4 grid gap-3 lg:grid-cols-2">
+        <TextBlock
+          title={
+            language === "en"
+              ? "Evidence authority"
+              : "Autorité de la réponse"
+          }
+          value={authorityText}
+          language={language}
+        />
+
+        {authorityMode === "claim" &&
+          answer.canonical_claim_found &&
+          answer.canonical_claim_id && (
+            <TextBlock
+              title={
+                language === "en"
+                  ? "Canonical claim"
+                  : "Claim canonique"
+              }
+              value={answer.canonical_claim_id}
+              language={language}
+            />
+          )}
+
         <TextBlock
           title={language === "en" ? "Direct answer" : "Réponse directe"}
           value={answer.direct_answer}
@@ -288,7 +435,7 @@ function QuestionCard({
             title={
               language === "en"
                 ? "Evidence used"
-                : "Preuves utilis?es"
+                : "Preuves utilisées"
             }
             items={evidenceUsed}
             language={language}

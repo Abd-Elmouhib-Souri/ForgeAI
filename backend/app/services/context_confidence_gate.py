@@ -175,10 +175,6 @@ class ContextConfidenceGate:
             "demand_side",
             "transaction_unit",
             "transaction_flow",
-            "payment_responsibility",
-            "fulfillment_logistics",
-            "trust_mechanism",
-            "dispute_responsibility",
         ),
         "ecommerce": (
             "transaction_unit",
@@ -213,6 +209,10 @@ class ContextConfidenceGate:
     ARCHETYPE_AMBIGUOUS_REQUIREMENTS = {
         "two_sided_marketplace": (
             "business_model",
+            "payment_responsibility",
+            "fulfillment_logistics",
+            "trust_mechanism",
+            "dispute_responsibility",
         ),
         "ecommerce": (
             "return_refund_policy",

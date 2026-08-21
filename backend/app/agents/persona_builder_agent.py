@@ -5,6 +5,7 @@ import unicodedata
 from typing import Any, Dict, List
 
 from app.services.domain_integrity_guard import normalize_output_language
+from app.services.canonical_actor_projection import (canonical_project_context, confirmed_actor_map, project_actor_roles)
 
 
 class PersonaBuilderAgent:
@@ -972,12 +973,14 @@ class PersonaBuilderAgent:
     def _context(self, state: Dict[str, Any]) -> Dict[str, Any]:
         analysis = state.get("analysis_data") or {}
         project_context = state.get("project_context") or {}
+
         intelligence = (
             state.get("project_intelligence")
             or analysis.get("project_intelligence")
             or project_context.get("project_intelligence")
             or {}
         )
+
         packet = (
             state.get("agent_context_packet")
             or analysis.get("agent_context_packet")
@@ -985,6 +988,15 @@ class PersonaBuilderAgent:
             or intelligence.get("agent_context_packet")
             or {}
         )
+
+        canonical = canonical_project_context(
+            state.get("project_context_packet")
+            or analysis.get("project_context_packet")
+            or project_context.get("project_context_packet")
+            or packet
+            or project_context
+        )
+
         structured = (
             state.get("structured_project_context")
             or analysis.get("structured_project_context")
@@ -993,6 +1005,7 @@ class PersonaBuilderAgent:
             or packet.get("structured_project_context")
             or {}
         )
+
         archetype = (
             state.get("archetype_context")
             or analysis.get("archetype_context")
@@ -1001,7 +1014,9 @@ class PersonaBuilderAgent:
             or packet.get("archetype_context")
             or {}
         )
+
         project = state.get("project") or {}
+
         description = self._text(
             structured.get("description")
             or packet.get("description")
@@ -1009,24 +1024,125 @@ class PersonaBuilderAgent:
             or state.get("description")
             or project.get("description")
         )
-        actors = structured.get("actors") or archetype.get("actors") or packet.get("actors") or {}
-        if not isinstance(actors, dict):
-            actors = {}
+
+        raw_actors = (
+            structured.get("actors")
+            or archetype.get("actors")
+            or packet.get("actors")
+            or {}
+        )
+
+        actors = (
+            dict(raw_actors)
+            if isinstance(
+                raw_actors,
+                dict,
+            )
+            else {}
+        )
+
+        provenance = (
+            structured.get("actor_provenance")
+            or canonical.get("actor_provenance")
+            or actors.get("provenance")
+            or {}
+        )
+
+        if not isinstance(
+            provenance,
+            dict,
+        ):
+            provenance = {}
+
+        role_projection = project_actor_roles(
+            canonical=canonical,
+            structured=structured,
+            actors=actors,
+            provenance=provenance,
+        )
+
+        # Compatibility role map derived only from confirmed authority.
+        actors.update(
+            confirmed_actor_map(
+                role_projection
+            )
+        )
+
         targets = self._list(
             structured.get("target_users")
             or archetype.get("target_users")
+            or canonical.get("target_users")
             or packet.get("target_users")
             or project_context.get("target_users")
         )
+
         if not targets:
-            targets = self._unique([
-                self._text(actors.get("demand_side")),
-                self._text(actors.get("supply_side")),
-                self._text(actors.get("operator_or_partner")),
-            ])
-        language = normalize_output_language(state.get("output_language", "fr"))
+            canonical_targets = []
+
+            for role in (
+                "user",
+                "operator",
+            ):
+                canonical_targets.extend(
+                    role_projection.get(
+                        role,
+                        {},
+                    ).get(
+                        "values",
+                        [],
+                    )
+                    or []
+                )
+
+            targets = self._unique(
+                [
+                    self._text(
+                        item
+                    )
+                    for item in canonical_targets
+                    if self._text(
+                        item
+                    )
+                ]
+            )
+
         if not targets:
-            targets = ["Primary user" if language == "en" else "Utilisateur principal"]
+            targets = self._unique(
+                [
+                    self._text(
+                        actors.get(
+                            "demand_side"
+                        )
+                    ),
+                    self._text(
+                        actors.get(
+                            "supply_side"
+                        )
+                    ),
+                    self._text(
+                        actors.get(
+                            "operator_or_partner"
+                        )
+                    ),
+                ]
+            )
+
+        language = normalize_output_language(
+            state.get(
+                "output_language",
+                "fr",
+            )
+        )
+
+        if not targets:
+            targets = [
+                (
+                    "Primary user"
+                    if language == "en"
+                    else "Utilisateur principal"
+                )
+            ]
+
         workflows = self._list(
             structured.get("priority_workflows")
             or archetype.get("priority_workflows")
@@ -1034,9 +1150,14 @@ class PersonaBuilderAgent:
             or structured.get("use_cases")
             or structured.get("use_case_terms")
         )
+
         constraints = self._clean_risk_dimensions(
-            self._list(structured.get("constraints") or packet.get("constraints"))
+            self._list(
+                structured.get("constraints")
+                or packet.get("constraints")
+            )
         )
+
         risk_dimensions = self._clean_risk_dimensions(
             constraints
             + self._list(
@@ -1045,39 +1166,127 @@ class PersonaBuilderAgent:
                 or packet.get("risk_dimensions")
             )
         )
-        explicit_buyer = self._extract_explicit_actor(
-            description=description,
-            targets=targets,
-            role="buyer",
+
+        explicit_buyer = self._text(
+            role_projection.get(
+                "payer",
+                {},
+            ).get(
+                "value"
+            )
         )
-        explicit_maintainer = self._extract_explicit_actor(
-            description=description,
-            targets=targets,
-            role="maintainer",
+
+        explicit_maintainer = self._text(
+            role_projection.get(
+                "technical_maintainer",
+                {},
+            ).get(
+                "value"
+            )
         )
+
+        # Legacy-only compatibility.
+        # Canonical context, when present, is the sole role authority.
+        if not canonical:
+            explicit_buyer = (
+                explicit_buyer
+                or self._extract_explicit_actor(
+                    description=description,
+                    targets=targets,
+                    role="buyer",
+                )
+            )
+
+            explicit_maintainer = (
+                explicit_maintainer
+                or self._extract_explicit_actor(
+                    description=description,
+                    targets=targets,
+                    role="maintainer",
+                )
+            )
+
         return {
-            "title": self._text(structured.get("project_name") or packet.get("project_name") or state.get("title") or "Project"),
+            "title": self._text(
+                structured.get("project_name")
+                or packet.get("project_name")
+                or state.get("title")
+                or "Project"
+            ),
             "description": description,
-            "sector": self._text(structured.get("sector") or archetype.get("vertical") or packet.get("sector") or state.get("industry") or "target sector"),
-            "region": self._text(structured.get("target_region") or packet.get("target_region") or state.get("region") or "target region"),
+            "sector": self._text(
+                structured.get("sector")
+                or archetype.get("vertical")
+                or packet.get("sector")
+                or state.get("industry")
+                or "target sector"
+            ),
+            "region": self._text(
+                structured.get("target_region")
+                or packet.get("target_region")
+                or state.get("region")
+                or "target region"
+            ),
             "target_users": targets,
-            # Never use the second target as an automatic buyer.
             "economic_buyer": explicit_buyer,
             "explicit_economic_buyer": explicit_buyer,
             "explicit_maintainer": explicit_maintainer,
-            "problem": self._text(structured.get("problem") or packet.get("problem") or analysis.get("problem") or "The current workflow requires validation."),
-            "solution": self._text(structured.get("solution") or packet.get("solution") or analysis.get("proposed_solution") or "A focused workflow solution."),
-            "mvp_scope": self._text(structured.get("mvp_scope") or archetype.get("validation_unit") or packet.get("mvp_scope") or "the first operational workflow"),
+            "problem": self._text(
+                structured.get("problem")
+                or packet.get("problem")
+                or analysis.get("problem")
+                or "The current workflow requires validation."
+            ),
+            "solution": self._text(
+                structured.get("solution")
+                or packet.get("solution")
+                or analysis.get("proposed_solution")
+                or "A focused workflow solution."
+            ),
+            "mvp_scope": self._text(
+                structured.get("mvp_scope")
+                or archetype.get("validation_unit")
+                or packet.get("mvp_scope")
+                or "the first operational workflow"
+            ),
             "workflows": workflows,
-            "project_archetype": self._text(structured.get("project_archetype") or archetype.get("project_archetype") or packet.get("project_archetype") or "generic_digital_product"),
-            "business_motion": self._text(structured.get("business_motion") or archetype.get("business_motion") or packet.get("business_motion") or "unknown"),
-            "interaction_model": self._text(structured.get("interaction_model") or archetype.get("interaction_model") or packet.get("interaction_model") or "generic"),
+            "project_archetype": self._text(
+                structured.get("project_archetype")
+                or archetype.get("project_archetype")
+                or packet.get("project_archetype")
+                or "generic_digital_product"
+            ),
+            "business_motion": self._text(
+                structured.get("business_motion")
+                or archetype.get("business_motion")
+                or packet.get("business_motion")
+                or "unknown"
+            ),
+            "interaction_model": self._text(
+                structured.get("interaction_model")
+                or archetype.get("interaction_model")
+                or packet.get("interaction_model")
+                or "generic"
+            ),
             "actors": actors,
-            "business_model": self._text(structured.get("business_model") or archetype.get("business_model") or packet.get("business_model") or "pricing model to validate"),
-            "success_metrics": self._list(structured.get("success_metrics") or archetype.get("success_metrics") or packet.get("success_metrics")),
+            "business_model": self._text(
+                structured.get("business_model")
+                or archetype.get("business_model")
+                or packet.get("business_model")
+                or "pricing model to validate"
+            ),
+            "success_metrics": self._list(
+                structured.get("success_metrics")
+                or archetype.get("success_metrics")
+                or packet.get("success_metrics")
+            ),
             "constraints": constraints,
             "risk_dimensions": risk_dimensions,
-            "evidence_needs": self._list(structured.get("evidence_needs") or archetype.get("evidence_needs") or packet.get("evidence_needs")),
+            "evidence_needs": self._list(
+                structured.get("evidence_needs")
+                or archetype.get("evidence_needs")
+                or packet.get("evidence_needs")
+            ),
         }
 
     def _extract_explicit_actor(

@@ -205,6 +205,28 @@ class EvidenceLedger:
         "market_study.local_context",
     )
 
+    # Presentation-only labels added when analytical claims are
+    # projected back into public market-study fields.
+    #
+    # These labels are NOT part of canonical claim authority.
+    # Keeping the registry path-scoped prevents unrelated claims
+    # from being rewritten merely because they begin with words
+    # such as "Recommendation" or "Hypothesis".
+    PUBLICATION_PREFIXES_BY_PATH = {
+        "market_study.market_overview": (
+            "Hypoth\u00e8se \u00e0 valider :",
+            "Hypothesis to validate:",
+        ),
+        "market_study.local_context": (
+            "Recommandation :",
+            "Recommendation:",
+        ),
+        "market_study.local_feasibility": (
+            "Conclusion prudente :",
+            "Cautious conclusion:",
+        ),
+    }
+
     def build(self, analysis_data: dict[str, Any]) -> dict[str, Any]:
         data = analysis_data or {}
         raw_sources = self._sources(data)
@@ -410,7 +432,6 @@ class EvidenceLedger:
         solution = (
             data.get("proposed_solution")
             or data.get("solution")
-            or market.get("market_need")
         )
 
         specs = [
@@ -525,6 +546,70 @@ class EvidenceLedger:
 
         return specs
 
+    @classmethod
+    def _strip_publication_prefixes(
+        cls,
+        path: str,
+        value: Any,
+    ) -> str:
+        """Remove presentation-only prefixes from canonical text.
+
+        Public sanitization may run more than once during a pipeline.
+        Canonical claim authority must therefore never absorb labels
+        previously added only for presentation.
+
+        Repeated historical prefixes are collapsed completely so the
+        transformation converges back to the underlying claim text.
+        """
+
+        text = str(
+            value
+            or ""
+        ).strip()
+
+        if not text:
+            return ""
+
+        prefixes = (
+            cls.PUBLICATION_PREFIXES_BY_PATH.get(
+                str(path or "").strip(),
+                (),
+            )
+        )
+
+        if not prefixes:
+            return text
+
+        while text:
+            matched = False
+            folded = text.casefold()
+
+            for raw_prefix in prefixes:
+                prefix = str(
+                    raw_prefix
+                    or ""
+                ).strip()
+
+                if not prefix:
+                    continue
+
+                if not folded.startswith(
+                    prefix.casefold()
+                ):
+                    continue
+
+                text = text[
+                    len(prefix):
+                ].lstrip()
+
+                matched = True
+                break
+
+            if not matched:
+                break
+
+        return text
+
     def _claim(
         self,
         spec: ClaimSpec,
@@ -552,7 +637,10 @@ class EvidenceLedger:
                 )
             ]
 
-        claim_text = self._text(spec.value)
+        claim_text = self._strip_publication_prefixes(
+            spec.path,
+            self._text(spec.value),
+        )
         normalized_claim = self._normalize_semantic_text(claim_text)
         non_confirmation = any(
             marker in normalized_claim
@@ -566,12 +654,25 @@ class EvidenceLedger:
             for prefix in self.CAUTIOUS_SIGNAL_PREFIXES
         )
 
-        if spec.category == "solution_hypothesis":
+        if spec.claim_id in {
+            "problem_relevance",
+            "solution_feasibility",
+        }:
+            # Evidence-category compatibility only identifies candidate
+            # sources. It does not prove the exact factual claim.
             compatible = self._filter_semantically_compatible_sources(
                 claim_text,
                 compatible,
                 strict=True,
             )
+
+        elif spec.category == "solution_hypothesis":
+            compatible = self._filter_semantically_compatible_sources(
+                claim_text,
+                compatible,
+                strict=True,
+            )
+
         elif (
             spec.path.startswith("market_study.market_trends[")
             or spec.path.startswith("market_study.demand_drivers[")
@@ -795,7 +896,20 @@ class EvidenceLedger:
                         if language != "en"
                         else "Signal to validate: "
                     )
-                return prefix + text
+                canonical_text = (
+                    self._strip_publication_prefixes(
+                        path,
+                        text,
+                    )
+                )
+
+                if not canonical_text:
+                    return self._neutral_text(
+                        language,
+                        neutral_key,
+                    )
+
+                return prefix + canonical_text
 
         return self._neutral_text(language, neutral_key)
 

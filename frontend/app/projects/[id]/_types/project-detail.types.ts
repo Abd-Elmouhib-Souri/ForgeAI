@@ -563,6 +563,19 @@ export interface DebateQuestionAnswer {
   canonical_claim_id?: string;
   canonical_claim_found?: boolean;
 
+  /**
+   * Canonical question-level authority declared by Debate Room.
+   * The UI must display this value and must not infer authority
+   * from source_ids, evidence_status or canonical_claim_id.
+   */
+  authority_mode?:
+    | "claim"
+    | "sources"
+    | "context"
+    | "synthesis"
+    | "none"
+    | "legacy_category";
+
   unresolved_point?: string;
 }
 

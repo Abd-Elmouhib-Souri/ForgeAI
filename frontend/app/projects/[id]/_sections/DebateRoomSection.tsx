@@ -339,7 +339,7 @@ export default function DebateRoomSection({
               title={
                 reportLanguage === "en"
                   ? "Unresolved points"
-                  : "Points non r?solus"
+                  : "Points non résolus"
               }
               items={meeting.unresolved_points}
               language={reportLanguage}

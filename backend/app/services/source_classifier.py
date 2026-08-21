@@ -125,23 +125,87 @@ class SourceClassifier:
     ) -> List[Dict[str, Any]]:
         from groq import AsyncGroq  # lazy import
 
-        client = AsyncGroq(api_key=settings.GROQ_API_KEY)
-        completion = await asyncio.wait_for(
-            client.chat.completions.create(
-                model=settings.GROQ_MODEL,
-                temperature=0,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "Return only valid JSON. Never invent facts or companies.",
-                    },
-                    {"role": "user", "content": self._prompt(sources, context)},
-                ],
-            ),
-            timeout=float(settings.SEARCH_CLASSIFIER_TIMEOUT_SECONDS),
+        client = AsyncGroq(
+            api_key=settings.GROQ_API_KEY
         )
-        text = completion.choices[0].message.content or ""
-        return self._parse(text)
+
+        prompt = self._prompt(
+            sources,
+            context,
+        )
+
+        models: List[str] = []
+
+        for candidate in (
+            settings.GROQ_MODEL,
+            settings.GROQ_FALLBACK_MODEL,
+        ):
+            model = str(
+                candidate or ""
+            ).strip()
+
+            if (
+                model
+                and model not in models
+            ):
+                models.append(
+                    model
+                )
+
+        if not models:
+            raise RuntimeError(
+                "No Groq classifier model configured."
+            )
+
+        last_error: Exception | None = None
+
+        for model in models:
+            try:
+                completion = await asyncio.wait_for(
+                    client.chat.completions.create(
+                        model=model,
+                        temperature=0,
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": (
+                                    "Return only valid JSON. "
+                                    "Never invent facts or companies."
+                                ),
+                            },
+                            {
+                                "role": "user",
+                                "content": prompt,
+                            },
+                        ],
+                    ),
+                    timeout=float(
+                        settings.SEARCH_CLASSIFIER_TIMEOUT_SECONDS
+                    ),
+                )
+
+                text = (
+                    completion
+                    .choices[0]
+                    .message
+                    .content
+                    or ""
+                )
+
+                return self._parse(
+                    text
+                )
+
+            except Exception as exc:
+                last_error = exc
+
+        if last_error is not None:
+            raise last_error
+
+        raise RuntimeError(
+            "All configured Groq classifier models failed."
+        )
+
 
     def _prompt(
         self,

@@ -7,6 +7,7 @@ import type { AnalysisData, Project } from "../_types/project-detail.types";
 import { reportCopy } from "../_lib/report-copy";
 import { formatScore } from "../_lib/formatters";
 import {
+  getOfficialStartupScore,
   getReportLanguage,
 } from "../_lib/analysis-helpers";
 import { cleanText } from "../_lib/text-cleaning";
@@ -41,7 +42,7 @@ function verdictText(value?: string | null, language: ForgeLang = "fr"): string 
   }
 
   return cleanText(
-    value || "D?cision en attente",
+    value || "Décision en attente",
     language
   );
 }
@@ -63,8 +64,10 @@ export default function ReportIntro({
   const decision =
     finalReport?.decision;
 
-  const score =
-    finalReport?.startup_score?.global_score;
+  const score = getOfficialStartupScore(
+    analysisData,
+    project.startup_score ?? null
+  );
 
   const verdict =
     decision?.verdict_code ||
