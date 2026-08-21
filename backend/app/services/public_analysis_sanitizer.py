@@ -343,6 +343,32 @@ def sanitize_analysis_data_for_public(
     context = project_context or {}
     language = _language(data, context)
 
+    # Canonical Evidence authority is produced during the analysis pipeline
+    # and persisted before public projection. A GET/public sanitizer is a
+    # consumer only: it must never rebuild or reinterpret that authority.
+    canonical_evidence_snapshot = (
+        deepcopy(
+            data.get("evidence_ledger")
+        )
+        if isinstance(
+            data.get("evidence_ledger"),
+            dict,
+        )
+        else None
+    )
+
+    canonical_evidence_meta_snapshot = {
+        key: deepcopy(data[key])
+        for key in (
+            "evidence_confidence",
+            "overall_evidence_confidence",
+            "search_coverage",
+            "source_relevance_confidence",
+            "verdict_code",
+        )
+        if key in data
+    }
+
     data = _ensure_proposed_solution(data, context)
     data = _sanitize_recursive(data, context)
     data = _sanitize_external_sources(data, raw_data, context)
@@ -399,6 +425,34 @@ def sanitize_analysis_data_for_public(
 
     guard_context = _build_guard_context_from_public_context(data, context)
 
+    # StartupScore is produced deterministically upstream and persisted as a
+    # public authority contract. At this point it has already passed the normal
+    # recursive/public-language cleanup. The generic DomainIntegrityGuard must
+    # not reinterpret its verdict, actions, recommendations or score fields.
+    canonical_startup_score_snapshot = (
+        deepcopy(
+            data.get(
+                "startup_score"
+            )
+        )
+        if isinstance(
+            data.get(
+                "startup_score"
+            ),
+            dict,
+        )
+        else None
+    )
+
+    if isinstance(
+        canonical_startup_score_snapshot,
+        dict,
+    ):
+        data.pop(
+            "startup_score",
+            None,
+        )
+
     validation = domain_integrity_guard.validate_object(
         data=data,
         project_context=guard_context,
@@ -420,7 +474,9 @@ def sanitize_analysis_data_for_public(
         data,
         public_source_snapshot,
     )
-    data = evidence_ledger.sanitize_public_claims(data)
+    # Evidence publication already happened upstream before persistence.
+    # Do not call EvidenceLedger.sanitize_public_claims() here: that method
+    # rebuilds the ledger and is therefore an authority operation.
     data = _restore_public_context_gate_sections(
         data,
         public_context_gate_snapshot,
@@ -437,6 +493,31 @@ def sanitize_analysis_data_for_public(
     # public-language cleanup as the rest of the report.
     data = _sanitize_recursive(data, context)
     data = _final_language_pass(data, language)
+
+    # Restore canonical Evidence authority exactly as persisted.
+    # Generic public formatting must not change claim text, claim_kind,
+    # evidence_status, validation_required, source_ids or canonical verdict.
+    if isinstance(
+        canonical_evidence_snapshot,
+        dict,
+    ):
+        data["evidence_ledger"] = canonical_evidence_snapshot
+
+    for (
+        key,
+        value,
+    ) in canonical_evidence_meta_snapshot.items():
+        data[key] = value
+
+    # Restore the already-clean deterministic StartupScore contract exactly as
+    # it existed before the generic DomainIntegrityGuard pass.
+    if isinstance(
+        canonical_startup_score_snapshot,
+        dict,
+    ):
+        data["startup_score"] = (
+            canonical_startup_score_snapshot
+        )
 
     return data
 

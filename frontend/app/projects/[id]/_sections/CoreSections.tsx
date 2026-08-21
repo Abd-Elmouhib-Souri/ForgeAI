@@ -11,6 +11,7 @@ import type {
 
 import {
   getConcreteSolution,
+  getOfficialStartupScore,
   getPublicLocalMarketAssessment,
   getPublicTextItems,
   getReportLanguage,
@@ -357,7 +358,6 @@ export function ExecutiveSummarySection({
   const context = finalReport.context;
   const summary = finalReport.executive_summary;
   const decision = finalReport.decision;
-  const score = finalReport.startup_score;
 
   return (
     <SectionShell
@@ -391,7 +391,10 @@ export function ExecutiveSummarySection({
         <MetricCard
           label={t.startupScore}
           value={formatScore(
-            score?.global_score ?? null
+            getOfficialStartupScore(
+              analysisData,
+              project?.startup_score ?? null
+            )
           )}
           tone="amber"
         />
@@ -808,7 +811,10 @@ export function StartupScoreSection({
         <MetricCard
           label={t.startupScore}
           value={formatScore(
-            currentScore.global_score ?? null
+            getOfficialStartupScore(
+              analysisData,
+              project?.startup_score ?? null
+            )
           )}
           tone="amber"
         />
@@ -929,7 +935,7 @@ export function VerdictSection({
           emptyText={
             lang === "en"
               ? "No opportunity is considered validated without compatible evidence."
-              : "Aucune opportunit? n?est consid?r?e comme valid?e sans preuve compatible."
+              : "Aucune opportunité n’est considérée comme validée sans preuve compatible."
           }
         />
 

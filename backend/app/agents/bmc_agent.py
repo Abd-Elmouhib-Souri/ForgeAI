@@ -4,6 +4,7 @@ import re
 from typing import Any, Dict, Iterable, List
 
 from app.services.domain_integrity_guard import normalize_output_language
+from app.services.canonical_actor_projection import project_actor_roles
 
 
 class BMCAgent:
@@ -396,7 +397,7 @@ class BMCAgent:
             "region": self._text(structured.get("target_region") or structured.get("market_region") or canonical.get("target_region") or project_context.get("market_region") or state.get("region")),
             "target_user_list": users,
             "target_users": ", ".join(users),
-            "economic_buyer": self._text(structured.get("economic_buyer") or canonical.get("payer") or actors.get("payer")),
+            "economic_buyer": self._text(role_assignments["payer"]["value"] or structured.get("economic_buyer") or canonical.get("payer") or actors.get("payer")),
             "problem": self._packet_text(structured.get("problem") or structured.get("core_problem") or canonical.get("problem") or project_context.get("problem"), "the identified problem"),
             "solution": self._packet_text(structured.get("solution") or canonical.get("solution") or project_context.get("solution"), "the proposed solution"),
             "business_model": self._text(structured.get("business_model") or self._first(self._list(canonical.get("business_model_hypotheses"))) or project_context.get("business_model"), "Business model to validate"),
@@ -453,73 +454,66 @@ class BMCAgent:
         provenance: Dict[str, Any],
     ) -> Dict[str, Dict[str, str]]:
         aliases = {
-            "payer": ("payer", "economic_buyer", "budget_owner"),
+            "payer": (
+                "payer",
+                "economic_buyer",
+                "budget_owner",
+            ),
             "technical_maintainer": (
                 "technical_maintainer",
                 "maintenance_owner",
                 "maintainer",
             ),
-            "demand_side": ("demand_side",),
-            "supply_side": ("supply_side",),
-            "operator_or_partner": ("operator_or_partner", "platform_operator"),
+            "demand_side": (
+                "demand_side",
+            ),
+            "supply_side": (
+                "supply_side",
+            ),
+            "operator_or_partner": (
+                "operator_or_partner",
+                "platform_operator",
+            ),
         }
-        assignments: Dict[str, Dict[str, str]] = {}
 
-        for role, keys in aliases.items():
-            raw: Any = None
-            status = ""
+        projection = project_actor_roles(
+            canonical=canonical,
+            structured=structured,
+            actors=actors,
+            provenance=provenance,
+            role_aliases=aliases,
+        )
 
-            for key in keys:
-                if key in actors and actors.get(key) not in (None, ""):
-                    raw = actors.get(key)
-                    break
-                if key in structured and structured.get(key) not in (None, ""):
-                    raw = structured.get(key)
-                    break
-                if key in canonical and canonical.get(key) not in (None, ""):
-                    raw = canonical.get(key)
-                    break
-
-            if isinstance(raw, dict):
-                status = self._text(
-                    raw.get("status")
-                    or raw.get("provenance")
-                    or raw.get("source")
-                ).lower()
-                candidate = self._text(
-                    raw.get("value")
-                    or raw.get("name")
-                    or raw.get("actor")
-                    or raw.get("label")
-                )
-            else:
-                candidate = self._text(raw)
-
-            provenance_value = provenance.get(role)
-            if isinstance(provenance_value, dict):
-                status = status or self._text(
-                    provenance_value.get("status")
-                    or provenance_value.get("source")
-                    or provenance_value.get("provenance")
-                ).lower()
-            else:
-                status = status or self._text(provenance_value).lower()
-
-            for key in keys:
-                status = status or self._text(
-                    structured.get(f"{key}_status")
-                    or actors.get(f"{key}_status")
-                    or canonical.get(f"{key}_status")
-                ).lower()
-
-            confirmed = status in self.CONFIRMED_ROLE_STATUSES
-            assignments[role] = {
-                "value": candidate if confirmed else "",
-                "candidate": candidate,
-                "status": "explicit" if confirmed else "to_confirm",
+        return {
+            role: {
+                "value": self._text(
+                    projection.get(
+                        role,
+                        {},
+                    ).get(
+                        "value"
+                    )
+                ),
+                "candidate": self._text(
+                    projection.get(
+                        role,
+                        {},
+                    ).get(
+                        "candidate"
+                    )
+                ),
+                "status": self._text(
+                    projection.get(
+                        role,
+                        {},
+                    ).get(
+                        "status"
+                    )
+                    or "to_confirm"
+                ),
             }
-
-        return assignments
+            for role in aliases
+        }
 
     def _actor_text(self, value: Any) -> str:
         if isinstance(value, dict):

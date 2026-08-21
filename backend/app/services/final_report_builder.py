@@ -1428,6 +1428,9 @@ class FinalReportBuilder:
 
             source_id = str(
                 item.get(
+                    "canonical_source_id"
+                )
+                or item.get(
                     "source_id"
                 )
                 or ""

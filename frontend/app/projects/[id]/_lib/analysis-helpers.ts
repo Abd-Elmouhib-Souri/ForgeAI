@@ -66,7 +66,8 @@ export function getOfficialStartupScore(
   analysisData?: AnalysisData | null,
   fallbackScore?: number | null
 ): number | null {
-  const scoreData = analysisData?.startup_score || {};
+  const scoreData =
+    analysisData?.startup_score || {};
 
   const candidates = [
     scoreData.potential_score,
@@ -76,18 +77,34 @@ export function getOfficialStartupScore(
     scoreData.final_score,
     scoreData.score_out_of_10,
     scoreData.global_score,
-    fallbackScore,
-    analysisData?.innovation_score,
   ];
 
   for (const candidate of candidates) {
-    if (typeof candidate === "number" && Number.isFinite(candidate)) {
-      return candidate;
+    if (
+      typeof candidate === "number" &&
+      Number.isFinite(candidate)
+    ) {
+      const score = candidate;
+
+      if (
+        score >= 0 &&
+        score <= 10
+      ) {
+        return score;
+      }
     }
+  }
+
+  if (
+    typeof fallbackScore === "number" &&
+    Number.isFinite(fallbackScore)
+  ) {
+    return fallbackScore;
   }
 
   return null;
 }
+
 
 export function getConcreteSolution(
   analysisData: AnalysisData,
@@ -109,12 +126,12 @@ export function getConcreteSolution(
   if (descriptionSolution) return descriptionSolution;
 
   const improvedIdea = analysisData.debate_room?.judge?.improved_idea;
-  return improvedIdea || "â€”";
+  return improvedIdea || "—";
 }
 
 function extractLabeledSolution(value: string): string {
   const match = value.match(
-    /(?:the solution is|proposed solution|solution\s*:|la solution est|solution proposÃ©e\s*:|solution proposee\s*:)([\s\S]*?)(?=(?:the first target users|target users|the mvp|mvp\s*:|the business model|business model|les utilisateurs cibles|le mvp|modÃ¨le Ã©conomique|modele economique)|$)/i
+    /(?:the solution is|proposed solution|solution\s*:|la solution est|solution proposée\s*:|solution proposee\s*:)([\s\S]*?)(?=(?:the first target users|target users|the mvp|mvp\s*:|the business model|business model|les utilisateurs cibles|le mvp|modèle économique|modele economique)|$)/i
   );
   return extractSolutionOnly(match?.[1] || "");
 }
@@ -126,7 +143,7 @@ function extractSolutionOnly(value: string): string {
   const contamination = [
     /\bthe problem is\b/i,
     /\bthis makes it hard\b/i,
-    /\ble problÃ¨me est\b/i,
+    /\ble problème est\b/i,
     /\bce qui rend\b/i,
   ];
 
@@ -142,8 +159,8 @@ export function isGenericSolution(value: string): boolean {
   const lower = value.toLowerCase();
 
   return (
-    lower.includes("solution numÃ©rique adaptÃ©e au secteur") ||
-    lower.includes("mvp Ã  valider sur le terrain") ||
+    lower.includes("solution numérique adaptée au secteur") ||
+    lower.includes("mvp à valider sur le terrain") ||
     lower.includes("mvp a valider sur le terrain") ||
     lower.includes("clear mvp directly based on the user's project description")
   );
@@ -167,13 +184,13 @@ export function getPublicLocalMarketAssessment(
     }
 
     return (
-      "Le projet vise un marchÃ© global. Avant toute extension internationale, " +
-      "ForgeAI recommande de choisir un marchÃ© initial prÃ©cis pour tester le besoin, " +
-      "le prix acceptable, lâ€™acquisition utilisateur et la concurrence rÃ©elle."
+      "Le projet vise un marché global. Avant toute extension internationale, " +
+      "ForgeAI recommande de choisir un marché initial précis pour tester le besoin, " +
+      "le prix acceptable, l’acquisition utilisateur et la concurrence réelle."
     );
   }
 
-  return value || "â€”";
+  return value || "—";
 }
 
 export function getPublicAnalysisWarning(
@@ -188,8 +205,8 @@ export function getPublicAnalysisWarning(
   const partialMarkers = [
     "partiellement",
     "partially",
-    "nâ€™a pas pu Ãªtre complÃ©tÃ©e automatiquement",
-    "n'a pas pu Ãªtre complÃ©tÃ©e automatiquement",
+    "n’a pas pu être complétée automatiquement",
+    "n'a pas pu être complétée automatiquement",
     "could not be completed automatically",
   ];
 
@@ -206,8 +223,8 @@ export function getPublicAnalysisWarning(
     }
 
     return (
-      "Analyse terminÃ©e. Certaines informations doivent Ãªtre confirmÃ©es par " +
-      "une validation terrain avant dÃ©cision finale."
+      "Analyse terminée. Certaines informations doivent être confirmées par " +
+      "une validation terrain avant décision finale."
     );
   }
 
@@ -218,7 +235,7 @@ export function publicAnalysisStep(
   value?: string | null,
   language: ForgeLang = "fr"
 ): string {
-  if (!value) return "â€”";
+  if (!value) return "—";
 
   const cleaned = cleanText(value, language);
 
@@ -234,31 +251,31 @@ export function publicAnalysisStep(
       .replaceAll("Self-Correction RAG", "Claim verification")
       .replaceAll("persona_builder", "Customer personas")
       .replaceAll("Persona Builder", "Customer personas")
-      .replaceAll("Analyse Sprint 3 + Debate Room terminÃ©e", "Strategic analysis completed")
-      .replaceAll("Analyse terminÃ©e", "Analysis completed")
-      .replaceAll("terminÃ©e partiellement", "completed")
-      .replaceAll("terminÃ© partiellement", "completed")
+      .replaceAll("Analyse Sprint 3 + Debate Room terminée", "Strategic analysis completed")
+      .replaceAll("Analyse terminée", "Analysis completed")
+      .replaceAll("terminée partiellement", "completed")
+      .replaceAll("terminé partiellement", "completed")
       .replaceAll("completed partially", "completed")
       .replaceAll("idle", "Idle");
   }
 
   return cleaned
     .replaceAll("Sprint 2", "Analyse initiale")
-    .replaceAll("Sprint 3", "Analyse stratÃ©gique")
-    .replaceAll("Startup Evaluator", "Ã‰valuation stratÃ©gique")
-    .replaceAll("startup_evaluator", "Ã©valuation stratÃ©gique")
-    .replaceAll("Debate Room", "DÃ©bat stratÃ©gique")
-    .replaceAll("Fact Checker", "VÃ©rification des affirmations")
-    .replaceAll("fact_checker", "VÃ©rification des affirmations")
-    .replaceAll("Self-Correction RAG", "VÃ©rification des affirmations")
+    .replaceAll("Sprint 3", "Analyse stratégique")
+    .replaceAll("Startup Evaluator", "Évaluation stratégique")
+    .replaceAll("startup_evaluator", "évaluation stratégique")
+    .replaceAll("Debate Room", "Débat stratégique")
+    .replaceAll("Fact Checker", "Vérification des affirmations")
+    .replaceAll("fact_checker", "Vérification des affirmations")
+    .replaceAll("Self-Correction RAG", "Vérification des affirmations")
     .replaceAll("persona_builder", "Personas clients")
     .replaceAll("Persona Builder", "Personas clients")
-    .replaceAll("Analyse Analyse stratÃ©gique", "Analyse stratÃ©gique")
-    .replaceAll("Analyse stratÃ©gique Analyse stratÃ©gique", "Analyse stratÃ©gique")
+    .replaceAll("Analyse Analyse stratégique", "Analyse stratégique")
+    .replaceAll("Analyse stratégique Analyse stratégique", "Analyse stratégique")
     .replaceAll("Analyse Analyse", "Analyse")
-    .replaceAll("terminÃ©e partiellement", "terminÃ©e")
-    .replaceAll("terminÃ© partiellement", "terminÃ©")
-    .replaceAll("completed partially", "terminÃ©e")
+    .replaceAll("terminée partiellement", "terminée")
+    .replaceAll("terminé partiellement", "terminé")
+    .replaceAll("completed partially", "terminée")
     .replaceAll("idle", "En attente");
 }
 
@@ -293,17 +310,17 @@ export function getSourceDisplayContext(
     isGlobal,
     directMetricLabel: isGlobal ? "Solutions comparables" : "Concurrents locaux",
     directGroupTitle: isGlobal
-      ? "Solutions comparables vÃ©rifiÃ©es"
-      : "Concurrents locaux vÃ©rifiÃ©s",
+      ? "Solutions comparables vérifiées"
+      : "Concurrents locaux vérifiés",
     directEmptyText: isGlobal
-      ? "Aucune solution comparable vÃ©rifiÃ©e."
-      : "Aucun concurrent local direct vÃ©rifiÃ©.",
+      ? "Aucune solution comparable vérifiée."
+      : "Aucun concurrent local direct vérifié.",
     adjacentGroupTitle: isGlobal
       ? "Solutions adjacentes"
       : "Solutions adjacentes locales",
     adjacentEmptyText: isGlobal
-      ? "Aucune solution adjacente remontÃ©e."
-      : "Aucune solution adjacente locale remontÃ©e.",
+      ? "Aucune solution adjacente remontée."
+      : "Aucune solution adjacente locale remontée.",
   };
 }
 

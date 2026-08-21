@@ -5,6 +5,7 @@ from collections import Counter
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
 
 from app.services.domain_integrity_guard import normalize_output_language
+from app.services.canonical_actor_projection import project_actor_roles
 
 logger = logging.getLogger(__name__)
 
@@ -208,34 +209,140 @@ class DebateRoomGraph:
                 or "field_validation_required"
             )
 
-            category = str(
+            authority_mode = str(
                 spec.get(
-                    "evidence_category"
+                    "authority_mode"
                 )
-                or evidence_category
                 or ""
+            ).strip().casefold()
+
+            projected_authority_mode = (
+                authority_mode
+                or "legacy_category"
             )
 
-            projection = (
-                self._claim_evidence_projection(
-                    analysis,
-                    category,
-                )
-            )
+            if authority_mode:
+                if authority_mode == "claim":
+                    projection = (
+                        self._claim_evidence_projection(
+                            analysis,
+                            "",
+                            canonical_claim_id=str(
+                                spec.get(
+                                    "canonical_claim_id"
+                                )
+                                or ""
+                            ).strip(),
+                        )
+                    )
 
-            source_ids = list(
-                projection.get(
-                    "source_ids"
-                )
-                or []
-            )
+                    source_ids = list(
+                        projection.get(
+                            "source_ids"
+                        )
+                        or []
+                    )
 
-            evidence_used = (
-                self._resolve_evidence_used(
-                    analysis,
-                    source_ids,
+                    evidence_used = (
+                        self._resolve_evidence_used(
+                            analysis,
+                            source_ids,
+                        )
+                    )
+
+                elif authority_mode == "sources":
+                    projection = (
+                        self._claim_evidence_projection(
+                            analysis,
+                            "",
+                        )
+                    )
+
+                    source_projection = (
+                        self._canonical_source_scope_projection(
+                            analysis,
+                            str(
+                                spec.get(
+                                    "canonical_source_scope"
+                                )
+                                or ""
+                            ).strip(),
+                        )
+                    )
+
+                    source_ids = list(
+                        source_projection.get(
+                            "source_ids"
+                        )
+                        or []
+                    )
+
+                    evidence_used = list(
+                        source_projection.get(
+                            "evidence_used"
+                        )
+                        or []
+                    )
+
+                elif authority_mode in {
+                    "synthesis",
+                    "context",
+                    "none",
+                }:
+                    projection = (
+                        self._claim_evidence_projection(
+                            analysis,
+                            "",
+                        )
+                    )
+
+                    source_ids = []
+                    evidence_used = []
+
+                else:
+                    # An explicit but unknown authority mode must
+                    # never silently fall back to broad semantic
+                    # category matching.
+                    projection = (
+                        self._claim_evidence_projection(
+                            analysis,
+                            "",
+                        )
+                    )
+
+                    source_ids = []
+                    evidence_used = []
+
+            else:
+                # Compatibility path for historical callers.
+                category = str(
+                    spec.get(
+                        "evidence_category"
+                    )
+                    or evidence_category
+                    or ""
                 )
-            )
+
+                projection = (
+                    self._claim_evidence_projection(
+                        analysis,
+                        category,
+                    )
+                )
+
+                source_ids = list(
+                    projection.get(
+                        "source_ids"
+                    )
+                    or []
+                )
+
+                evidence_used = (
+                    self._resolve_evidence_used(
+                        analysis,
+                        source_ids,
+                    )
+                )
 
             explicit_confidence = (
                 spec.get(
@@ -303,6 +410,8 @@ class DebateRoomGraph:
                                 "canonical_claim_found"
                             ]
                         ),
+                    authority_mode=
+                        projected_authority_mode,
                     unresolved=spec[
                         "unresolved"
                     ],
@@ -334,7 +443,7 @@ class DebateRoomGraph:
         action = context["priority_workflow"]
         validation_unit = context.get("validation_unit") or self._t(language, "core user action", "action utilisateur principale")
         specs = [
-            {
+            {"authority_mode":'context',
                 "asked_by": "customer_problem_analyst",
                 "question": self._frequency_question(context, language),
                 "answer": self._t(language, "The project description defines the intended action, but real frequency and failure rate have not yet been measured.", "La description définit l’action visée, mais la fréquence réelle et le taux d’échec ne sont pas encore mesurés."),
@@ -346,7 +455,7 @@ class DebateRoomGraph:
                 "proofs": self._t_list(language, ["Observation log", "Attempt and failure baseline"], ["Journal d’observation", "Base des tentatives et échecs"]),
                 "avoid": self._t(language, "Everyone needs this.", "Tout le monde en a besoin."),
             },
-            {
+            {"authority_mode":'context',
                 "asked_by": "customer_problem_analyst",
                 "question": self._t(language, "Who initiates the action, who fulfils it and who can block it?", "Qui initie l’action, qui la réalise et qui peut la bloquer ?"),
                 "answer": self._actor_map_answer(context, language),
@@ -358,7 +467,7 @@ class DebateRoomGraph:
                 "proofs": self._t_list(language, ["Actor map", "Interview records"], ["Carte des acteurs", "Comptes rendus d’entretiens"]),
                 "avoid": self._t(language, "The same person is obviously user and buyer.", "La même personne est évidemment utilisateur et acheteur."),
             },
-            {
+            {"authority_mode":'context',
                 "asked_by": "risk_execution_officer",
                 "question": self._t(language, "Why would the target switch from the current alternative?", "Pourquoi la cible quitterait-elle l’alternative actuelle ?"),
                 "answer": self._t(language, "Switching is credible only if the project improves a measurable outcome without adding unacceptable friction or risk.", "Le changement est crédible seulement si le projet améliore un résultat mesurable sans ajouter une friction ou un risque inacceptable."),
@@ -370,7 +479,7 @@ class DebateRoomGraph:
                 "proofs": self._t_list(language, ["Before/after comparison", "Switching-cost interviews"], ["Comparaison avant/après", "Entretiens sur le coût de changement"]),
                 "avoid": self._t(language, "Digital is automatically better.", "Le numérique est automatiquement meilleur."),
             },
-            {
+            {"authority_mode":'synthesis',
                 "asked_by": "evidence_auditor",
                 "question": self._t(language, "What result would falsify the problem hypothesis?", "Quel résultat réfuterait l’hypothèse du problème ?"),
                 "answer": self._t(language, "The hypothesis fails if the action is rare, existing alternatives are satisfactory or the target refuses the proposed change.", "L’hypothèse échoue si l’action est rare, les alternatives satisfaisantes ou la cible refuse le changement proposé."),
@@ -424,10 +533,10 @@ class DebateRoomGraph:
             )
         )
         specs = [
-            {"asked_by":"market_competition_analyst", "question":self._t(language,"Which verified products or services solve the same validation unit for the same actors?","Quels produits ou services vérifiés résolvent la même unité de validation pour les mêmes acteurs ?"), "answer":self._t(language,f"The retained evidence currently contains {source_count} unique source(s) and {direct_count} verified local direct competitor(s).",f"Les preuves retenues contiennent actuellement {source_count} source(s) unique(s) et {direct_count} concurrent(s) direct(s) local(aux) vérifié(s)."), "reasoning":self._t(language,"Articles, directories and adjacent products must not be presented as direct competitors.","Les articles, annuaires et produits adjacents ne doivent pas être présentés comme concurrents directs."), "confidence":0.7 if source_count else 0.3, "support_status":"supported" if source_count else "not_confirmed", "unresolved":self._t(language,"Manually verify product function, active geography, target actors and current activity.","Vérifier manuellement la fonction, la géographie active, les acteurs ciblés et l’activité actuelle."), "follow_up":self._t(language,"Which source was manually verified most recently?","Quelle source a été vérifiée manuellement le plus récemment ?"), "likely":self._t(language,"Who are the closest alternatives?","Quelles sont les alternatives les plus proches ?"), "recommended":self._t(language,"We separate direct products, adjacent solutions, evidence pages and offline alternatives; only verified product evidence enters the direct list.","Nous séparons produits directs, solutions adjacentes, pages de preuve et alternatives hors ligne ; seules les preuves produit vérifiées entrent dans la liste directe."), "proofs":self._t_list(language,["Verified product pages","Feature and actor comparison"],["Pages produit vérifiées","Comparaison fonctionnalités et acteurs"]), "avoid":self._t(language,"There is no competition.","Il n’existe aucune concurrence.")},
-            {"asked_by":"customer_problem_analyst", "question":self._t(language,"What do the target actors use today instead of the project?","Qu’utilisent aujourd’hui les acteurs ciblés à la place du projet ?"), "answer":self._t(language,"The strongest alternative may be an offline process, direct contact, an incumbent platform or simply abandoning the action.","L’alternative la plus forte peut être un processus hors ligne, un contact direct, une plateforme établie ou l’abandon de l’action."), "reasoning":self._t(language,"Replacement behaviour matters more than a feature-only competitor list.","Le comportement de remplacement compte davantage qu’une liste de fonctionnalités."), "unresolved":self._t(language,"Observe the actual current journey and switching cost.","Observer le parcours actuel réel et le coût de changement."), "follow_up":self._t(language,"Which alternative is hardest to replace and why?","Quelle alternative est la plus difficile à remplacer et pourquoi ?"), "likely":self._t(language,"Why will users switch?","Pourquoi les utilisateurs changeront-ils ?"), "recommended":self._t(language,"We will prove a measurable advantage against the current behaviour, not assume that a new app is enough.","Nous prouverons un avantage mesurable face au comportement actuel, sans supposer qu’une nouvelle application suffit."), "proofs":self._t_list(language,["Current-journey map","Switching-cost evidence"],["Carte du parcours actuel","Preuves du coût de changement"]), "avoid":self._t(language,"Our features are better, so users will switch.","Nos fonctionnalités sont meilleures, donc les utilisateurs changeront.")},
-            {"asked_by":"evidence_auditor", "question":self._t(language,"Do the retained sources prove local demand or only feasibility and context?","Les sources retenues prouvent-elles la demande locale ou seulement la faisabilité et le contexte ?"), "answer":self._t(language,"International or adjacent evidence can show feasibility, but local demand and willingness to pay require compatible local evidence and field tests.","Les preuves internationales ou adjacentes peuvent montrer la faisabilité, mais la demande locale et la volonté de payer exigent des preuves locales compatibles et des tests terrain."), "reasoning":self._t(language,f"The current evidence level is {evidence.get('level','low')}.",f"Le niveau de preuve actuel est {evidence.get('level','low')}."), "unresolved":self._t(language,"Find category-compatible local data and run interviews or transactions.","Trouver des données locales compatibles et réaliser entretiens ou transactions."), "follow_up":self._t(language,"Which local source has visible methodology?","Quelle source locale possède une méthodologie visible ?"), "likely":self._t(language,"What proves demand in the launch market?","Qu’est-ce qui prouve la demande sur le marché de lancement ?"), "recommended":self._t(language,"We currently treat local demand as a hypothesis and will validate it with compatible data and a bounded pilot.","Nous traitons actuellement la demande locale comme une hypothèse et la validerons avec des données compatibles et un pilote limité."), "proofs":self._t_list(language,["Official or independent local data","Pilot evidence"],["Données locales officielles ou indépendantes","Preuves du pilote"]), "avoid":self._t(language,"A search result proves demand.","Un résultat de recherche prouve la demande.")},
-            {"asked_by":"red_team_challenger", "question":self._t(language,"Could an apparent market gap mean weak demand rather than opportunity?","Un espace de marché apparent peut-il signifier une faible demande plutôt qu’une opportunité ?"), "answer":self._t(language,"Yes. Absence of a verified direct competitor is ambiguous and never proves an attractive empty market.","Oui. L’absence de concurrent direct vérifié est ambiguë et ne prouve jamais un marché vide attractif."), "reasoning":self._t(language,"Opportunity requires both demand evidence and a credible advantage against alternatives.","L’opportunité exige des preuves de demande et un avantage crédible face aux alternatives."), "unresolved":self._t(language,"Define what evidence would change the positioning.","Définir quelle preuve modifierait le positionnement."), "follow_up":self._t(language,"What finding would trigger a pivot?","Quel résultat déclencherait un pivot ?"), "likely":self._t(language,"Why has nobody won this market already?","Pourquoi personne n’a déjà gagné ce marché ?"), "recommended":self._t(language,"We do not call absence a gap; the pilot will determine whether it reflects unmet demand, weak urgency or structural constraints.","Nous n’appelons pas l’absence un gap ; le pilote déterminera si elle reflète une demande non satisfaite, une faible urgence ou des contraintes structurelles."), "proofs":self._t_list(language,["Alternative map","Demand evidence"],["Carte des alternatives","Preuves de demande"]), "avoid":self._t(language,"No competitor means guaranteed opportunity.","Aucun concurrent signifie une opportunité garantie.")},
+            {"authority_mode":'sources',"canonical_source_scope":'local_direct_competitor_sources',"asked_by":"market_competition_analyst", "question":self._t(language,"Which verified products or services solve the same validation unit for the same actors?","Quels produits ou services vérifiés résolvent la même unité de validation pour les mêmes acteurs ?"), "answer":self._t(language,f"The retained evidence currently contains {source_count} unique source(s) and {direct_count} verified local direct competitor(s).",f"Les preuves retenues contiennent actuellement {source_count} source(s) unique(s) et {direct_count} concurrent(s) direct(s) local(aux) vérifié(s)."), "reasoning":self._t(language,"Articles, directories and adjacent products must not be presented as direct competitors.","Les articles, annuaires et produits adjacents ne doivent pas être présentés comme concurrents directs."), "confidence":0.7 if source_count else 0.3, "support_status":"supported" if source_count else "not_confirmed", "unresolved":self._t(language,"Manually verify product function, active geography, target actors and current activity.","Vérifier manuellement la fonction, la géographie active, les acteurs ciblés et l’activité actuelle."), "follow_up":self._t(language,"Which source was manually verified most recently?","Quelle source a été vérifiée manuellement le plus récemment ?"), "likely":self._t(language,"Who are the closest alternatives?","Quelles sont les alternatives les plus proches ?"), "recommended":self._t(language,"We separate direct products, adjacent solutions, evidence pages and offline alternatives; only verified product evidence enters the direct list.","Nous séparons produits directs, solutions adjacentes, pages de preuve et alternatives hors ligne ; seules les preuves produit vérifiées entrent dans la liste directe."), "proofs":self._t_list(language,["Verified product pages","Feature and actor comparison"],["Pages produit vérifiées","Comparaison fonctionnalités et acteurs"]), "avoid":self._t(language,"There is no competition.","Il n’existe aucune concurrence.")},
+            {"authority_mode":'context',"asked_by":"customer_problem_analyst", "question":self._t(language,"What do the target actors use today instead of the project?","Qu’utilisent aujourd’hui les acteurs ciblés à la place du projet ?"), "answer":self._t(language,"The strongest alternative may be an offline process, direct contact, an incumbent platform or simply abandoning the action.","L’alternative la plus forte peut être un processus hors ligne, un contact direct, une plateforme établie ou l’abandon de l’action."), "reasoning":self._t(language,"Replacement behaviour matters more than a feature-only competitor list.","Le comportement de remplacement compte davantage qu’une liste de fonctionnalités."), "unresolved":self._t(language,"Observe the actual current journey and switching cost.","Observer le parcours actuel réel et le coût de changement."), "follow_up":self._t(language,"Which alternative is hardest to replace and why?","Quelle alternative est la plus difficile à remplacer et pourquoi ?"), "likely":self._t(language,"Why will users switch?","Pourquoi les utilisateurs changeront-ils ?"), "recommended":self._t(language,"We will prove a measurable advantage against the current behaviour, not assume that a new app is enough.","Nous prouverons un avantage mesurable face au comportement actuel, sans supposer qu’une nouvelle application suffit."), "proofs":self._t_list(language,["Current-journey map","Switching-cost evidence"],["Carte du parcours actuel","Preuves du coût de changement"]), "avoid":self._t(language,"Our features are better, so users will switch.","Nos fonctionnalités sont meilleures, donc les utilisateurs changeront.")},
+            {"authority_mode":'claim',"canonical_claim_id":'local_feasibility',"asked_by":"evidence_auditor", "question":self._t(language,"Do the retained sources prove local demand or only feasibility and context?","Les sources retenues prouvent-elles la demande locale ou seulement la faisabilité et le contexte ?"), "answer":self._t(language,"International or adjacent evidence can show feasibility, but local demand and willingness to pay require compatible local evidence and field tests.","Les preuves internationales ou adjacentes peuvent montrer la faisabilité, mais la demande locale et la volonté de payer exigent des preuves locales compatibles et des tests terrain."), "reasoning":self._t(language,f"The current evidence level is {evidence.get('level','low')}.",f"Le niveau de preuve actuel est {evidence.get('level','low')}."), "unresolved":self._t(language,"Find category-compatible local data and run interviews or transactions.","Trouver des données locales compatibles et réaliser entretiens ou transactions."), "follow_up":self._t(language,"Which local source has visible methodology?","Quelle source locale possède une méthodologie visible ?"), "likely":self._t(language,"What proves demand in the launch market?","Qu’est-ce qui prouve la demande sur le marché de lancement ?"), "recommended":self._t(language,"We currently treat local demand as a hypothesis and will validate it with compatible data and a bounded pilot.","Nous traitons actuellement la demande locale comme une hypothèse et la validerons avec des données compatibles et un pilote limité."), "proofs":self._t_list(language,["Official or independent local data","Pilot evidence"],["Données locales officielles ou indépendantes","Preuves du pilote"]), "avoid":self._t(language,"A search result proves demand.","Un résultat de recherche prouve la demande.")},
+            {"authority_mode":'synthesis',"asked_by":"red_team_challenger", "question":self._t(language,"Could an apparent market gap mean weak demand rather than opportunity?","Un espace de marché apparent peut-il signifier une faible demande plutôt qu’une opportunité ?"), "answer":self._t(language,"Yes. Absence of a verified direct competitor is ambiguous and never proves an attractive empty market.","Oui. L’absence de concurrent direct vérifié est ambiguë et ne prouve jamais un marché vide attractif."), "reasoning":self._t(language,"Opportunity requires both demand evidence and a credible advantage against alternatives.","L’opportunité exige des preuves de demande et un avantage crédible face aux alternatives."), "unresolved":self._t(language,"Define what evidence would change the positioning.","Définir quelle preuve modifierait le positionnement."), "follow_up":self._t(language,"What finding would trigger a pivot?","Quel résultat déclencherait un pivot ?"), "likely":self._t(language,"Why has nobody won this market already?","Pourquoi personne n’a déjà gagné ce marché ?"), "recommended":self._t(language,"We do not call absence a gap; the pilot will determine whether it reflects unmet demand, weak urgency or structural constraints.","Nous n’appelons pas l’absence un gap ; le pilote déterminera si elle reflète une demande non satisfaite, une faible urgence ou des contraintes structurelles."), "proofs":self._t_list(language,["Alternative map","Demand evidence"],["Carte des alternatives","Preuves de demande"]), "avoid":self._t(language,"No competitor means guaranteed opportunity.","Aucun concurrent signifie une opportunité garantie.")},
         ]
         questions=self._adaptive_questions(
             number=number,
@@ -442,10 +551,10 @@ class DebateRoomGraph:
         action=context["priority_workflow"]; metrics=context.get("success_metrics") or []
         metric_text=", ".join(metrics[:3]) if metrics else self._t(language,"completion, repeat use and reliability","réalisation, réutilisation et fiabilité")
         specs=[
-            {"asked_by":"product_technology_architect","question":self._t(language,"What is the smallest complete experience that proves value?","Quelle est la plus petite expérience complète qui prouve la valeur ?"),"answer":self._t(language,f"The first test should cover one end-to-end action: {action}.",f"Le premier test doit couvrir une action de bout en bout : {action}."),"reasoning":self._t(language,"A partial screen or feature does not prove that the user reaches the intended outcome.","Un écran ou une fonctionnalité partielle ne prouve pas que l’utilisateur atteint le résultat visé."),"confidence":0.7,"support_status":"estimated","unresolved":self._t(language,"Define start, success, failure and recovery events.","Définir les événements de départ, succès, échec et reprise."),"follow_up":self._t(language,"Which features can be removed without breaking the end-to-end test?","Quelles fonctionnalités peuvent être retirées sans casser le test de bout en bout ?"),"likely":self._t(language,"What exactly is in the MVP?","Que contient exactement le MVP ?"),"recommended":self._t(language,"The MVP includes only the data and steps required to complete and measure the core action; secondary features are excluded.","Le MVP contient seulement les données et étapes nécessaires pour réaliser et mesurer l’action principale ; les fonctions secondaires sont exclues."),"proofs":self._t_list(language,["Clickable or operational flow","Explicit exclusions"],["Parcours cliquable ou opérationnel","Exclusions explicites"]),"avoid":self._t(language,"The MVP includes every requested feature.","Le MVP contient toutes les fonctionnalités demandées.")},
-            {"asked_by":"product_technology_architect","question":self._t(language,"Can the experience work in the real user environment?","L’expérience peut-elle fonctionner dans l’environnement réel ?"),"answer":self._t(language,"Technical plausibility is not enough; the pilot must test the real device, network, data, partner and operating conditions.","La plausibilité technique ne suffit pas ; le pilote doit tester l’appareil, le réseau, les données, partenaires et conditions réelles."),"reasoning":self._t(language,f"Acceptance should be measured through {metric_text}.",f"L’acceptation doit être mesurée par {metric_text}."),"unresolved":self._t(language,"Define environment-specific acceptance and recovery criteria.","Définir des critères d’acceptation et de reprise propres à l’environnement."),"follow_up":self._t(language,"What happens after a failed or interrupted action?","Que se passe-t-il après une action échouée ou interrompue ?"),"likely":self._t(language,"How reliable is the solution in real conditions?","Quelle est la fiabilité de la solution en conditions réelles ?"),"recommended":self._t(language,"We will test the complete journey, failure states, recovery and operational ownership before scaling.","Nous testerons le parcours complet, les états d’échec, la reprise et la responsabilité opérationnelle avant expansion."),"proofs":self._t_list(language,["Environment test results","Failure and recovery log"],["Résultats des tests d’environnement","Journal d’échec et reprise"]),"avoid":self._t(language,"It worked once in development.","Cela a fonctionné une fois en développement.")},
-            {"asked_by":"risk_execution_officer","question":self._t(language,"Which technical or operational failure can destroy repeated use?","Quel échec technique ou opérationnel peut détruire l’usage répété ?"),"answer":self._t(language,"The blocking failure depends on the archetype and must be selected from the project risk dimensions, not a generic SaaS template.","L’échec bloquant dépend de l’archétype et doit venir des risques du projet, pas d’un template SaaS générique."),"reasoning":"; ".join(context.get("risk_dimensions")[:3]),"confidence":0.65,"support_status":"supported","unresolved":self._t(language,"Assign an owner, threshold and mitigation to each blocking risk.","Attribuer un responsable, un seuil et une réduction à chaque risque bloquant."),"follow_up":self._t(language,"What is the rollback or safe fallback?","Quel est le retour arrière ou mode sûr ?"),"likely":self._t(language,"What can make users abandon after the first attempt?","Qu’est-ce qui peut faire abandonner après la première tentative ?"),"recommended":self._t(language,"We will measure the archetype-specific failure modes and stop when reliability, trust or operational thresholds are missed.","Nous mesurerons les modes d’échec propres à l’archétype et arrêterons lorsque les seuils de fiabilité, confiance ou opérations ne sont pas atteints."),"proofs":self._t_list(language,["Risk register","Rollback test"],["Registre des risques","Test de retour arrière"]),"avoid":self._t(language,"There are no critical technical risks.","Il n’existe aucun risque technique critique.")},
-            {"asked_by":"red_team_challenger","question":self._t(language,"Could the team deliver the product while proving no user value?","L’équipe peut-elle livrer le produit sans prouver de valeur utilisateur ?"),"answer":self._t(language,"Yes. Delivery and validation are separate; success requires a completed outcome, repeated use and an improvement against the baseline.","Oui. Livraison et validation sont distinctes ; le succès exige un résultat réalisé, un usage répété et une amélioration face à la base."),"reasoning":self._t(language,"Feature completion is not a customer or business outcome.","La livraison de fonctionnalités n’est pas un résultat client ou business."),"unresolved":self._t(language,"Put outcome metrics in the MVP Definition of Done.","Mettre les métriques de résultat dans la Definition of Done du MVP."),"follow_up":self._t(language,"Which metric can fail even if the application works?","Quelle métrique peut échouer même si l’application fonctionne ?"),"likely":self._t(language,"How do you know the MVP creates value?","Comment savez-vous que le MVP crée de la valeur ?"),"recommended":self._t(language,"We judge the MVP by successful outcomes, repeat behaviour and measurable improvement, not by deployed features.","Nous jugeons le MVP par les résultats réussis, le comportement répété et l’amélioration mesurable, pas par les fonctionnalités déployées."),"proofs":self._t_list(language,["Outcome dashboard","Baseline comparison"],["Tableau des résultats","Comparaison à la base"]),"avoid":self._t(language,"The product works, therefore the idea is validated.","Le produit fonctionne, donc l’idée est validée.")},
+            {"authority_mode":'context',"asked_by":"product_technology_architect","question":self._t(language,"What is the smallest complete experience that proves value?","Quelle est la plus petite expérience complète qui prouve la valeur ?"),"answer":self._t(language,f"The first test should cover one end-to-end action: {action}.",f"Le premier test doit couvrir une action de bout en bout : {action}."),"reasoning":self._t(language,"A partial screen or feature does not prove that the user reaches the intended outcome.","Un écran ou une fonctionnalité partielle ne prouve pas que l’utilisateur atteint le résultat visé."),"confidence":0.7,"support_status":"estimated","unresolved":self._t(language,"Define start, success, failure and recovery events.","Définir les événements de départ, succès, échec et reprise."),"follow_up":self._t(language,"Which features can be removed without breaking the end-to-end test?","Quelles fonctionnalités peuvent être retirées sans casser le test de bout en bout ?"),"likely":self._t(language,"What exactly is in the MVP?","Que contient exactement le MVP ?"),"recommended":self._t(language,"The MVP includes only the data and steps required to complete and measure the core action; secondary features are excluded.","Le MVP contient seulement les données et étapes nécessaires pour réaliser et mesurer l’action principale ; les fonctions secondaires sont exclues."),"proofs":self._t_list(language,["Clickable or operational flow","Explicit exclusions"],["Parcours cliquable ou opérationnel","Exclusions explicites"]),"avoid":self._t(language,"The MVP includes every requested feature.","Le MVP contient toutes les fonctionnalités demandées.")},
+            {"authority_mode":'context',"asked_by":"product_technology_architect","question":self._t(language,"Can the experience work in the real user environment?","L’expérience peut-elle fonctionner dans l’environnement réel ?"),"answer":self._t(language,"Technical plausibility is not enough; the pilot must test the real device, network, data, partner and operating conditions.","La plausibilité technique ne suffit pas ; le pilote doit tester l’appareil, le réseau, les données, partenaires et conditions réelles."),"reasoning":self._t(language,f"Acceptance should be measured through {metric_text}.",f"L’acceptation doit être mesurée par {metric_text}."),"unresolved":self._t(language,"Define environment-specific acceptance and recovery criteria.","Définir des critères d’acceptation et de reprise propres à l’environnement."),"follow_up":self._t(language,"What happens after a failed or interrupted action?","Que se passe-t-il après une action échouée ou interrompue ?"),"likely":self._t(language,"How reliable is the solution in real conditions?","Quelle est la fiabilité de la solution en conditions réelles ?"),"recommended":self._t(language,"We will test the complete journey, failure states, recovery and operational ownership before scaling.","Nous testerons le parcours complet, les états d’échec, la reprise et la responsabilité opérationnelle avant expansion."),"proofs":self._t_list(language,["Environment test results","Failure and recovery log"],["Résultats des tests d’environnement","Journal d’échec et reprise"]),"avoid":self._t(language,"It worked once in development.","Cela a fonctionné une fois en développement.")},
+            {"authority_mode":'context',"asked_by":"risk_execution_officer","question":self._t(language,"Which technical or operational failure can destroy repeated use?","Quel échec technique ou opérationnel peut détruire l’usage répété ?"),"answer":self._t(language,"The blocking failure depends on the archetype and must be selected from the project risk dimensions, not a generic SaaS template.","L’échec bloquant dépend de l’archétype et doit venir des risques du projet, pas d’un template SaaS générique."),"reasoning":"; ".join(context.get("risk_dimensions")[:3]),"confidence":0.65,"support_status":"supported","unresolved":self._t(language,"Assign an owner, threshold and mitigation to each blocking risk.","Attribuer un responsable, un seuil et une réduction à chaque risque bloquant."),"follow_up":self._t(language,"What is the rollback or safe fallback?","Quel est le retour arrière ou mode sûr ?"),"likely":self._t(language,"What can make users abandon after the first attempt?","Qu’est-ce qui peut faire abandonner après la première tentative ?"),"recommended":self._t(language,"We will measure the archetype-specific failure modes and stop when reliability, trust or operational thresholds are missed.","Nous mesurerons les modes d’échec propres à l’archétype et arrêterons lorsque les seuils de fiabilité, confiance ou opérations ne sont pas atteints."),"proofs":self._t_list(language,["Risk register","Rollback test"],["Registre des risques","Test de retour arrière"]),"avoid":self._t(language,"There are no critical technical risks.","Il n’existe aucun risque technique critique.")},
+            {"authority_mode":'synthesis',"asked_by":"red_team_challenger","question":self._t(language,"Could the team deliver the product while proving no user value?","L’équipe peut-elle livrer le produit sans prouver de valeur utilisateur ?"),"answer":self._t(language,"Yes. Delivery and validation are separate; success requires a completed outcome, repeated use and an improvement against the baseline.","Oui. Livraison et validation sont distinctes ; le succès exige un résultat réalisé, un usage répété et une amélioration face à la base."),"reasoning":self._t(language,"Feature completion is not a customer or business outcome.","La livraison de fonctionnalités n’est pas un résultat client ou business."),"unresolved":self._t(language,"Put outcome metrics in the MVP Definition of Done.","Mettre les métriques de résultat dans la Definition of Done du MVP."),"follow_up":self._t(language,"Which metric can fail even if the application works?","Quelle métrique peut échouer même si l’application fonctionne ?"),"likely":self._t(language,"How do you know the MVP creates value?","Comment savez-vous que le MVP crée de la valeur ?"),"recommended":self._t(language,"We judge the MVP by successful outcomes, repeat behaviour and measurable improvement, not by deployed features.","Nous jugeons le MVP par les résultats réussis, le comportement répété et l’amélioration mesurable, pas par les fonctionnalités déployées."),"proofs":self._t_list(language,["Outcome dashboard","Baseline comparison"],["Tableau des résultats","Comparaison à la base"]),"avoid":self._t(language,"The product works, therefore the idea is validated.","Le produit fonctionne, donc l’idée est validée.")},
         ]
         questions=self._adaptive_questions(
             number=number,
@@ -459,10 +568,10 @@ class DebateRoomGraph:
     def _round_adaptive_economics(self, number: int, context: Dict[str, Any], analysis: Dict[str, Any], evidence: Dict[str, Any], language: str) -> Dict[str, Any]:
         model=context["business_model"]; unit=context.get("validation_unit") or self._t(language,"successful unit","unité réussie")
         specs=[
-            {"asked_by":"business_financial_analyst","question":self._t(language,"Who pays, for which outcome and at what decision point?","Qui paie, pour quel résultat et à quel moment de décision ?"),"answer":self._payer_answer(context, language),"reasoning":self._t(language,"A monetization hypothesis is not payment evidence.","Une hypothèse de monétisation n’est pas une preuve de paiement."),"confidence":0.4,"support_status":"field_validation_required","unresolved":self._t(language,"Test concrete offers with the real payer.","Tester des offres concrètes avec le vrai payeur."),"follow_up":self._t(language,"What budget, transaction or value event triggers payment?","Quel budget, transaction ou événement de valeur déclenche le paiement ?"),"likely":self._t(language,"Who is the paying customer?","Qui est le client payeur ?"),"recommended":self._t(language,"The payer remains a hypothesis until a real decision-maker accepts or rejects a concrete offer tied to a measurable outcome.","Le payeur reste une hypothèse jusqu’à ce qu’un vrai décideur accepte ou refuse une offre concrète liée à un résultat mesurable."),"proofs":self._t_list(language,["Offer tests","Decision rationale"],["Tests d’offres","Justification de décision"]),"avoid":self._t(language,"Users like it, so they will pay.","Les utilisateurs l’aiment, donc ils paieront.")},
-            {"asked_by":"business_financial_analyst","question":self._t(language,f"What is the contribution margin per successful {unit}?",f"Quelle est la marge contributive par {unit} réussie ?"),"answer":self._t(language,"The margin is unknown until direct delivery, partner, support, infrastructure, incentive and payment costs are measured.","La marge est inconnue avant mesure des coûts directs de réalisation, partenaires, support, infrastructure, incitations et paiement."),"reasoning":self._t(language,"Revenue without variable delivery cost is not unit economics.","Un revenu sans coût variable de réalisation n’est pas une économie unitaire."),"unresolved":self._t(language,"Build a bottom-up unit-cost model from the pilot.","Construire un modèle bottom-up des coûts unitaires à partir du pilote."),"follow_up":self._t(language,"Which cost grows directly with each successful unit?","Quel coût augmente directement avec chaque unité réussie ?"),"likely":self._t(language,"What are your unit economics?","Quelle est votre économie unitaire ?"),"recommended":self._t(language,"We will calculate contribution from observed revenue minus every variable delivery and support cost, then include acquisition and retention.","Nous calculerons la contribution avec le revenu observé moins chaque coût variable de réalisation et support, puis intégrerons acquisition et rétention."),"proofs":self._t_list(language,["Bottom-up cost model","Pilot operations log"],["Modèle de coût bottom-up","Journal d’opérations du pilote"]),"avoid":self._t(language,"Cloud hosting is cheap, so margins are high.","Le cloud est bon marché, donc les marges sont élevées.")},
-            {"asked_by":"risk_execution_officer","question":self._t(language,"Can acquisition, incentives, operations or support structurally exceed revenue?","L’acquisition, les incitations, les opérations ou le support peuvent-ils dépasser structurellement le revenu ?"),"answer":self._t(language,"Yes. The dominant cost depends on the archetype and must be measured during the first complete pilot.","Oui. Le coût dominant dépend de l’archétype et doit être mesuré pendant le premier pilote complet."),"reasoning":"; ".join(context.get("risk_dimensions")[:3]),"unresolved":self._t(language,"Set a maximum acceptable cost and support burden before launch.","Définir un coût et une charge de support maximum acceptables avant lancement."),"follow_up":self._t(language,"Which cost has the highest uncertainty?","Quel coût possède la plus forte incertitude ?"),"likely":self._t(language,"Can this model scale profitably?","Ce modèle peut-il passer à l’échelle de manière rentable ?"),"recommended":self._t(language,"We will not claim scalability until the pilot measures acquisition, fulfilment, support, repeat use and contribution margin.","Nous ne prétendrons pas pouvoir passer à l’échelle avant mesure de l’acquisition, réalisation, support, réutilisation et marge contributive."),"proofs":self._t_list(language,["Cost sensitivity analysis","Support log"],["Analyse de sensibilité des coûts","Journal de support"]),"avoid":self._t(language,"Scale will automatically solve the economics.","L’échelle résoudra automatiquement l’économie.")},
-            {"asked_by":"evidence_auditor","question":self._t(language,"Which financial numbers are quotes, observations, estimates or hypotheses?","Quels chiffres financiers sont des devis, observations, estimations ou hypothèses ?"),"answer":self._t(language,"Current figures remain planning estimates unless tied to a quote, observed transaction, paid offer or pilot cost.","Les chiffres actuels restent des estimations de planification sauf s’ils sont liés à un devis, une transaction observée, une offre payée ou un coût pilote."),"reasoning":self._t(language,"Financial confidence cannot exceed the quality of the underlying evidence.","La confiance financière ne peut dépasser la qualité des preuves sous-jacentes."),"unresolved":self._t(language,"Label every figure and replace assumptions with direct evidence.","Étiqueter chaque chiffre et remplacer les hypothèses par des preuves directes."),"follow_up":self._t(language,"Which estimate can become a quote this week?","Quelle estimation peut devenir un devis cette semaine ?"),"likely":self._t(language,"How reliable is the financial model?","Quelle est la fiabilité du modèle financier ?"),"recommended":self._t(language,"The model is preliminary; the next version will use provider quotes and observed pilot revenue, cost, retention and support data.","Le modèle est préliminaire ; la prochaine version utilisera des devis et les données observées de revenu, coût, rétention et support."),"proofs":self._t_list(language,["Provider quotes","Observed pilot ledger"],["Devis fournisseurs","Registre observé du pilote"]),"avoid":self._t(language,"The forecast is accurate because AI calculated it.","La prévision est exacte parce que l’IA l’a calculée.")},
+            {"authority_mode":'context',"asked_by":"business_financial_analyst","question":self._t(language,"Who pays, for which outcome and at what decision point?","Qui paie, pour quel résultat et à quel moment de décision ?"),"answer":self._payer_answer(context, language),"reasoning":self._t(language,"A monetization hypothesis is not payment evidence.","Une hypothèse de monétisation n’est pas une preuve de paiement."),"confidence":0.4,"support_status":"field_validation_required","unresolved":self._t(language,"Test concrete offers with the real payer.","Tester des offres concrètes avec le vrai payeur."),"follow_up":self._t(language,"What budget, transaction or value event triggers payment?","Quel budget, transaction ou événement de valeur déclenche le paiement ?"),"likely":self._t(language,"Who is the paying customer?","Qui est le client payeur ?"),"recommended":self._t(language,"The payer remains a hypothesis until a real decision-maker accepts or rejects a concrete offer tied to a measurable outcome.","Le payeur reste une hypothèse jusqu’à ce qu’un vrai décideur accepte ou refuse une offre concrète liée à un résultat mesurable."),"proofs":self._t_list(language,["Offer tests","Decision rationale"],["Tests d’offres","Justification de décision"]),"avoid":self._t(language,"Users like it, so they will pay.","Les utilisateurs l’aiment, donc ils paieront.")},
+            {"authority_mode":'context',"asked_by":"business_financial_analyst","question":self._t(language,f"What is the contribution margin per successful {unit}?",f"Quelle est la marge contributive par {unit} réussie ?"),"answer":self._t(language,"The margin is unknown until direct delivery, partner, support, infrastructure, incentive and payment costs are measured.","La marge est inconnue avant mesure des coûts directs de réalisation, partenaires, support, infrastructure, incitations et paiement."),"reasoning":self._t(language,"Revenue without variable delivery cost is not unit economics.","Un revenu sans coût variable de réalisation n’est pas une économie unitaire."),"unresolved":self._t(language,"Build a bottom-up unit-cost model from the pilot.","Construire un modèle bottom-up des coûts unitaires à partir du pilote."),"follow_up":self._t(language,"Which cost grows directly with each successful unit?","Quel coût augmente directement avec chaque unité réussie ?"),"likely":self._t(language,"What are your unit economics?","Quelle est votre économie unitaire ?"),"recommended":self._t(language,"We will calculate contribution from observed revenue minus every variable delivery and support cost, then include acquisition and retention.","Nous calculerons la contribution avec le revenu observé moins chaque coût variable de réalisation et support, puis intégrerons acquisition et rétention."),"proofs":self._t_list(language,["Bottom-up cost model","Pilot operations log"],["Modèle de coût bottom-up","Journal d’opérations du pilote"]),"avoid":self._t(language,"Cloud hosting is cheap, so margins are high.","Le cloud est bon marché, donc les marges sont élevées.")},
+            {"authority_mode":'context',"asked_by":"risk_execution_officer","question":self._t(language,"Can acquisition, incentives, operations or support structurally exceed revenue?","L’acquisition, les incitations, les opérations ou le support peuvent-ils dépasser structurellement le revenu ?"),"answer":self._t(language,"Yes. The dominant cost depends on the archetype and must be measured during the first complete pilot.","Oui. Le coût dominant dépend de l’archétype et doit être mesuré pendant le premier pilote complet."),"reasoning":"; ".join(context.get("risk_dimensions")[:3]),"unresolved":self._t(language,"Set a maximum acceptable cost and support burden before launch.","Définir un coût et une charge de support maximum acceptables avant lancement."),"follow_up":self._t(language,"Which cost has the highest uncertainty?","Quel coût possède la plus forte incertitude ?"),"likely":self._t(language,"Can this model scale profitably?","Ce modèle peut-il passer à l’échelle de manière rentable ?"),"recommended":self._t(language,"We will not claim scalability until the pilot measures acquisition, fulfilment, support, repeat use and contribution margin.","Nous ne prétendrons pas pouvoir passer à l’échelle avant mesure de l’acquisition, réalisation, support, réutilisation et marge contributive."),"proofs":self._t_list(language,["Cost sensitivity analysis","Support log"],["Analyse de sensibilité des coûts","Journal de support"]),"avoid":self._t(language,"Scale will automatically solve the economics.","L’échelle résoudra automatiquement l’économie.")},
+            {"authority_mode":'context',"asked_by":"evidence_auditor","question":self._t(language,"Which financial numbers are quotes, observations, estimates or hypotheses?","Quels chiffres financiers sont des devis, observations, estimations ou hypothèses ?"),"answer":self._t(language,"Current figures remain planning estimates unless tied to a quote, observed transaction, paid offer or pilot cost.","Les chiffres actuels restent des estimations de planification sauf s’ils sont liés à un devis, une transaction observée, une offre payée ou un coût pilote."),"reasoning":self._t(language,"Financial confidence cannot exceed the quality of the underlying evidence.","La confiance financière ne peut dépasser la qualité des preuves sous-jacentes."),"unresolved":self._t(language,"Label every figure and replace assumptions with direct evidence.","Étiqueter chaque chiffre et remplacer les hypothèses par des preuves directes."),"follow_up":self._t(language,"Which estimate can become a quote this week?","Quelle estimation peut devenir un devis cette semaine ?"),"likely":self._t(language,"How reliable is the financial model?","Quelle est la fiabilité du modèle financier ?"),"recommended":self._t(language,"The model is preliminary; the next version will use provider quotes and observed pilot revenue, cost, retention and support data.","Le modèle est préliminaire ; la prochaine version utilisera des devis et les données observées de revenu, coût, rétention et support."),"proofs":self._t_list(language,["Provider quotes","Observed pilot ledger"],["Devis fournisseurs","Registre observé du pilote"]),"avoid":self._t(language,"The forecast is accurate because AI calculated it.","La prévision est exacte parce que l’IA l’a calculée.")},
         ]
         questions=self._adaptive_questions(
             number=number,
@@ -477,10 +586,10 @@ class DebateRoomGraph:
         metrics=context.get("success_metrics") or []
         metric_text=", ".join(metrics[:4]) if metrics else self._t(language,"successful outcome, repeat use, reliability and contribution","résultat réussi, usage répété, fiabilité et contribution")
         specs=[
-            {"asked_by":"committee_chair","addressed_to":"all_committee_members","question":self._t(language,"Should the project proceed to a bounded pilot, pivot or stop?","Le projet doit-il passer à un pilote limité, pivoter ou s’arrêter ?"),"answer":self._t(language,"Proceed only to a bounded pilot while blocking evidence is collected.","Passer uniquement à un pilote limité pendant la collecte des preuves bloquantes."),"reasoning":self._t(language,f"The decision must be based on {metric_text} and the current evidence level {evidence.get('level','low')}.",f"La décision doit reposer sur {metric_text} et le niveau de preuve actuel {evidence.get('level','low')}."),"confidence":0.75,"support_status":"committee_synthesis","unresolved":self._t(language,"Name the pilot owner, cohort, dates, metrics and stop conditions.","Nommer le responsable, la cohorte, les dates, métriques et conditions d’arrêt."),"follow_up":self._t(language,"Which condition blocks the next investment decision?","Quelle condition bloque la prochaine décision d’investissement ?"),"likely":self._t(language,"What is the decision today?","Quelle est la décision aujourd’hui ?"),"recommended":self._t(language,"The decision is Conditional Go for a bounded pilot, not approval for full rollout or scaling.","La décision est un GO conditionnel pour un pilote limité, pas une approbation du déploiement complet ou de l’expansion."),"proofs":self._t_list(language,["Pilot charter","Decision scorecard"],["Charte du pilote","Tableau de décision"]),"avoid":self._t(language,"The score means we should build everything.","Le score signifie qu’il faut tout construire.")},
-            {"asked_by":"red_team_challenger","question":self._t(language,"Which single assumption can destroy the project?","Quelle hypothèse unique peut détruire le projet ?"),"answer":self._t(language,"The project fails if the required actors do not complete and repeat the validation unit at viable risk and contribution.","Le projet échoue si les acteurs nécessaires ne réalisent et ne répètent pas l’unité de validation avec un risque et une contribution viables."),"reasoning":self._t(language,"Adoption, delivery and economics are jointly falsifiable.","Adoption, réalisation et économie sont falsifiables ensemble."),"unresolved":self._t(language,"Pre-register the decisive failure threshold.","Préenregistrer le seuil d’échec décisif."),"follow_up":self._t(language,"What exact result triggers a pivot?","Quel résultat exact déclenche un pivot ?"),"likely":self._t(language,"What would make you stop?","Qu’est-ce qui vous ferait arrêter ?"),"recommended":self._t(language,"We will stop or pivot when the core outcome, repeat behaviour, risk or contribution threshold is missed.","Nous arrêterons ou pivoterons lorsque le résultat principal, la répétition, le risque ou la contribution manque le seuil."),"proofs":self._t_list(language,["Predefined no-go thresholds"],["Seuils NO-GO prédéfinis"]),"avoid":self._t(language,"We will keep improving until it works.","Nous continuerons à améliorer jusqu’à ce que cela fonctionne.")},
-            {"asked_by":"evidence_auditor","question":self._t(language,"Which claims are supported and which remain hypotheses?","Quelles affirmations sont soutenues et lesquelles restent des hypothèses ?"),"answer":self._t(language,"Project structure and testability may be clear; demand, repeat use, payment, local constraints and economics remain hypotheses unless directly evidenced.","La structure et la testabilité peuvent être claires ; demande, usage répété, paiement, contraintes locales et économie restent des hypothèses sans preuve directe."),"reasoning":self._t(language,"The evidence label must remain visible in the final decision.","Le statut de preuve doit rester visible dans la décision finale."),"unresolved":self._t(language,"Downgrade every unsupported claim before presentation.","Rétrograder chaque affirmation non soutenue avant présentation."),"follow_up":self._t(language,"Which claim has the greatest decision impact?","Quelle affirmation a le plus grand impact sur la décision ?"),"likely":self._t(language,"What can you confidently claim today?","Que pouvez-vous affirmer avec confiance aujourd’hui ?"),"recommended":self._t(language,"We can claim the project is structured and testable; we cannot yet claim product-market fit or scalable economics.","Nous pouvons affirmer que le projet est structuré et testable ; pas encore qu’il possède un product-market fit ou une économie scalable."),"proofs":self._t_list(language,["Claim-to-evidence matrix"],["Matrice affirmation-preuve"]),"avoid":self._t(language,"The analysis validated the market.","L’analyse a validé le marché.")},
-            {"asked_by":"risk_execution_officer","question":self._t(language,"What is the least risky next action?","Quelle est la prochaine action la moins risquée ?"),"answer":self._t(language,f"Run a bounded pilot around {context['priority_workflow']} and measure {metric_text}.",f"Lancer un pilote limité autour de {context['priority_workflow']} et mesurer {metric_text}."),"reasoning":self._t(language,"A bounded experiment buys evidence before irreversible investment.","Une expérience limitée achète des preuves avant un investissement irréversible."),"confidence":0.85,"support_status":"supported","unresolved":self._t(language,"Set ownership, schedule, instrumentation and rollback.","Définir responsabilité, calendrier, instrumentation et retour arrière."),"follow_up":self._t(language,"Who owns the next decision and on what date?","Qui possède la prochaine décision et à quelle date ?"),"likely":self._t(language,"What will you do next week?","Que ferez-vous la semaine prochaine ?"),"recommended":self._t(language,"We will recruit the bounded cohort, instrument the complete validation unit and review predefined GO, PIVOT and NO-GO thresholds.","Nous recruterons la cohorte limitée, instrumenterons l’unité complète et examinerons les seuils GO, PIVOT et NO-GO prédéfinis."),"proofs":self._t_list(language,["Pilot plan","Instrumentation plan","Review date"],["Plan pilote","Plan d’instrumentation","Date de revue"]),"avoid":self._t(language,"We will continue building the platform.","Nous continuerons à développer la plateforme.")},
+            {"authority_mode":'synthesis',"asked_by":"committee_chair","addressed_to":"all_committee_members","question":self._t(language,"Should the project proceed to a bounded pilot, pivot or stop?","Le projet doit-il passer à un pilote limité, pivoter ou s’arrêter ?"),"answer":self._t(language,"Proceed only to a bounded pilot while blocking evidence is collected.","Passer uniquement à un pilote limité pendant la collecte des preuves bloquantes."),"reasoning":self._t(language,f"The decision must be based on {metric_text} and the current evidence level {evidence.get('level','low')}.",f"La décision doit reposer sur {metric_text} et le niveau de preuve actuel {evidence.get('level','low')}."),"confidence":0.75,"support_status":"committee_synthesis","unresolved":self._t(language,"Name the pilot owner, cohort, dates, metrics and stop conditions.","Nommer le responsable, la cohorte, les dates, métriques et conditions d’arrêt."),"follow_up":self._t(language,"Which condition blocks the next investment decision?","Quelle condition bloque la prochaine décision d’investissement ?"),"likely":self._t(language,"What is the decision today?","Quelle est la décision aujourd’hui ?"),"recommended":self._t(language,"The decision is Conditional Go for a bounded pilot, not approval for full rollout or scaling.","La décision est un GO conditionnel pour un pilote limité, pas une approbation du déploiement complet ou de l’expansion."),"proofs":self._t_list(language,["Pilot charter","Decision scorecard"],["Charte du pilote","Tableau de décision"]),"avoid":self._t(language,"The score means we should build everything.","Le score signifie qu’il faut tout construire.")},
+            {"authority_mode":'synthesis',"asked_by":"red_team_challenger","question":self._t(language,"Which single assumption can destroy the project?","Quelle hypothèse unique peut détruire le projet ?"),"answer":self._t(language,"The project fails if the required actors do not complete and repeat the validation unit at viable risk and contribution.","Le projet échoue si les acteurs nécessaires ne réalisent et ne répètent pas l’unité de validation avec un risque et une contribution viables."),"reasoning":self._t(language,"Adoption, delivery and economics are jointly falsifiable.","Adoption, réalisation et économie sont falsifiables ensemble."),"unresolved":self._t(language,"Pre-register the decisive failure threshold.","Préenregistrer le seuil d’échec décisif."),"follow_up":self._t(language,"What exact result triggers a pivot?","Quel résultat exact déclenche un pivot ?"),"likely":self._t(language,"What would make you stop?","Qu’est-ce qui vous ferait arrêter ?"),"recommended":self._t(language,"We will stop or pivot when the core outcome, repeat behaviour, risk or contribution threshold is missed.","Nous arrêterons ou pivoterons lorsque le résultat principal, la répétition, le risque ou la contribution manque le seuil."),"proofs":self._t_list(language,["Predefined no-go thresholds"],["Seuils NO-GO prédéfinis"]),"avoid":self._t(language,"We will keep improving until it works.","Nous continuerons à améliorer jusqu’à ce que cela fonctionne.")},
+            {"authority_mode":'synthesis',"asked_by":"evidence_auditor","question":self._t(language,"Which claims are supported and which remain hypotheses?","Quelles affirmations sont soutenues et lesquelles restent des hypothèses ?"),"answer":self._t(language,"Project structure and testability may be clear; demand, repeat use, payment, local constraints and economics remain hypotheses unless directly evidenced.","La structure et la testabilité peuvent être claires ; demande, usage répété, paiement, contraintes locales et économie restent des hypothèses sans preuve directe."),"reasoning":self._t(language,"The evidence label must remain visible in the final decision.","Le statut de preuve doit rester visible dans la décision finale."),"unresolved":self._t(language,"Downgrade every unsupported claim before presentation.","Rétrograder chaque affirmation non soutenue avant présentation."),"follow_up":self._t(language,"Which claim has the greatest decision impact?","Quelle affirmation a le plus grand impact sur la décision ?"),"likely":self._t(language,"What can you confidently claim today?","Que pouvez-vous affirmer avec confiance aujourd’hui ?"),"recommended":self._t(language,"We can claim the project is structured and testable; we cannot yet claim product-market fit or scalable economics.","Nous pouvons affirmer que le projet est structuré et testable ; pas encore qu’il possède un product-market fit ou une économie scalable."),"proofs":self._t_list(language,["Claim-to-evidence matrix"],["Matrice affirmation-preuve"]),"avoid":self._t(language,"The analysis validated the market.","L’analyse a validé le marché.")},
+            {"authority_mode":'synthesis',"asked_by":"risk_execution_officer","question":self._t(language,"What is the least risky next action?","Quelle est la prochaine action la moins risquée ?"),"answer":self._t(language,f"Run a bounded pilot around {context['priority_workflow']} and measure {metric_text}.",f"Lancer un pilote limité autour de {context['priority_workflow']} et mesurer {metric_text}."),"reasoning":self._t(language,"A bounded experiment buys evidence before irreversible investment.","Une expérience limitée achète des preuves avant un investissement irréversible."),"confidence":0.85,"support_status":"supported","unresolved":self._t(language,"Set ownership, schedule, instrumentation and rollback.","Définir responsabilité, calendrier, instrumentation et retour arrière."),"follow_up":self._t(language,"Who owns the next decision and on what date?","Qui possède la prochaine décision et à quelle date ?"),"likely":self._t(language,"What will you do next week?","Que ferez-vous la semaine prochaine ?"),"recommended":self._t(language,"We will recruit the bounded cohort, instrument the complete validation unit and review predefined GO, PIVOT and NO-GO thresholds.","Nous recruterons la cohorte limitée, instrumenterons l’unité complète et examinerons les seuils GO, PIVOT et NO-GO prédéfinis."),"proofs":self._t_list(language,["Pilot plan","Instrumentation plan","Review date"],["Plan pilote","Plan d’instrumentation","Date de revue"]),"avoid":self._t(language,"We will continue building the platform.","Nous continuerons à développer la plateforme.")},
         ]
         questions=self._adaptive_questions(
             number=number,
@@ -745,6 +854,7 @@ class DebateRoomGraph:
         evidence_used: List[Dict[str, Any]],
         canonical_claim_id: str,
         canonical_claim_found: bool,
+        authority_mode: str,
         unresolved: str,
         follow_up: str,
         likely_real_question: str,
@@ -878,6 +988,12 @@ class DebateRoomGraph:
                     canonical_claim_id,
                 "canonical_claim_found":
                     canonical_claim_found,
+
+                # Declared question-level authority.
+                # Presentation consumers must project this value
+                # instead of inferring authority from evidence fields.
+                "authority_mode":
+                    authority_mode,
 
                 "unresolved_point":
                     unresolved,
@@ -1034,65 +1150,58 @@ class DebateRoomGraph:
         project_context: Dict[str, Any],
     ) -> Dict[str, str]:
         provenance = (
-            structured.get("actor_provenance")
-            or actors.get("provenance")
-            or project_context.get("actor_provenance")
+            structured.get(
+                "actor_provenance"
+            )
+            or actors.get(
+                "provenance"
+            )
+            or project_context.get(
+                "actor_provenance"
+            )
             or {}
         )
-        if not isinstance(provenance, dict):
+
+        if not isinstance(
+            provenance,
+            dict,
+        ):
             provenance = {}
 
-        raw: Any = None
-        status = ""
+        projection = project_actor_roles(
+            canonical=project_context,
+            structured=structured,
+            actors=actors,
+            provenance=provenance,
+            role_aliases={
+                role: tuple(
+                    aliases
+                ),
+            },
+        )
 
-        for key in aliases:
-            if actors.get(key) not in (None, ""):
-                raw = actors.get(key)
-                break
-            if structured.get(key) not in (None, ""):
-                raw = structured.get(key)
-                break
-            if project_context.get(key) not in (None, ""):
-                raw = project_context.get(key)
-                break
+        record = projection.get(
+            role,
+            {},
+        )
 
-        if isinstance(raw, dict):
-            status = self._text(
-                raw.get("status")
-                or raw.get("source")
-                or raw.get("provenance")
-            ).lower()
-            candidate = self._text(
-                raw.get("value")
-                or raw.get("name")
-                or raw.get("actor")
-                or raw.get("label")
-            )
-        else:
-            candidate = self._text(raw)
-
-        provenance_value = provenance.get(role)
-        if isinstance(provenance_value, dict):
-            status = status or self._text(
-                provenance_value.get("status")
-                or provenance_value.get("source")
-                or provenance_value.get("provenance")
-            ).lower()
-        else:
-            status = status or self._text(provenance_value).lower()
-
-        for key in aliases:
-            status = status or self._text(
-                structured.get(f"{key}_status")
-                or actors.get(f"{key}_status")
-                or project_context.get(f"{key}_status")
-            ).lower()
-
-        confirmed = status in self.CONFIRMED_ACTOR_STATUSES
         return {
-            "value": candidate if confirmed else "",
-            "candidate": candidate,
-            "status": "explicit" if confirmed else "to_confirm",
+            "value": self._text(
+                record.get(
+                    "value"
+                )
+            ),
+            "candidate": self._text(
+                record.get(
+                    "candidate"
+                )
+            ),
+            "status": self._text(
+                record.get(
+                    "status"
+                )
+                or "to_confirm"
+            ),
         }
 
     def _context(self, *, title: str, description: str, industry: str, region: str, project_context: Dict[str, Any], analysis: Dict[str, Any]) -> Dict[str, Any]:
@@ -1445,6 +1554,7 @@ class DebateRoomGraph:
         self,
         analysis: Dict[str, Any],
         category: str,
+        canonical_claim_id: str = "",
     ) -> Dict[str, Any]:
         """Project one canonical claim into Debate Room without reclassifying it."""
 
@@ -1481,11 +1591,19 @@ class DebateRoomGraph:
             "support_status": "not_confirmed",
         }
 
+        explicit_claim_id = str(
+            canonical_claim_id
+            or ""
+        ).strip()
+
         category_key = str(
             category or ""
         ).strip().casefold()
 
-        if not category_key:
+        if (
+            not explicit_claim_id
+            and not category_key
+        ):
             return dict(
                 empty_projection
             )
@@ -1493,13 +1611,31 @@ class DebateRoomGraph:
         for claim in self._canonical_claims(
             analysis
         ):
-            haystack = (
-                f"{claim.get('category', '')} "
-                f"{claim.get('claim', '')}"
-            ).casefold()
+            if explicit_claim_id:
+                current_claim_id = str(
+                    claim.get(
+                        "claim_id"
+                    )
+                    or ""
+                ).strip()
 
-            if category_key not in haystack:
-                continue
+                if (
+                    current_claim_id
+                    != explicit_claim_id
+                ):
+                    continue
+
+            else:
+                haystack = (
+                    f"{claim.get('category', '')} "
+                    f"{claim.get('claim', '')}"
+                ).casefold()
+
+                if (
+                    category_key
+                    not in haystack
+                ):
+                    continue
 
             evidence_status = str(
                 claim.get(
@@ -1616,6 +1752,144 @@ class DebateRoomGraph:
         return dict(
             empty_projection
         )
+
+    def _canonical_source_scope_projection(
+        self,
+        analysis: Dict[str, Any],
+        scope: str,
+    ) -> Dict[str, Any]:
+        """Consume one declared canonical source bucket.
+
+        The bucket name is supplied explicitly by the question
+        specification. This method never searches, scores or
+        reclassifies sources.
+        """
+
+        empty_projection: Dict[str, Any] = {
+            "source_ids": [],
+            "evidence_used": [],
+        }
+
+        scope_key = str(
+            scope
+            or ""
+        ).strip()
+
+        if not scope_key:
+            return dict(
+                empty_projection
+            )
+
+        analysis_data = (
+            analysis
+            or {}
+        )
+
+        raw_source_ledger = (
+            analysis_data.get(
+                "canonical_source_ledger"
+            )
+        )
+
+        if not isinstance(
+            raw_source_ledger,
+            dict,
+        ):
+            competitive = self._section(
+                analysis_data,
+                "competitive_analysis",
+            )
+
+            candidate = competitive.get(
+                "canonical_source_ledger"
+            )
+
+            if isinstance(
+                candidate,
+                dict,
+            ):
+                raw_source_ledger = (
+                    candidate
+                )
+
+        if not isinstance(
+            raw_source_ledger,
+            dict,
+        ):
+            return dict(
+                empty_projection
+            )
+
+        bucket = raw_source_ledger.get(
+            scope_key
+        )
+
+        if not isinstance(
+            bucket,
+            list,
+        ):
+            return dict(
+                empty_projection
+            )
+
+        source_ids: List[str] = []
+        evidence_used: List[
+            Dict[str, Any]
+        ] = []
+        seen = set()
+
+        for item in bucket:
+            if not isinstance(
+                item,
+                dict,
+            ):
+                continue
+
+            source_id = str(
+                item.get(
+                    "canonical_source_id"
+                )
+                or item.get(
+                    "source_id"
+                )
+                or ""
+            ).strip()
+
+            if (
+                not source_id
+                or source_id in seen
+            ):
+                continue
+
+            projected = dict(
+                item
+            )
+
+            # Debate exposes one stable source identity even when
+            # persisted historical ledgers still use source_id.
+            projected[
+                "source_id"
+            ] = source_id
+
+            source_ids.append(
+                source_id
+            )
+
+            evidence_used.append(
+                projected
+            )
+
+            seen.add(
+                source_id
+            )
+
+        return {
+            "source_ids":
+                source_ids,
+            "evidence_used":
+                evidence_used,
+        }
+
 
     def _canonical_source_summary(
         self,

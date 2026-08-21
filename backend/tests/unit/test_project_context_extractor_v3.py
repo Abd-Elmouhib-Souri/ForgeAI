@@ -242,10 +242,11 @@ def test_transport_marketplace_context() -> None:
 
     assert packet.primary_workflow is not None
 
-    assert packet.primary_workflow.action in {
-        "réserver",
-        "commander",
-    }
+    # Preserve the explicit user workflow action rather than
+    # manufacturing a booking verb from the nominal project
+    # description ("reservation de taxis").
+    assert packet.primary_workflow.action == "demander"
+    assert packet.primary_workflow.object == "une course"
 
     assert normalized_contains(
         packet.mvp_scope,
@@ -913,4 +914,1209 @@ def test_constraint_declarations_with_determiners_never_become_workflows() -> No
     assert (
         comparison_key("maintenance")
         not in workflow_text
+    )
+
+def test_actor_descriptive_clause_boundary_is_universal() -> None:
+    cases = (
+        (
+            (
+                "les particuliers en R\u00e9publique tch\u00e8que "
+                "qui ont besoin de petites r\u00e9parations "
+                "\u00e0 domicile"
+            ),
+            "particuliers en R\u00e9publique tch\u00e8que",
+        ),
+        (
+            (
+                "the warehouse operators who manage "
+                "inbound shipments every day"
+            ),
+            "warehouse operators",
+        ),
+        (
+            (
+                "des techniciens de maintenance ayant besoin "
+                "d'un suivi en temps r\u00e9el"
+            ),
+            "techniciens de maintenance",
+        ),
+    )
+
+    for raw_value, expected in cases:
+        actual = (
+            project_context_extractor
+            ._clean_actor(
+                raw_value
+            )
+        )
+
+        assert (
+            comparison_key(actual)
+            == comparison_key(expected)
+        )
+
+
+def test_descriptive_target_clause_never_overflows_actor_context() -> None:
+    description = (
+        "HomeService est une marketplace numerique destinee aux "
+        "particuliers en R\u00e9publique tch\u00e8que qui ont besoin "
+        "de petites reparations \u00e0 domicile : montage de meubles, "
+        "remplacement d'un robinet, reparation d'une porte, "
+        "installation d'une lampe ou autres petits travaux. "
+        "La plateforme permet aux clients de publier une demande, "
+        "recevoir des propositions de professionnels verifies, "
+        "choisir un prestataire, reserver un creneau et payer via "
+        "la plateforme. "
+        "Le probleme principal est la difficulte a trouver rapidement "
+        "un professionnel disponible et fiable. "
+        "Le modele economique repose sur une commission par transaction."
+    )
+
+    packet = project_context_extractor.extract(
+        title="HomeService",
+        description=description,
+        industry="Marketplace de services",
+        target_region="Europe",
+        output_language="fr",
+    )
+
+    actor_names = packet.actor_names()
+
+    actor_keys = {
+        comparison_key(value)
+        for value in actor_names
+    }
+
+    assert (
+        comparison_key(
+            "particuliers en R\u00e9publique tch\u00e8que"
+        )
+        in actor_keys
+    )
+
+    assert all(
+        len(actor.name) <= 180
+        for actor in packet.actors
+    )
+
+    assert all(
+        "montage de meubles"
+        not in comparison_key(actor.name)
+        for actor in packet.actors
+    )
+
+    assert all(
+        "remplacement d'un robinet"
+        not in comparison_key(actor.name)
+        for actor in packet.actors
+    )
+
+
+def test_unbounded_actor_candidate_is_rejected_not_truncated() -> None:
+    raw_value = (
+        "responsables op\u00e9rationnels "
+        + (
+            "avec une description metier extremement longue "
+            * 12
+        )
+    )
+
+    assert len(raw_value) > 180
+
+    cleaned = (
+        project_context_extractor
+        ._clean_actor(
+            raw_value
+        )
+    )
+
+    assert cleaned == ""
+
+
+def test_payer_declarations_are_bidirectional_and_bilingual() -> None:
+    cases = (
+        (
+            (
+                "The primary payer is "
+                "the private customer."
+            ),
+            "private customer",
+        ),
+        (
+            (
+                "The private customer is "
+                "the primary payer."
+            ),
+            "private customer",
+        ),
+        (
+            (
+                "Le payeur principal est "
+                "le client particulier."
+            ),
+            "client particulier",
+        ),
+        (
+            (
+                "Le client particulier est "
+                "le payeur principal."
+            ),
+            "client particulier",
+        ),
+    )
+
+    for sentence, expected_name in cases:
+        resolved = (
+            project_context_extractor
+            ._declared_actor_roles(
+                sentence
+            )
+        )
+
+        assert len(resolved) == 1
+
+        name, role = resolved[0]
+
+        assert (
+            name.casefold()
+            == expected_name.casefold()
+        )
+
+        assert role.value == "payer"
+
+
+def test_explicit_actor_first_payer_reaches_canonical_packet() -> None:
+    description = (
+        "La solution est destin\u00e9e aux techniciens "
+        "qui supervisent les op\u00e9rations terrain. "
+        "Le responsable du site est le payeur principal."
+    )
+
+    packet = project_context_extractor.extract(
+        title="FieldOps",
+        description=description,
+        industry="services operationnels",
+        target_region="Europe",
+        output_language="fr",
+    )
+
+    assert any(
+        actor.name.casefold()
+        == "responsable du site"
+        and actor.role.value == "payer"
+        and actor.is_explicit
+        for actor in packet.actors
+    )
+
+    assert any(
+        value.casefold()
+        == "responsable du site"
+        for value in packet.payer_actor_names
+    )
+
+
+def test_explicit_actor_group_declarations_are_bilingual_and_structural() -> None:
+    cases = (
+        (
+            (
+                "Les deux groupes d'utilisateurs sont "
+                "les m\u00e9nages et les prestataires de services."
+            ),
+            "m\u00e9nages",
+            "prestataires de services",
+        ),
+        (
+            (
+                "The user groups are households "
+                "and service providers."
+            ),
+            "households",
+            "service providers",
+        ),
+    )
+
+    for sentence, demand_name, supply_name in cases:
+        declared = (
+            project_context_extractor
+            ._declared_actor_groups(
+                sentence
+            )
+        )
+
+        roles = {
+            comparison_key(name): role.value
+            for name, role in declared
+        }
+
+        assert (
+            roles[
+                comparison_key(demand_name)
+            ]
+            == "user"
+        )
+
+        assert (
+            roles[
+                comparison_key(supply_name)
+            ]
+            == "provider"
+        )
+
+
+def test_actor_group_declaration_populates_transaction_sides() -> None:
+    description = (
+        "ServiceLink est une marketplace de services. "
+        "Les deux groupes d'utilisateurs sont les m\u00e9nages "
+        "et les prestataires de services. "
+        "Les m\u00e9nages publient une demande puis "
+        "r\u00e9servent un service. "
+        "Le probl\u00e8me est la difficult\u00e9 \u00e0 trouver "
+        "rapidement un prestataire disponible. "
+        "La plateforme facilite la mise en relation et la "
+        "r\u00e9servation. "
+        "Le mod\u00e8le \u00e9conomique est une commission."
+    )
+
+    packet = project_context_extractor.extract(
+        title="ServiceLink",
+        description=description,
+        industry="marketplace de services",
+        target_region="Europe",
+        output_language="fr",
+    )
+
+    assert any(
+        actor.role.value == "user"
+        and "m\u00e9nages"
+        in actor.name.casefold()
+        for actor in packet.actors
+    )
+
+    assert any(
+        actor.role.value == "provider"
+        and "prestataire"
+        in actor.name.casefold()
+        for actor in packet.actors
+    )
+
+    assert (
+        packet.transaction_unit
+        .demand_actor
+    )
+
+    assert (
+        packet.transaction_unit
+        .supply_actor
+    )
+
+    assert (
+        packet.transaction_unit
+        .has_two_sides
+        is True
+    )
+
+
+def test_actor_group_parser_rejects_predicates_as_actor_lists() -> None:
+    sentences = (
+        (
+            "Les utilisateurs sont responsables "
+            "de confirmer la r\u00e9servation."
+        ),
+        (
+            "Users are able to book and pay online."
+        ),
+        (
+            "The actors are responsible for support."
+        ),
+    )
+
+    for sentence in sentences:
+        assert (
+            project_context_extractor
+            ._declared_actor_groups(
+                sentence
+            )
+            == []
+        )
+
+
+
+def test_actor_coordination_distinguishes_modifiers_from_actor_groups() -> None:
+    cases = (
+        (
+            "petites et moyennes entreprises alg\u00e9riennes",
+            (
+                "petites et moyennes entreprises alg\u00e9riennes",
+            ),
+        ),
+        (
+            "small and medium businesses",
+            (
+                "small and medium businesses",
+            ),
+        ),
+        (
+            "responsables de flotte et responsables logistiques",
+            (
+                "responsables de flotte",
+                "responsables logistiques",
+            ),
+        ),
+        (
+            "clients et prestataires",
+            (
+                "clients",
+                "prestataires",
+            ),
+        ),
+        (
+            "buyers and sellers",
+            (
+                "buyers",
+                "sellers",
+            ),
+        ),
+        (
+            (
+                "dirigeants de petites et moyennes "
+                "entreprises"
+            ),
+            (
+                (
+                    "dirigeants de petites et moyennes "
+                    "entreprises"
+                ),
+            ),
+        ),
+    )
+
+    for raw_value, expected in cases:
+        actual = (
+            project_context_extractor
+            ._split_actor_list(
+                raw_value
+            )
+        )
+
+        assert [
+            comparison_key(
+                value
+            )
+            for value in actual
+        ] == [
+            comparison_key(
+                value
+            )
+            for value in expected
+        ]
+
+
+def test_multi_role_payer_declarations_are_bilingual() -> None:
+    cases = (
+        (
+            (
+                "L'entreprise propri\u00e9taire de la flotte "
+                "est le client et le payeur principal."
+            ),
+            "entreprise propri\u00e9taire de la flotte",
+        ),
+        (
+            (
+                "La soci\u00e9t\u00e9 cliente est "
+                "l'acheteur et le payeur principal."
+            ),
+            "soci\u00e9t\u00e9 cliente",
+        ),
+        (
+            (
+                "The fleet-owning company is "
+                "the customer and primary payer."
+            ),
+            "fleet-owning company",
+        ),
+        (
+            (
+                "The operating company is "
+                "the buyer and the primary payer."
+            ),
+            "operating company",
+        ),
+    )
+
+    for sentence, expected_name in cases:
+        declared = (
+            project_context_extractor
+            ._declared_actor_roles(
+                sentence
+            )
+        )
+
+        payer_names = [
+            name
+            for name, role in declared
+            if role.value == "payer"
+        ]
+
+        assert any(
+            comparison_key(name)
+            == comparison_key(expected_name)
+            for name in payer_names
+        )
+
+
+def test_b2b_compound_target_and_multi_role_payer_reach_packet() -> None:
+    description = (
+        "FleetOps est une solution SaaS destin\u00e9e aux "
+        "petites et moyennes entreprises alg\u00e9riennes. "
+        "Les utilisateurs principaux sont les responsables "
+        "de flotte et les responsables logistiques. "
+        "L'entreprise propri\u00e9taire de la flotte est "
+        "le client et le payeur principal. "
+        "Le probl\u00e8me principal est la dispersion des "
+        "informations de maintenance. "
+        "La solution centralise le suivi des op\u00e9rations."
+    )
+
+    packet = project_context_extractor.extract(
+        title="FleetOps",
+        description=description,
+        industry="SaaS B2B",
+        target_region="Alg\u00e9rie",
+        output_language="fr",
+    )
+
+    actor_keys = {
+        comparison_key(
+            actor.name
+        )
+        for actor in packet.actors
+    }
+
+    assert (
+        comparison_key(
+            "petites et moyennes entreprises alg\u00e9riennes"
+        )
+        in actor_keys
+    )
+
+    assert (
+        comparison_key(
+            "petites"
+        )
+        not in actor_keys
+    )
+
+    assert any(
+        comparison_key(
+            actor.name
+        )
+        == comparison_key(
+            "entreprise propri\u00e9taire de la flotte"
+        )
+        and actor.role.value == "payer"
+        for actor in packet.actors
+    )
+
+    assert any(
+        comparison_key(
+            payer
+        )
+        == comparison_key(
+            "entreprise propri\u00e9taire de la flotte"
+        )
+        for payer in packet.payer_actor_names
+    )
+
+
+
+def test_primary_user_declaration_and_workflow_actor_ownership_are_universal() -> None:
+    description = (
+        "Les utilisateurs principaux sont les op\u00e9rateurs "
+        "et les administrateurs. "
+        "L'entreprise est le payeur principal. "
+        "L'op\u00e9rateur enregistre une demande. "
+        "L'administrateur approuve le dossier. "
+        "Le syst\u00e8me envoie une alerte."
+    )
+
+    packet = project_context_extractor.extract(
+        title="WorkflowRoles",
+        description=description,
+        industry="logiciel",
+        target_region="Europe",
+        output_language="fr",
+    )
+
+    actor_keys = {
+        comparison_key(actor.name): actor.role.value
+        for actor in packet.actors
+    }
+
+    assert (
+        comparison_key("op\u00e9rateurs")
+        in actor_keys
+    )
+
+    assert (
+        comparison_key("administrateurs")
+        in actor_keys
+    )
+
+    # A structural "primary users" declaration proves actor
+    # membership but must not erase a more precise canonical role.
+    assert (
+        actor_keys[
+            comparison_key("op\u00e9rateurs")
+        ]
+        == "operator"
+    )
+
+    assert any(
+        comparison_key(actor.name)
+        == comparison_key("entreprise")
+        and actor.role.value == "payer"
+        for actor in packet.actors
+    )
+
+    workflows = packet.priority_workflows
+
+    by_action = {
+        workflow.action: workflow
+        for workflow in workflows
+    }
+
+    assert (
+        comparison_key(
+            by_action["enregistrer"].actor
+        )
+        == comparison_key("op\u00e9rateurs")
+    )
+
+    assert (
+        comparison_key(
+            by_action["approuver"].actor
+        )
+        == comparison_key("administrateurs")
+    )
+
+    assert (
+        comparison_key(
+            by_action["transmettre"].actor
+        )
+        == comparison_key("syst\u00e8me")
+    )
+
+    assert all(
+        comparison_key(workflow.actor)
+        != comparison_key("entreprise")
+        for workflow in workflows
+    )
+
+
+def test_primary_user_declaration_is_bilingual_and_structural() -> None:
+    cases = (
+        (
+            (
+                "Les utilisateurs principaux sont "
+                "les techniciens et les superviseurs."
+            ),
+            (
+                "techniciens",
+                "superviseurs",
+            ),
+        ),
+        (
+            (
+                "The primary users are "
+                "technicians and supervisors."
+            ),
+            (
+                "technicians",
+                "supervisors",
+            ),
+        ),
+    )
+
+    for sentence, expected in cases:
+        declared = (
+            project_context_extractor
+            ._declared_actor_groups(
+                sentence
+            )
+        )
+
+        actual = {
+            comparison_key(name): role.value
+            for name, role in declared
+        }
+
+        for name in expected:
+            assert (
+                comparison_key(name)
+                in actual
+            )
+
+
+def test_workflow_actor_resolution_does_not_assign_payer_globally() -> None:
+    description = (
+        "The primary users are operators and reviewers. "
+        "The company is the primary payer. "
+        "The operators record a request. "
+        "The reviewers approve the request. "
+        "The system sends a confirmation."
+    )
+
+    packet = project_context_extractor.extract(
+        title="RoleOwnership",
+        description=description,
+        industry="workflow software",
+        target_region="Europe",
+        output_language="en",
+    )
+
+    workflows = packet.priority_workflows
+
+    assert workflows
+
+    assert all(
+        comparison_key(workflow.actor)
+        != comparison_key("company")
+        for workflow in workflows
+    )
+
+    assert any(
+        comparison_key(workflow.actor)
+        == comparison_key("operators")
+        for workflow in workflows
+    )
+
+    assert any(
+        comparison_key(workflow.actor)
+        == comparison_key("reviewers")
+        for workflow in workflows
+    )
+
+    assert any(
+        comparison_key(workflow.actor)
+        == comparison_key("system")
+        for workflow in workflows
+    )
+
+
+
+def test_inferred_workflow_never_becomes_implicit_mvp_scope() -> None:
+    """
+    A workflow can be explicit and actionable without implying that
+    the user has defined an MVP.
+    """
+    from app.services.project_intelligence_layer import (
+        project_intelligence_layer,
+    )
+
+    cases = (
+        (
+            "en",
+            (
+                "The primary users are operators and reviewers. "
+                "The company is the primary payer. "
+                "The operators record a request. "
+                "The reviewers approve the request. "
+                "The system sends a confirmation."
+            ),
+        ),
+        (
+            "fr",
+            (
+                "Les utilisateurs principaux sont les op\u00e9rateurs "
+                "et les superviseurs. "
+                "L'entreprise est le payeur principal. "
+                "Les op\u00e9rateurs enregistrent une demande. "
+                "Le syst\u00e8me envoie une confirmation."
+            ),
+        ),
+    )
+
+    for language, description in cases:
+        intelligence = project_intelligence_layer.build(
+            title="WorkflowOnly",
+            description=description,
+            industry="workflow software",
+            target_region="Europe",
+            output_language=language,
+        )
+
+        structured = (
+            intelligence.get(
+                "structured_project_context"
+            )
+            or {}
+        )
+
+        assert not structured.get(
+            "mvp_scope"
+        )
+
+
+def test_missing_mvp_does_not_swallow_valid_workflow() -> None:
+    description = (
+        "The primary users are operators and reviewers. "
+        "The company is the primary payer. "
+        "The operators record a request. "
+        "The reviewers approve the request. "
+        "The system sends a confirmation."
+    )
+
+    packet = project_context_extractor.extract(
+        title="RoleOwnership",
+        description=description,
+        industry="workflow software",
+        target_region="Europe",
+        output_language="en",
+    )
+
+    assert packet.mvp_scope == []
+
+    workflows = packet.priority_workflows
+
+    assert any(
+        comparison_key(workflow.actor)
+        == comparison_key("operators")
+        and workflow.action == "record"
+        for workflow in workflows
+    )
+
+    assert any(
+        comparison_key(workflow.actor)
+        == comparison_key("reviewers")
+        and workflow.action == "approve"
+        for workflow in workflows
+    )
+
+    assert any(
+        comparison_key(workflow.actor)
+        == comparison_key("system")
+        and workflow.action == "send"
+        for workflow in workflows
+    )
+
+
+def test_explicit_mvp_remains_available_when_user_declares_it() -> None:
+    description = (
+        "The primary users are operators. "
+        "The operators record requests. "
+        "The first version includes invoice management."
+    )
+
+    packet = project_context_extractor.extract(
+        title="ExplicitMVP",
+        description=description,
+        industry="workflow software",
+        target_region="Europe",
+        output_language="en",
+    )
+
+    assert packet.mvp_scope
+
+    serialized_scope = " ".join(
+        comparison_key(item)
+        for item in packet.mvp_scope
+    )
+
+    assert "invoice" in serialized_scope
+
+
+
+def test_nominal_action_surfaces_do_not_become_workflows() -> None:
+    """
+    Ambiguous noun surfaces must not be promoted to their homonymous
+    workflow action.
+
+    A sentence may still contain another genuine verb, including a
+    passive verb such as "recorded" or "sent".
+    """
+    nominal_cases = (
+        (
+            "Une alerte est affich\u00e9e.",
+            "alerter",
+            "alerte",
+        ),
+        (
+            "Le suivi GPS est disponible.",
+            "suivre",
+            "suivi",
+        ),
+        (
+            "Une demande est enregistr\u00e9e.",
+            "demander",
+            "demande",
+        ),
+        (
+            "La r\u00e9servation est confirm\u00e9e.",
+            "r\u00e9server",
+            "r\u00e9servation",
+        ),
+        (
+            "La surveillance est continue.",
+            "surveiller",
+            "surveillance",
+        ),
+        (
+            "Une notification est envoy\u00e9e.",
+            "alerter",
+            "notification",
+        ),
+        (
+            "An alert is displayed.",
+            "alerter",
+            "alert",
+        ),
+        (
+            "The monitoring is continuous.",
+            "surveiller",
+            "monitoring",
+        ),
+        (
+            "A request is recorded.",
+            "demander",
+            "request",
+        ),
+        (
+            "A booking is confirmed.",
+            "r\u00e9server",
+            "booking",
+        ),
+        (
+            "A notification is sent.",
+            "alerter",
+            "notification",
+        ),
+    )
+
+    for (
+        sentence,
+        forbidden_action,
+        forbidden_surface,
+    ) in nominal_cases:
+        occurrences = (
+            project_context_extractor
+            ._workflow_action_occurrences(
+                sentence
+            )
+        )
+
+        assert not any(
+            item["action"] == forbidden_action
+            and comparison_key(item["surface"])
+            == comparison_key(forbidden_surface)
+            for item in occurrences
+        ), (
+            sentence,
+            [
+                (
+                    item["action"],
+                    item["surface"],
+                )
+                for item in occurrences
+            ],
+        )
+
+
+def test_ambiguous_action_surfaces_remain_verbs_in_predicate_position() -> None:
+    verbal_cases = (
+        (
+            "Le syst\u00e8me alerte l'utilisateur.",
+            "alerter",
+        ),
+        (
+            "L'op\u00e9rateur suit le dossier.",
+            "suivre",
+        ),
+        (
+            "Le client demande une validation.",
+            "demander",
+        ),
+        (
+            "Le client r\u00e9serve un cr\u00e9neau.",
+            "r\u00e9server",
+        ),
+        (
+            "Le syst\u00e8me surveille la temp\u00e9rature.",
+            "surveiller",
+        ),
+        (
+            "Le syst\u00e8me notifie l'utilisateur.",
+            "alerter",
+        ),
+        (
+            "The system alerts the user.",
+            "alerter",
+        ),
+        (
+            "The operator monitors the process.",
+            "surveiller",
+        ),
+        (
+            "The customer requests approval.",
+            "demander",
+        ),
+        (
+            "The customer books a slot.",
+            "r\u00e9server",
+        ),
+        (
+            "The system notifies the user.",
+            "alerter",
+        ),
+        (
+            "The system notified the user.",
+            "alerter",
+        ),
+        (
+            "The system is notifying the user.",
+            "alerter",
+        ),
+    )
+
+    for sentence, expected_action in verbal_cases:
+        occurrences = (
+            project_context_extractor
+            ._workflow_action_occurrences(
+                sentence
+            )
+        )
+
+        assert any(
+            item["action"]
+            == expected_action
+            for item in occurrences
+        ), (
+            sentence,
+            [
+                (
+                    item["action"],
+                    item["surface"],
+                )
+                for item in occurrences
+            ],
+        )
+
+
+def test_transmitted_alert_remains_one_complete_workflow_action() -> None:
+    cases = (
+        (
+            "Le syst\u00e8me envoie une alerte.",
+            "transmettre",
+            "une alerte",
+        ),
+        (
+            "The system sends an alert.",
+            "send",
+            "an alert",
+        ),
+    )
+
+    for sentence, expected_action, expected_object in cases:
+        packet = project_context_extractor.extract(
+            title="NotificationFlow",
+            description=sentence,
+            industry="logiciel",
+            target_region="Europe",
+            output_language=(
+                "fr"
+                if sentence.startswith("Le ")
+                else "en"
+            ),
+        )
+
+        workflows = packet.priority_workflows
+
+        assert len(workflows) == 1
+
+        workflow = workflows[0]
+
+        assert (
+            comparison_key(
+                workflow.action
+            )
+            == comparison_key(
+                expected_action
+            )
+        )
+
+        assert (
+            comparison_key(
+                workflow.object
+            )
+            == comparison_key(
+                expected_object
+            )
+        )
+
+
+
+@pytest.mark.parametrize(
+    (
+        "language",
+        "sentence",
+        "expected_payer",
+    ),
+    [
+        (
+            "fr",
+            (
+                "L'entreprise cliente paie "
+                "un abonnement mensuel."
+            ),
+            "entreprise cliente",
+        ),
+        (
+            "fr",
+            (
+                "L'entreprise cliente paye "
+                "les frais mensuels."
+            ),
+            "entreprise cliente",
+        ),
+        (
+            "fr",
+            (
+                "L'entreprise cliente paiera "
+                "les frais de service."
+            ),
+            "entreprise cliente",
+        ),
+        (
+            "fr",
+            (
+                "L'entreprise cliente a pay\u00e9 "
+                "les frais initiaux."
+            ),
+            "entreprise cliente",
+        ),
+        (
+            "en",
+            (
+                "The client company pays "
+                "a monthly subscription."
+            ),
+            "client company",
+        ),
+        (
+            "en",
+            (
+                "The client company paid "
+                "the setup fee."
+            ),
+            "client company",
+        ),
+        (
+            "en",
+            (
+                "The client company will pay "
+                "the monthly fee."
+            ),
+            "client company",
+        ),
+        (
+            "en",
+            (
+                "The client company is paying "
+                "the service fee."
+            ),
+            "client company",
+        ),
+    ],
+)
+def test_explicit_payment_predicate_assigns_payer_role(
+    language: str,
+    sentence: str,
+    expected_payer: str,
+) -> None:
+    declared = (
+        project_context_extractor
+        ._declared_actor_roles(
+            sentence
+        )
+    )
+
+    assert any(
+        comparison_key(name)
+        == comparison_key(expected_payer)
+        and role.value == "payer"
+        for name, role in declared
+    )
+
+    packet = project_context_extractor.extract(
+        title="PaymentActor",
+        description=sentence,
+        industry="software",
+        target_region="Europe",
+        output_language=language,
+    )
+
+    assert any(
+        comparison_key(name)
+        == comparison_key(expected_payer)
+        for name in packet.payer_actor_names
+    )
+
+    # Payment authority must not silently become
+    # decision-making authority.
+    assert not any(
+        comparison_key(name)
+        == comparison_key(expected_payer)
+        for name in packet.decision_maker_actor_names
+    )
+
+    assert any(
+        comparison_key(actor.name)
+        == comparison_key(expected_payer)
+        and actor.role.value == "payer"
+        and actor.is_explicit
+        for actor in packet.actors
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "language",
+        "sentence",
+        "forbidden_actor",
+    ),
+    [
+        (
+            "fr",
+            (
+                "La plateforme permet aux clients "
+                "de payer en ligne."
+            ),
+            "plateforme",
+        ),
+        (
+            "en",
+            (
+                "The platform allows customers "
+                "to pay online."
+            ),
+            "platform",
+        ),
+    ],
+)
+def test_payment_capability_does_not_make_platform_the_payer(
+    language: str,
+    sentence: str,
+    forbidden_actor: str,
+) -> None:
+    packet = project_context_extractor.extract(
+        title="PaymentCapability",
+        description=sentence,
+        industry="software",
+        target_region="Europe",
+        output_language=language,
+    )
+
+    assert not any(
+        comparison_key(name)
+        == comparison_key(forbidden_actor)
+        for name in packet.payer_actor_names
     )

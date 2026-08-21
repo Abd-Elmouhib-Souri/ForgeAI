@@ -493,6 +493,12 @@ class SourceRelevanceGate:
             source_type = "adjacent_solution"
             is_product_page = False
 
+        unverified_solution_announcement = bool(
+            local_solution_announcement
+            and article_like
+            and not is_product_page
+        )
+
         if job_listing_mismatch:
             source_type = "irrelevant"
             is_product_page = False
@@ -603,12 +609,36 @@ class SourceRelevanceGate:
             )
         )
 
-        if operation_equivalent and source_role == "direct_competitor":
-            # Operational equivalence establishes workflow and solution
-            # proximity from deterministic project semantics. It does not
-            # invent an exact target-user identity.
+        canonical_operation_match = bool(
+            operation_equivalent
+            and source_role in {
+                "direct_competitor",
+                "adjacent_solution",
+                "regional_benchmark",
+                "international_benchmark",
+            }
+        )
+
+        if canonical_operation_match:
+            # SourceRoleResolver is authoritative for operational
+            # relationship semantics. Once it has established
+            # operation equivalence, the relevance gate must consume
+            # that workflow/solution proximity instead of requiring
+            # a second lexical match.
+            #
+            # This projection deliberately does not manufacture
+            # target-user identity.
             same_use_case = True
             same_solution = True
+
+        if (
+            canonical_operation_match
+            and source_role
+            == "direct_competitor"
+        ):
+            # Keep legacy competitor projection only for a canonical
+            # direct competitor. Adjacent and benchmark roles retain
+            # their own legacy source types and comparison scopes.
             is_product_page = True
             source_type = "competitor"
 
@@ -767,6 +797,7 @@ class SourceRelevanceGate:
             and score >= display_threshold
             and clear_contextual_link
             and evidence_categories
+            and not unverified_solution_announcement
         )
         internal_threshold = self.INTERNAL_USE_THRESHOLD
         if source_type == "technology_benchmark":
