@@ -227,7 +227,10 @@ class LocalMarketSearchService:
         remains the source of truth; domain profiles only add narrow synonyms.
         """
         sector = clean_text(sector or "")
-        region = clean_text(region or "")
+        region = self._effective_region(
+            project_context,
+            region,
+        )
         region_normalized = normalize_text(region)
         region_fr = "Tunisie" if region_normalized in {"tunisie", "tunisia"} else region
         region_en = "Tunisia" if region_normalized in {"tunisie", "tunisia"} else region
@@ -274,9 +277,60 @@ class LocalMarketSearchService:
         )
         candidates: List[str] = []
 
-        archetype_queries = archetype_context.get("search_queries") or {}
-        for key in ("local_fr", "local_en", "all"):
-            candidates.extend(self._safe_term_list(archetype_queries.get(key))[:6])
+        # Project Intelligence owns canonical search intent planning.
+        #
+        # In a locked context, valid planner queries must enter the
+        # bounded local-search projection before downstream recall
+        # enrichment. Otherwise archetype/domain candidates can consume
+        # the final [:6] capacity and silently erase canonical intents.
+        planner_intents = (
+            "local_solutions",
+            "direct_competitors",
+            "market_sources",
+            "official_sources",
+            "field_validation",
+        )
+
+        planner_candidates: List[str] = []
+
+        for intent in planner_intents:
+            values = (
+                queries_by_intent.get(intent)
+                or []
+            )
+
+            if isinstance(values, list):
+                planner_candidates.extend(
+                    str(item)
+                    for item in values[:1]
+                )
+
+        locked_query_planning = bool(
+            context.get("context_locked") is True
+            or structured.get("context_locked") is True
+        )
+
+        canonical_planner_primary = bool(
+            locked_query_planning
+            and planner_candidates
+        )
+
+        if canonical_planner_primary:
+            candidates.extend(
+                planner_candidates
+            )
+
+        # Archetype search-query strings are non-authoritative metadata.
+        #
+        # Never execute them directly: they can contain geography from the
+        # profile's authoring context. Search terms remain semantic hints;
+        # executable queries must come from the canonical planner or be
+        # synthesized below with the effective region.
+
+        # Keep the semantic-profile slice identifiable so the final
+        # bounded projection can preserve locale diversity without
+        # sacrificing canonical planner intents.
+        profile_candidate_start = len(candidates)
 
         # Narrow bilingual profiles fix low recall without weakening relevance.
         if any(term in semantic_text for term in (
@@ -328,14 +382,65 @@ class LocalMarketSearchService:
                 f"student internship job board {region_en}",
             ])
 
-        # Generic fallback is used only when the archetype resolver could not
-        # provide exact domain queries. This prevents broad sector terms such as
-        # "transport software" from displacing a precise ride-hailing query.
-        has_archetype_queries = any(
-            self._safe_term_list(archetype_queries.get(key))
-            for key in ("local_fr", "local_en", "all")
+        localized_profile_candidates = candidates[
+            profile_candidate_start:
+        ]
+
+        # Generic fallback is needed only when the canonical planner does
+        # not already provide executable intent queries. This preserves
+        # legacy/no-planner compatibility without granting archetype metadata
+        # independent query authority.
+        has_planner_queries = any(
+            isinstance(values, list)
+            and any(
+                str(item).strip()
+                for item in values
+            )
+            for values in queries_by_intent.values()
         )
-        if not has_archetype_queries and primary:
+
+        # Preserve archetype enrichment when no executable planner
+        # query is available, but use semantic search_terms only.
+        #
+        # Raw archetype search_queries are non-authoritative metadata
+        # and may contain stale geography. The effective canonical
+        # region remains the sole geography authority.
+        if not has_planner_queries:
+            primary_key = normalize_text(
+                primary
+            )
+
+            workflow_key = normalize_text(
+                workflow
+            )
+
+            semantic_fallback = next(
+                (
+                    term
+                    for term in archetype_terms
+                    if normalize_text(term)
+                    and normalize_text(term)
+                    not in {
+                        primary_key,
+                        workflow_key,
+                    }
+                ),
+                "",
+            )
+
+            if semantic_fallback:
+                candidates.append(
+                    " ".join(
+                        part
+                        for part in (
+                            semantic_fallback,
+                            region,
+                        )
+                        if part
+                    )
+                )
+
+        if not has_planner_queries and primary:
             candidates.extend([
                 f"{primary} logiciel {region}",
                 f"{primary} software {region}",
@@ -343,30 +448,208 @@ class LocalMarketSearchService:
                 f"{primary} statistiques officielles {region}",
                 f"{primary} official statistics {region}",
             ])
-        if not has_archetype_queries and workflow:
+        if not has_planner_queries and workflow:
             candidates.extend([
                 f"{workflow} logiciel {region}",
                 f"{workflow} software {region}",
             ])
 
-        # Keep only the strongest short planner queries after the bilingual core.
-        for intent in (
-            "local_solutions",
-            "direct_competitors",
-            "market_sources",
-            "official_sources",
-            "field_validation",
-        ):
-            values = queries_by_intent.get(intent) or []
-            if isinstance(values, list):
-                candidates.extend(str(item) for item in values[:1])
+        # Preserve historical fallback/enrichment ordering when no
+        # authoritative locked planner is available.
+        if not canonical_planner_primary:
+            candidates.extend(
+                planner_candidates
+            )
 
         cleaned: List[str] = []
         for query in candidates:
             value = self._normalize_query(query)
             if 3 <= len(value.split()) <= 9:
                 cleaned.append(value)
-        return self._unique_strings(cleaned)[:6]
+
+        unique_candidates = self._unique_strings(
+            cleaned
+        )
+
+        # Local query projection may render the SAME canonical region using
+        # different locale aliases, but it may not drop or replace planner
+        # intents to do so.
+        #
+        # If the first six already contain the alternate locale alias, no
+        # transformation is needed. Otherwise, localize one planner-owned
+        # query whose business terms strongly overlap an English semantic
+        # profile candidate. Only the region token changes.
+        region_fr_key = normalize_text(
+            region_fr
+        )
+
+        region_en_key = normalize_text(
+            region_en
+        )
+
+        if (
+            canonical_planner_primary
+            and region_fr_key
+            and region_en_key
+            and region_fr_key
+            != region_en_key
+            and localized_profile_candidates
+        ):
+            final_window = (
+                unique_candidates[:6]
+            )
+
+            final_has_en_alias = any(
+                region_en_key
+                in normalize_text(
+                    query
+                ).split()
+                for query in final_window
+            )
+
+            if not final_has_en_alias:
+                english_profile_term_sets = []
+
+                for query in (
+                    localized_profile_candidates
+                ):
+                    tokens = set(
+                        normalize_text(
+                            query
+                        ).split()
+                    )
+
+                    if (
+                        region_en_key
+                        not in tokens
+                    ):
+                        continue
+
+                    semantic_tokens = (
+                        tokens
+                        - {
+                            region_fr_key,
+                            region_en_key,
+                        }
+                    )
+
+                    if semantic_tokens:
+                        english_profile_term_sets.append(
+                            semantic_tokens
+                        )
+
+                planner_projection_keys = set()
+
+                for query in planner_candidates:
+                    value = self._normalize_query(
+                        query
+                    )
+
+                    if (
+                        3
+                        <= len(
+                            value.split()
+                        )
+                        <= 9
+                    ):
+                        planner_projection_keys.add(
+                            normalize_text(
+                                value
+                            )
+                        )
+
+                best_index = -1
+                best_overlap = 0
+
+                if english_profile_term_sets:
+                    for index, query in enumerate(
+                        unique_candidates[:6]
+                    ):
+                        query_key = normalize_text(
+                            query
+                        )
+
+                        if (
+                            query_key
+                            not in planner_projection_keys
+                        ):
+                            continue
+
+                        query_tokens = set(
+                            query_key.split()
+                        )
+
+                        if (
+                            region_fr_key
+                            not in query_tokens
+                        ):
+                            continue
+
+                        semantic_query_tokens = (
+                            query_tokens
+                            - {
+                                region_fr_key,
+                                region_en_key,
+                            }
+                        )
+
+                        overlap = max(
+                            (
+                                len(
+                                    semantic_query_tokens
+                                    & profile_tokens
+                                )
+                                for profile_tokens
+                                in english_profile_term_sets
+                            ),
+                            default=0,
+                        )
+
+                        if overlap > best_overlap:
+                            best_overlap = overlap
+                            best_index = index
+
+                # Require more than a generic one-token overlap such as
+                # "software" or "platform".
+                if (
+                    best_index >= 0
+                    and best_overlap >= 2
+                ):
+                    localized_words = [
+                        (
+                            region_en
+                            if normalize_text(
+                                word
+                            )
+                            == region_fr_key
+                            else word
+                        )
+                        for word
+                        in unique_candidates[
+                            best_index
+                        ].split()
+                    ]
+
+                    localized_query = (
+                        self._normalize_query(
+                            " ".join(
+                                localized_words
+                            )
+                        )
+                    )
+
+                    if (
+                        3
+                        <= len(
+                            localized_query.split()
+                        )
+                        <= 9
+                    ):
+                        unique_candidates[
+                            best_index
+                        ] = localized_query
+
+        return unique_candidates[:6]
 
     async def search_urls(self, queries: List[str]) -> List[Dict[str, Any]]:
         """Search through the shared gateway and return unique URL candidates.
@@ -749,7 +1032,29 @@ class LocalMarketSearchService:
             or intelligence.get("archetype_context")
             or {}
         )
-        actors = archetype_context.get("actors") or structured.get("actors") or {}
+        structured_locked = bool(
+            project_context.get("context_locked") is True
+            or structured.get("context_locked") is True
+        )
+
+        if (
+            structured_locked
+            and "actors" in structured
+        ):
+            # Locked structured key presence is authoritative,
+            # including an explicitly empty actor mapping.
+            actors = (
+                structured.get("actors")
+                or {}
+            )
+        else:
+            # Incomplete / unlocked search contexts may still receive
+            # archetype enrichment.
+            actors = (
+                archetype_context.get("actors")
+                or structured.get("actors")
+                or {}
+            )
         raw_values = [
             project_context.get("domain_concepts"),
             project_context.get("search_concepts"),
@@ -778,6 +1083,81 @@ class LocalMarketSearchService:
                     result.append(clean_text(str(item)))
         return self._unique_strings(result)[:24]
 
+    def _effective_region(
+        self,
+        context: Optional[Dict[str, Any]],
+        fallback_region: str,
+    ) -> str:
+        """Resolve LocalMarket geography without reauthoring locked context.
+
+        In a locked project context, canonical region key presence is
+        authoritative, including an explicitly empty value. The caller
+        region remains a compatibility fallback only when no locked
+        canonical region key is available.
+        """
+        merged = dict(
+            context
+            or {}
+        )
+
+        intelligence = dict(
+            merged.get("project_intelligence")
+            or {}
+        )
+
+        structured = dict(
+            merged.get("structured_project_context")
+            or intelligence.get("structured_project_context")
+            or {}
+        )
+
+        locked = bool(
+            merged.get("context_locked") is True
+            or structured.get("context_locked") is True
+        )
+
+        if locked:
+            # The structured canonical projection has priority over
+            # convenience aliases exposed at the outer packet.
+            if "target_region" in structured:
+                return clean_text(
+                    str(
+                        structured.get("target_region")
+                        or ""
+                    )
+                )
+
+            if "market_region" in structured:
+                return clean_text(
+                    str(
+                        structured.get("market_region")
+                        or ""
+                    )
+                )
+
+            # Compatibility for locked packets whose canonical region is
+            # still exposed only at the outer level.
+            if "target_region" in merged:
+                return clean_text(
+                    str(
+                        merged.get("target_region")
+                        or ""
+                    )
+                )
+
+            if "market_region" in merged:
+                return clean_text(
+                    str(
+                        merged.get("market_region")
+                        or ""
+                    )
+                )
+
+        return clean_text(
+            fallback_region
+            or ""
+        )
+
     def _ensure_archetype_context(
         self,
         context: Dict[str, Any],
@@ -788,6 +1168,10 @@ class LocalMarketSearchService:
         output_language: str = "fr",
     ) -> Dict[str, Any]:
         merged = dict(context or {})
+        region = self._effective_region(
+            merged,
+            region,
+        )
         intelligence = dict(merged.get("project_intelligence") or {})
         packet = dict(
             merged.get("agent_context_packet")
@@ -822,10 +1206,38 @@ class LocalMarketSearchService:
         structured.setdefault("success_metrics", existing.get("success_metrics") or [])
         structured.setdefault("risk_dimensions", existing.get("risk_dimensions") or [])
 
+        locked_structured_projection = bool(
+            merged.get("context_locked") is True
+            or structured.get("context_locked") is True
+        )
+
         packet["archetype_context"] = existing
-        packet.setdefault("structured_project_context", structured)
         intelligence["archetype_context"] = existing
-        intelligence.setdefault("structured_project_context", structured)
+
+        if locked_structured_projection:
+            # The locked top-level structured context is the canonical
+            # local-search projection. Parallel nested surfaces may not
+            # retain competing stale copies.
+            packet[
+                "structured_project_context"
+            ] = structured
+
+            intelligence[
+                "structured_project_context"
+            ] = structured
+        else:
+            # Preserve legacy enrichment semantics for incomplete,
+            # unlocked search contexts.
+            packet.setdefault(
+                "structured_project_context",
+                structured,
+            )
+
+            intelligence.setdefault(
+                "structured_project_context",
+                structured,
+            )
+
         intelligence["agent_context_packet"] = packet
 
         merged["archetype_context"] = existing

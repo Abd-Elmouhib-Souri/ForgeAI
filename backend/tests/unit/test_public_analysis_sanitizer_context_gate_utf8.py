@@ -148,3 +148,191 @@ def test_public_sanitizer_still_hides_technical_keys() -> None:
     assert "debug" not in public_data
     assert "raw_response" not in public_data
     assert public_data["summary"] == "Résumé public"
+
+
+def test_public_sanitizer_preserves_structured_clarification_items_across_domain_guard(
+    monkeypatch,
+) -> None:
+    """
+    clarification_items are a deterministic public authority contract.
+
+    DomainIntegrityGuard may sanitize unrelated business prose, but it must
+    never break the canonical field <-> kind <-> question identity emitted
+    by IdeaReadinessChecker / ContextConfidenceGate.
+    """
+    from copy import deepcopy
+
+    import app.services.public_analysis_sanitizer as sanitizer_module
+
+    clarification_items = [
+        {
+            "field": "priority_workflow",
+            "kind": "missing",
+            "question": (
+                "What end-to-end action must "
+                "the user complete?"
+            ),
+        },
+        {
+            "field": "business_model",
+            "kind": "ambiguous",
+            "question": (
+                "Who will pay and through "
+                "which revenue model?"
+            ),
+        },
+        {
+            "field": "mvp_scope",
+            "kind": "ambiguous",
+            "question": (
+                "What is the exact scope of "
+                "the first testable version?"
+            ),
+        },
+        {
+            "field": "constraints",
+            "kind": "ambiguous",
+            "question": (
+                "Which technical, financial, operational, "
+                "or regulatory constraints are already known?"
+            ),
+        },
+    ]
+
+    clarification_questions = [
+        item["question"]
+        for item in clarification_items
+    ]
+
+    analysis_data = {
+        "output_language": "en",
+        "idea_readiness": {
+            "status": "needs_clarification",
+            "score": 0.35,
+            "ready_for_agents": False,
+            "missing_fields": [
+                "priority_workflow",
+            ],
+            "ambiguous_fields": [
+                "business_model",
+                "mvp_scope",
+                "constraints",
+            ],
+            "blockers": [
+                "priority_workflow",
+            ],
+            "questions": deepcopy(
+                clarification_questions
+            ),
+            "clarification_questions": deepcopy(
+                clarification_questions
+            ),
+            "clarification_items": deepcopy(
+                clarification_items
+            ),
+            "recommendation": (
+                "Complete the missing project context "
+                "before starting the analysis."
+            ),
+        },
+        "context_confidence": {
+            "score": 0.35,
+            "status": "needs_clarification",
+            "missing_fields": [
+                "priority_workflow",
+            ],
+            "ambiguous_fields": [
+                "business_model",
+                "mvp_scope",
+                "constraints",
+            ],
+            "blockers": [
+                "priority_workflow",
+            ],
+            "clarification_questions": deepcopy(
+                clarification_questions
+            ),
+            "ready_for_agents": False,
+        },
+    }
+
+    def force_guard_failure(
+        *,
+        data,
+        project_context,
+    ):
+        return {
+            "is_valid": False,
+        }
+
+    def destructive_guard_sanitizer(
+        *,
+        data,
+        project_context,
+    ):
+        damaged = deepcopy(
+            data
+        )
+
+        items = (
+            damaged
+            .get(
+                "idea_readiness",
+                {},
+            )
+            .get(
+                "clarification_items",
+                [],
+            )
+        )
+
+        assert len(items) == 4
+
+        # Reproduce the exact class of corruption discovered by
+        # Lot 1D.2B runtime integration.
+        items[0]["field"] = ""
+        items[1]["question"] = ""
+        items[2]["question"] = ""
+        items[3]["question"] = ""
+
+        return damaged
+
+    monkeypatch.setattr(
+        sanitizer_module.domain_integrity_guard,
+        "validate_object",
+        force_guard_failure,
+    )
+
+    monkeypatch.setattr(
+        sanitizer_module.domain_integrity_guard,
+        "sanitize_object",
+        destructive_guard_sanitizer,
+    )
+
+    public_data = (
+        sanitizer_module
+        .sanitize_analysis_data_for_public(
+            analysis_data,
+            project_context={
+                "title": "Generic digital service",
+                "description": "A digital service.",
+                "industry": "Digital services",
+                "market_region": "France",
+                "output_language": "en",
+            },
+        )
+    )
+
+    assert public_data is not None
+
+    assert (
+        public_data[
+            "idea_readiness"
+        ][
+            "clarification_items"
+        ]
+        == clarification_items
+    ), (
+        "PUBLIC_SANITIZER_MUTATED_STRUCTURED_"
+        "CLARIFICATION_AUTHORITY"
+    )

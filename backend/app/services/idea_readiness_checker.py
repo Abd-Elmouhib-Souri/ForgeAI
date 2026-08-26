@@ -18,6 +18,9 @@ from app.services.domain_integrity_guard import (
 from app.services.project_context_extractor import (
     project_context_extractor,
 )
+from app.services.clarification_answer_projector import (
+    clarification_answer_projector,
+)
 
 
 class IdeaReadinessChecker:
@@ -53,6 +56,7 @@ class IdeaReadinessChecker:
         output_language: str = "fr",
         project_context: Dict[str, Any] | None = None,
         analysis_data: Dict[str, Any] | None = None,
+        clarification_answers: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         """
         Évalue une idée et retourne un payload compatible Sprint 3.
@@ -75,6 +79,30 @@ class IdeaReadinessChecker:
         analysis_data = dict(
             analysis_data or {}
         )
+
+        # NORMALIZED_EXPLICIT_CLARIFICATION_FACTS
+        # Input hygiene only.
+        # Resolved/unresolved semantic authority remains in
+        # ClarificationAnswerProjector.
+        clarification_answers = {
+            clean_text(
+                raw_field
+            ):
+            clean_text(
+                raw_answer
+            )
+            for raw_field, raw_answer
+            in dict(
+                clarification_answers
+                or {}
+            ).items()
+            if clean_text(
+                raw_field
+            )
+            and clean_text(
+                raw_answer
+            )
+        }
 
         title = clean_text(
             title
@@ -110,12 +138,15 @@ class IdeaReadinessChecker:
             )
         )
 
-        packet = self._existing_packet(
-            title=title,
-            description=description,
-            project_context=project_context,
-            analysis_data=analysis_data,
-        )
+        packet = None
+
+        if not clarification_answers:
+            packet = self._existing_packet(
+                title=title,
+                description=description,
+                project_context=project_context,
+                analysis_data=analysis_data,
+            )
 
         if packet is None:
             packet = (
@@ -130,6 +161,16 @@ class IdeaReadinessChecker:
                         project_context
                     ),
                     analysis_data=analysis_data,
+                )
+            )
+
+        # CLARIFICATION_PROJECTOR_HANDOFF
+        if clarification_answers:
+            packet = (
+                clarification_answer_projector
+                .apply(
+                    packet,
+                    clarification_answers,
                 )
             )
 
@@ -157,6 +198,73 @@ class IdeaReadinessChecker:
             confidence
             .clarification_questions
         )
+
+        # FIELD_BOUND_CLARIFICATION_ITEMS
+        #
+        # ContextConfidenceGate already owns:
+        # - field ordering;
+        # - localized question wording.
+        #
+        # IdeaReadiness only binds identity to presentation.
+        clarification_fields = list(
+            dict.fromkeys(
+                [
+                    *confidence.missing_fields,
+                    *confidence.ambiguous_fields,
+                    *confidence.blockers,
+                ]
+            )
+        )
+
+        # ContextConfidenceGate intentionally limits the human-facing
+        # clarification surface (currently at most ten questions).
+        #
+        # Diagnostics remain complete in missing_fields /
+        # ambiguous_fields / blockers. clarification_items identify only
+        # the questions that the gate actually exposes to the user.
+        clarification_fields = (
+            clarification_fields[
+                :len(
+                    questions
+                )
+            ]
+        )
+
+        missing_keys = set(
+            confidence.missing_fields
+        )
+
+        ambiguous_keys = set(
+            confidence.ambiguous_fields
+        )
+
+        clarification_items = []
+
+        for field, question in zip(
+            clarification_fields,
+            questions,
+        ):
+            if field in missing_keys:
+                kind = "missing"
+
+            elif field in ambiguous_keys:
+                kind = "ambiguous"
+
+            else:
+                kind = "blocking"
+
+            clarification_items.append(
+                {
+                    "field":
+                        field,
+
+                    "kind":
+                        kind,
+
+                    "question":
+                        question,
+                }
+            )
 
         return {
             # Ancienne valeur conservée pour les
@@ -273,6 +381,10 @@ class IdeaReadinessChecker:
                     mode="json"
                 )
             ),
+            "clarification_items": (
+                clarification_items
+            ),
+
         }
 
     def evaluate_packet(

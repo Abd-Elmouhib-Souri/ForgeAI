@@ -393,6 +393,29 @@ class DynamicWebRAGService:
             max_text_chars=5000,
         )
 
+        intelligence = dict(
+            project_context.get("project_intelligence")
+            or {}
+        )
+
+        packet = dict(
+            project_context.get("agent_context_packet")
+            or intelligence.get("agent_context_packet")
+            or {}
+        )
+
+        structured = dict(
+            project_context.get("structured_project_context")
+            or packet.get("structured_project_context")
+            or intelligence.get("structured_project_context")
+            or {}
+        )
+
+        context_locked = bool(
+            project_context.get("context_locked") is True
+            or structured.get("context_locked") is True
+        )
+
         try:
             return await search_service.search_local_market(
                 sector=sector,
@@ -402,6 +425,14 @@ class DynamicWebRAGService:
                 output_language=output_language,
             )
         except TypeError:
+            # Never downgrade a canonical locked request to a legacy
+            # contextless search. Besides losing canonical authority,
+            # doing so could also hide a genuine downstream TypeError.
+            if context_locked:
+                raise
+
+            # Compatibility path for genuinely legacy / incomplete
+            # unlocked callers.
             return await search_service.search_local_market(
                 sector=sector,
                 region=region,

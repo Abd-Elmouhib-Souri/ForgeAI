@@ -80,27 +80,36 @@ def test_nawba_context_extracts_roles_and_real_workflows():
 
     actors = canonical["actors"]
 
-    operational_user = next(
+    supervisor = next(
         actor
         for actor in actors
         if "supervisor"
         in actor["name"].lower()
     )
 
-    assert (
-        "hr assistant"
-        in operational_user["name"].lower()
+    hr_assistant = next(
+        actor
+        for actor in actors
+        if "hr assistant"
+        in actor["name"].lower()
     )
 
-    assert (
-        operational_user["role"]
-        == "user"
-    )
+    # The explicit supervisor-or-HR-assistant relation declares
+    # alternative operational identities. Preserve both identities
+    # instead of requiring one merged actor label.
+    for operational_user in (
+        supervisor,
+        hr_assistant,
+    ):
+        assert (
+            operational_user["role"]
+            == "user"
+        )
 
-    assert (
-        operational_user["is_explicit"]
-        is True
-    )
+        assert (
+            operational_user["is_explicit"]
+            is True
+        )
 
     payer = next(
         actor

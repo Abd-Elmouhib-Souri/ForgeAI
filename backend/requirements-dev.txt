@@ -1,0 +1,11 @@
+﻿# ForgeAI backend development and QA dependencies
+#
+# Runtime dependencies are inherited from requirements.txt.
+#
+# Install:
+# python -m pip install -r requirements-dev.txt
+
+-r requirements.txt
+
+pytest==9.1.1
+pytest-asyncio==1.4.0

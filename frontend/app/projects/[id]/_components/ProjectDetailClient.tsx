@@ -10,6 +10,8 @@ import ForgeAppNavbar from "@/components/forge/ForgeAppNavbar";
 
 import type {
   AnalysisData,
+  ClarificationContextData,
+  ClarificationItem,
   Project,
   ProjectAnalysisResponse,
 } from "../_types/project-detail.types";
@@ -54,7 +56,12 @@ const content = {
     rerunContextCheck: "Relancer la vérification",
     rerunningContextCheck: "Vérification...",
     clarificationReadyHint:
-      "Modifiez la description avec les réponses ci-dessous, puis relancez l’analyse.",
+      "Répondez directement à chaque question. ForgeAI réévalue le contexte sans modifier la description du projet.",
+    clarificationAnswerPlaceholder: "Votre réponse...",
+    saveClarifications: "Enregistrer et revérifier",
+    savingClarifications: "Enregistrement...",
+    clarificationSaved: "Réponses enregistrées. Le contexte a été réévalué.",
+    clarificationSaveError: "Impossible d’enregistrer les précisions.",
     analysisLaunched: "Analyse lancée. ForgeAI prépare le rapport...",
     backProjects: "Retour aux projets",
     report: "Rapport ForgeAI",
@@ -121,7 +128,12 @@ const content = {
     rerunContextCheck: "Rerun context check",
     rerunningContextCheck: "Checking...",
     clarificationReadyHint:
-      "Update the project description with the answers below, then relaunch the analysis.",
+      "Answer each question directly. ForgeAI re-evaluates the context without rewriting the project description.",
+    clarificationAnswerPlaceholder: "Your answer...",
+    saveClarifications: "Save and recheck",
+    savingClarifications: "Saving...",
+    clarificationSaved: "Answers saved. The context has been re-evaluated.",
+    clarificationSaveError: "Unable to save the clarifications.",
     analysisLaunched: "Analysis started. ForgeAI is preparing the report...",
     backProjects: "Back to projects",
     report: "ForgeAI report",
@@ -192,6 +204,7 @@ type ContextReadinessView = {
   ambiguousFields: string[];
   blockers: string[];
   questions: string[];
+  items: ClarificationItem[];
   recommendation: string;
 };
 
@@ -223,6 +236,60 @@ function uniqueTextItems(values: unknown[]): string[] {
       seen.add(key);
       result.push(text);
     }
+  }
+
+  return result;
+}
+
+function clarificationItems(value: unknown): ClarificationItem[] {
+  if (!Array.isArray(value)) return [];
+
+  const seen = new Set<string>();
+  const result: ClarificationItem[] = [];
+
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+
+    const record = item as Record<string, unknown>;
+    const field = String(record.field || "").trim();
+    const question = String(record.question || "").trim();
+    const kind = record.kind;
+
+    if (!field || !question || seen.has(field)) continue;
+
+    if (
+      kind !== "missing" &&
+      kind !== "ambiguous" &&
+      kind !== "blocking"
+    ) {
+      continue;
+    }
+
+    seen.add(field);
+
+    result.push({
+      field,
+      kind,
+      question,
+    });
+  }
+
+  return result;
+}
+
+function clarificationAnswersFromContext(
+  context: ClarificationContextData | null | undefined
+): Record<string, string> {
+  const rawAnswers = context?.answers;
+
+  if (!rawAnswers) return {};
+
+  const result: Record<string, string> = {};
+
+  for (const [field, answer] of Object.entries(rawAnswers)) {
+    if (typeof answer !== "string") continue;
+
+    result[field] = answer;
   }
 
   return result;
@@ -273,6 +340,9 @@ function resolveContextReadiness(
       readiness?.clarification_questions,
       confidence?.clarification_questions,
     ]),
+    items: clarificationItems(
+      readiness?.clarification_items
+    ),
     recommendation: String(readiness?.recommendation || "").trim(),
   };
 }
@@ -340,16 +410,22 @@ function fieldLabel(field: string, language: "fr" | "en"): string {
 function ContextClarificationPanel({
   language,
   readiness,
+  answers,
   editHref,
-  isStartingAnalysis,
-  onStartAnalysis,
+  isSaving,
+  message,
+  onAnswerChange,
+  onSave,
   copy,
 }: {
   language: "fr" | "en";
   readiness: ContextReadinessView;
+  answers: Record<string, string>;
   editHref: string;
-  isStartingAnalysis: boolean;
-  onStartAnalysis: () => void;
+  isSaving: boolean;
+  message: string;
+  onAnswerChange: (field: string, value: string) => void;
+  onSave: () => void;
   copy: {
     title: string;
     intro: string;
@@ -358,9 +434,10 @@ function ContextClarificationPanel({
     missingFields: string;
     ambiguousFields: string;
     questions: string;
+    answerPlaceholder: string;
     editProject: string;
-    rerun: string;
-    rerunning: string;
+    save: string;
+    saving: string;
     hint: string;
   };
 }) {
@@ -409,6 +486,7 @@ function ContextClarificationPanel({
             <p className="text-xs font-black uppercase tracking-wide text-slate-400">
               {copy.contextScore}
             </p>
+
             <p className="mt-1 text-3xl font-black text-amber-700">
               {scorePercent === null ? "—" : `${scorePercent}%`}
             </p>
@@ -428,48 +506,100 @@ function ContextClarificationPanel({
             {groups.map((group) => (
               <div
                 key={group.title}
-                className={`rounded-3xl border p-5 ${group.className}`}
+                className={`rounded-2xl border p-4 ${group.className}`}
               >
-                <p className="text-sm font-black">{group.title}</p>
+                <p className="text-xs font-black uppercase tracking-wide">
+                  {group.title}
+                </p>
 
-                <ul className="mt-3 space-y-2 text-sm font-semibold">
+                <div className="mt-3 flex flex-wrap gap-2">
                   {group.fields.map((field) => (
-                    <li key={field} className="flex gap-2">
-                      <span aria-hidden="true">•</span>
-                      <span>{fieldLabel(field, language)}</span>
-                    </li>
+                    <span
+                      key={field}
+                      className="rounded-full border border-current/20 bg-white/70 px-3 py-1 text-xs font-bold"
+                    >
+                      {fieldLabel(field, language)}
+                    </span>
                   ))}
-                </ul>
+                </div>
               </div>
             ))}
           </div>
         )}
 
-        {readiness.questions.length > 0 && (
-          <div>
-            <h3 className="text-lg font-black text-slate-950">
+        {readiness.items.length > 0 ? (
+          <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
+            <p className="text-xs font-black uppercase tracking-wide text-slate-500">
               {copy.questions}
-            </h3>
+            </p>
 
-            <ol className="mt-4 grid gap-3 md:grid-cols-2">
-              {readiness.questions.map((question, index) => (
-                <li
-                  key={`${question}-${index}`}
-                  className="rounded-3xl border border-slate-200 bg-slate-50/80 p-5"
+            <div className="mt-4 space-y-4">
+              {readiness.items.map((item, index) => (
+                <label
+                  key={item.field}
+                  className="block rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
                 >
-                  <div className="flex gap-3">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-950 text-xs font-black text-white">
+                  <span className="flex items-start gap-3">
+                    <span className="inline-flex h-7 min-w-7 items-center justify-center rounded-full bg-slate-950 px-2 text-xs font-black text-white">
                       {index + 1}
                     </span>
 
+                    <span className="min-w-0">
+                      <span className="block text-xs font-black uppercase tracking-wide text-slate-400">
+                        {fieldLabel(item.field, language)}
+                      </span>
+
+                      <span className="mt-1 block text-sm font-semibold leading-6 text-slate-800">
+                        {cleanText(item.question, language)}
+                      </span>
+                    </span>
+                  </span>
+
+                  <textarea
+                    name={`clarification-${item.field}`}
+                    value={answers[item.field] ?? ""}
+                    onChange={(event) =>
+                      onAnswerChange(
+                        item.field,
+                        event.target.value
+                      )
+                    }
+                    maxLength={4000}
+                    rows={3}
+                    placeholder={copy.answerPlaceholder}
+                    className="mt-4 w-full resize-y rounded-2xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold leading-6 text-slate-800 outline-none transition placeholder:text-slate-400 focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                  />
+                </label>
+              ))}
+            </div>
+          </div>
+        ) : (
+          readiness.questions.length > 0 && (
+            <div className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
+              <p className="text-xs font-black uppercase tracking-wide text-slate-500">
+                {copy.questions}
+              </p>
+
+              <ol className="mt-4 space-y-3">
+                {readiness.questions.map((question, index) => (
+                  <li
+                    key={`${question}-${index}`}
+                    className="rounded-2xl border border-slate-200 bg-white p-4"
+                  >
                     <p className="text-sm font-semibold leading-6 text-slate-700">
                       {cleanText(question, language)}
                     </p>
-                  </div>
-                </li>
-              ))}
-            </ol>
-          </div>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          )
+        )}
+
+        {message && (
+          <p className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm font-bold text-emerald-800">
+            {cleanText(message, language)}
+          </p>
         )}
 
         <div className="flex flex-col gap-4 rounded-3xl border border-slate-200 bg-slate-50 p-5 md:flex-row md:items-center md:justify-between">
@@ -480,18 +610,21 @@ function ContextClarificationPanel({
           <div className="flex flex-col gap-3 sm:flex-row">
             <Link
               href={editHref}
-              className="inline-flex items-center justify-center rounded-2xl bg-slate-950 px-5 py-3 text-sm font-black text-white transition hover:bg-slate-800"
+              className="inline-flex items-center justify-center rounded-2xl border border-slate-300 bg-white px-5 py-3 text-sm font-black text-slate-800 transition hover:border-slate-400"
             >
               {copy.editProject}
             </Link>
 
             <button
               type="button"
-              onClick={onStartAnalysis}
-              disabled={isStartingAnalysis}
-              className="inline-flex items-center justify-center rounded-2xl border border-slate-300 bg-white px-5 py-3 text-sm font-black text-slate-800 transition hover:border-sky-300 hover:text-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={onSave}
+              disabled={
+                isSaving ||
+                readiness.items.length === 0
+              }
+              className="inline-flex items-center justify-center rounded-2xl bg-slate-950 px-5 py-3 text-sm font-black text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {isStartingAnalysis ? copy.rerunning : copy.rerun}
+              {isSaving ? copy.saving : copy.save}
             </button>
           </div>
         </div>
@@ -515,6 +648,22 @@ export default function ProjectDetailClient() {
   const [isStartingAnalysis, setIsStartingAnalysis] = useState(false);
   const [error, setError] = useState("");
   const [analysisMessage, setAnalysisMessage] = useState("");
+  const [clarificationDraft, setClarificationDraft] = useState<{
+    projectId: string;
+    answers: Record<string, string>;
+  }>({
+    projectId: "",
+    answers: {},
+  });
+  const [isSavingClarifications, setIsSavingClarifications] =
+    useState(false);
+  const [clarificationNotice, setClarificationNotice] = useState<{
+    projectId: string;
+    message: string;
+  }>({
+    projectId: "",
+    message: "",
+  });
   const analysisRequestInFlight = useRef(false);
   const activeAnalysisRunId = useRef<string | null>(null);
   const analysisStatusRef = useRef<string | null>(null);
@@ -541,6 +690,7 @@ export default function ProjectDetailClient() {
 
       setAnalysis({
         project_id: loadedProject.id,
+        clarification_context: loadedProject.clarification_context || null,
         analysis_status: loadedProject.analysis_status || "not_started",
         analysis_step: loadedProject.analysis_step || "idle",
         analysis_progress: loadedProject.analysis_progress ?? 0,
@@ -648,6 +798,7 @@ export default function ProjectDetailClient() {
 
         setAnalysis({
           project_id: loadedProject.id,
+        clarification_context: loadedProject.clarification_context || null,
           analysis_status: loadedStatus,
           analysis_step:
             loadedProject.analysis_step ||
@@ -857,7 +1008,7 @@ export default function ProjectDetailClient() {
               href="/projects"
               className="mt-4 inline-block text-sm font-black text-sky-600 hover:underline"
             >
-              â† {t.backProjects}
+              ← {t.backProjects}
             </Link>
           </div>
         </section>
@@ -884,6 +1035,111 @@ export default function ProjectDetailClient() {
   const analysisIsRunning = isActiveAnalysisStatus(currentStatus);
 
   const contextReadiness = resolveContextReadiness(analysisData);
+
+  const persistedClarificationAnswers =
+    clarificationAnswersFromContext(
+      analysis?.clarification_context ||
+        project?.clarification_context ||
+        null
+    );
+
+  const clarificationAnswers =
+    clarificationDraft.projectId === id
+      ? {
+          ...persistedClarificationAnswers,
+          ...clarificationDraft.answers,
+        }
+      : persistedClarificationAnswers;
+
+  const clarificationMessage =
+    clarificationNotice.projectId === id
+      ? clarificationNotice.message
+      : "";
+
+  function handleClarificationAnswerChange(
+    field: string,
+    value: string
+  ) {
+    setClarificationNotice({
+      projectId: id,
+      message: "",
+    });
+
+    setClarificationDraft((previous) => {
+      const previousAnswers =
+        previous.projectId === id
+          ? previous.answers
+          : {};
+
+      return {
+        projectId: id,
+        answers: {
+          ...previousAnswers,
+          [field]: value,
+        },
+      };
+    });
+  }
+
+  async function handleSaveClarifications() {
+    if (contextReadiness.items.length === 0) return;
+
+    const answers: Record<string, string> =
+      Object.fromEntries(
+        contextReadiness.items.map((item) => [
+          item.field,
+          clarificationAnswers[item.field] ?? "",
+        ])
+      );
+
+    try {
+      setError("");
+      setAnalysisMessage("");
+
+      setClarificationNotice({
+        projectId: id,
+        message: "",
+      });
+
+      setIsSavingClarifications(true);
+
+      const res = await api.patch<ProjectAnalysisResponse>(
+        `/projects/${id}/clarifications`,
+        { answers }
+      );
+
+      // The server response is authoritative.
+      // Drop only the local unsaved overlay after persistence.
+      setClarificationDraft({
+        projectId: id,
+        answers: {},
+      });
+
+      setAnalysis(res.data);
+
+      activeAnalysisRunId.current =
+        res.data.analysis_run_id || null;
+
+      setClarificationNotice({
+        projectId: id,
+        message: t.clarificationSaved,
+      });
+
+      // Refresh the public Project projection after server-owned
+      // readiness revalidation. The frontend never recomputes
+      // canonical project facts or readiness.
+      await fetchProject();
+    } catch (err) {
+      setError(
+        getErrorMessage(
+          err,
+          t.clarificationSaveError
+        )
+      );
+    } finally {
+      setIsSavingClarifications(false);
+    }
+  }
 
   const needsClarification =
     currentStatus === "needs_clarification" ||
@@ -959,9 +1215,12 @@ export default function ProjectDetailClient() {
           <ContextClarificationPanel
             language={reportLanguage}
             readiness={contextReadiness}
+            answers={clarificationAnswers}
             editHref={`/projects/${id}/edit`}
-            isStartingAnalysis={isStartingAnalysis}
-            onStartAnalysis={handleStartAnalysis}
+            isSaving={isSavingClarifications}
+            message={clarificationMessage}
+            onAnswerChange={handleClarificationAnswerChange}
+            onSave={() => void handleSaveClarifications()}
             copy={{
               title: t.clarificationTitle,
               intro: t.clarificationIntro,
@@ -970,9 +1229,10 @@ export default function ProjectDetailClient() {
               missingFields: t.missingFields,
               ambiguousFields: t.ambiguousFields,
               questions: t.clarificationQuestions,
+              answerPlaceholder: t.clarificationAnswerPlaceholder,
               editProject: t.editProject,
-              rerun: t.rerunContextCheck,
-              rerunning: t.rerunningContextCheck,
+              save: t.saveClarifications,
+              saving: t.savingClarifications,
               hint: t.clarificationReadyHint,
             }}
           />

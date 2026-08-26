@@ -176,6 +176,7 @@ PUBLIC_CONTEXT_GATE_SECTION_FIELDS = {
         "blockers",
         "questions",
         "clarification_questions",
+        "clarification_items",
         "recommendation",
         "reasons",
         "output_language",

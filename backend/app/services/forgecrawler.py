@@ -335,10 +335,15 @@ class ForgeCrawler:
             query_planner=query_planner,
         )
 
+        effective_region = self._effective_region(
+            context,
+            clean_region,
+        )
+
         queries = self._build_queries(
             idea=idea,
             industry=industry,
-            region=clean_region,
+            region=effective_region,
             project_context=context,
         )
 
@@ -347,7 +352,7 @@ class ForgeCrawler:
 
         logger.info(
             "[ForgeCrawler] Start strict gate | region=%s | queries=%s",
-            clean_region,
+            effective_region,
             queries,
         )
 
@@ -665,7 +670,7 @@ class ForgeCrawler:
             "format": "forgecrawler_v8_canonical_source_intelligence",
             "query": queries[0] if queries else "",
             "queries": queries,
-            "target_region": clean_region,
+            "target_region": effective_region,
             "status": status,
             "confidence_level": confidence_level,
             "evidence_confidence": evidence_confidence,
@@ -1141,6 +1146,11 @@ class ForgeCrawler:
         A query must contain at least one business-specific term that is not
         merely the project name, region, or a generic product word.
         """
+
+        region = self._effective_region(
+            project_context,
+            region,
+        )
 
         query_planner = (
             project_context.get("query_planner")
@@ -1657,6 +1667,76 @@ class ForgeCrawler:
     # Context builder
     # ========================================================
 
+    def _effective_region(
+        self,
+        context: Optional[Dict[str, Any]],
+        fallback_region: str,
+    ) -> str:
+        """Resolve search geography without reauthoring locked context.
+
+        Canonical structured region keys are authoritative by key
+        presence, including an explicitly empty value. The downstream
+        caller region is only a compatibility fallback when no locked
+        canonical region key exists.
+        """
+        merged = dict(
+            context
+            or {}
+        )
+
+        intelligence = dict(
+            merged.get("project_intelligence")
+            or {}
+        )
+
+        packet = dict(
+            merged.get("agent_context_packet")
+            or intelligence.get("agent_context_packet")
+            or {}
+        )
+
+        structured = dict(
+            merged.get("structured_project_context")
+            or packet.get("structured_project_context")
+            or intelligence.get("structured_project_context")
+            or {}
+        )
+
+        locked = bool(
+            merged.get("context_locked") is True
+            or structured.get("context_locked") is True
+        )
+
+        if locked:
+            if "target_region" in structured:
+                return str(
+                    structured.get("target_region")
+                    or ""
+                ).strip()
+
+            if "market_region" in structured:
+                return str(
+                    structured.get("market_region")
+                    or ""
+                ).strip()
+
+            if "target_region" in merged:
+                return str(
+                    merged.get("target_region")
+                    or ""
+                ).strip()
+
+            if "market_region" in merged:
+                return str(
+                    merged.get("market_region")
+                    or ""
+                ).strip()
+
+        return str(
+            fallback_region
+            or ""
+        ).strip()
+
     def _build_project_context(
         self,
         *,
@@ -1691,17 +1771,61 @@ class ForgeCrawler:
         if query_planner:
             base["query_planner"] = query_planner
 
+        effective_region = self._effective_region(
+            base,
+            region,
+        )
+
+        intelligence = dict(
+            base.get("project_intelligence")
+            or {}
+        )
+
+        packet = dict(
+            base.get("agent_context_packet")
+            or intelligence.get("agent_context_packet")
+            or {}
+        )
+
+        structured = dict(
+            base.get("structured_project_context")
+            or packet.get("structured_project_context")
+            or intelligence.get("structured_project_context")
+            or {}
+        )
+
+        locked_region_projection = bool(
+            base.get("context_locked") is True
+            or structured.get("context_locked") is True
+        )
+
         base.setdefault("description", idea)
         base.setdefault("industry", industry)
-        base.setdefault("market_region", region)
-        base.setdefault("target_region", region)
+
+        if locked_region_projection:
+            # Keep the public/convenience aliases aligned with the
+            # canonical structured region authority, including "".
+            base["market_region"] = effective_region
+            base["target_region"] = effective_region
+        else:
+            # Compatibility behavior for incomplete legacy packets.
+            base.setdefault(
+                "market_region",
+                effective_region,
+            )
+
+            base.setdefault(
+                "target_region",
+                effective_region,
+            )
+
         base.setdefault("context_locked", True)
 
         if not base.get("strong_keywords"):
             base["strong_keywords"] = self._fallback_strong_terms(
                 idea=idea,
                 industry=industry,
-                region=region,
+                region=effective_region,
             )
 
         if not base.get("must_match_terms"):

@@ -17,6 +17,7 @@ from app.schemas.project import (
     ProjectResponse,
     ProjectUpdate,
 )
+from app.schemas.project import ProjectClarificationUpdate
 from app.security import get_current_user
 from app.services.domain_integrity_guard import normalize_output_language
 from app.services.idea_readiness_checker import idea_readiness_checker
@@ -1106,6 +1107,11 @@ def project_to_public_response(project: Project) -> dict:
         "analysis_attempt": project.analysis_attempt,
         "created_at": project.created_at,
         "updated_at": project.updated_at,
+        "clarification_context": getattr(
+            project,
+            "clarification_context",
+            None,
+        ),
     }
 
 
@@ -1150,6 +1156,11 @@ def analysis_to_public_response(project: Project) -> dict:
         "analysis_run_id": project.analysis_run_id,
         "analysis_heartbeat_at": project.analysis_heartbeat_at,
         "analysis_attempt": project.analysis_attempt,
+        "clarification_context": getattr(
+            project,
+            "clarification_context",
+            None,
+        ),
     }
 
 
@@ -1399,6 +1410,34 @@ async def run_project_analysis_background(project_id: int, run_id: str) -> None:
             # ------------------------------------------------------------
             # Aucun agent, aucune recherche web et aucun Debate Room ne doit
             # démarrer avant cette décision.
+            # DURABLE_CLARIFICATION_PREFLIGHT
+            clarification_context = getattr(
+                project,
+                "clarification_context",
+                None,
+            )
+
+            clarification_answers = {}
+
+            if isinstance(
+                clarification_context,
+                dict,
+            ):
+                stored_answers = (
+                    clarification_context.get(
+                        "answers"
+                    )
+                    or {}
+                )
+
+                if isinstance(
+                    stored_answers,
+                    dict,
+                ):
+                    clarification_answers = dict(
+                        stored_answers
+                    )
+
             idea_readiness = idea_readiness_checker.evaluate(
                 title=agent_input["title"],
                 description=agent_input["description"],
@@ -1406,6 +1445,7 @@ async def run_project_analysis_background(project_id: int, run_id: str) -> None:
                 target_region=market_region,
                 output_language=output_language,
                 analysis_data={},
+                clarification_answers=clarification_answers,
             )
 
             readiness_analysis_data = _build_readiness_analysis_data(
@@ -2055,8 +2095,47 @@ async def update_project(
         update_data,
     )
 
+    # CLARIFICATION_CONTEXT_CHANGE_FIELDS
+    #
+    # These fields change the semantic facts to which clarification
+    # answers belong. output_language intentionally does not.
+    clarification_context_fields = {
+        "title",
+        "description",
+        "industry",
+        "market_region",
+    }
+
+    clarification_context_changed = any(
+        (
+            field_name
+            in update_data
+        )
+        and (
+            _normalize_context_value(
+                field_name,
+                getattr(
+                    project,
+                    field_name,
+                    None,
+                ),
+            )
+            != _normalize_context_value(
+                field_name,
+                update_data.get(
+                    field_name
+                ),
+            )
+        )
+        for field_name
+        in clarification_context_fields
+    )
+
     for field, value in update_data.items():
         setattr(project, field, value)
+
+    if clarification_context_changed:
+        project.clarification_context = None
 
     if analysis_context_changed:
         _invalidate_analysis_after_context_change(
@@ -2067,6 +2146,216 @@ async def update_project(
     await db.refresh(project)
 
     return project_to_public_response(project)
+
+@router.patch(
+    "/{project_id}/clarifications",
+    response_model=ProjectAnalysisResponse,
+)
+async def update_project_clarifications(
+    project_id: int,
+    clarification_in: ProjectClarificationUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Persist explicit field-bound user facts and rerun readiness only.
+
+    This endpoint does not launch agents and does not increment
+    analysis_attempt.
+    """
+    project = await get_project_or_404(
+        project_id,
+        db,
+        current_user,
+    )
+
+    if project.analysis_status in {
+        "queued",
+        "running",
+    }:
+        raise HTTPException(
+            status_code=(
+                status.HTTP_409_CONFLICT
+            ),
+            detail=(
+                "Clarifications cannot be modified "
+                "while an analysis is running."
+            ),
+        )
+
+    existing_context = getattr(
+        project,
+        "clarification_context",
+        None,
+    )
+
+    merged_answers = {}
+
+    if isinstance(
+        existing_context,
+        dict,
+    ):
+        existing_answers = (
+            existing_context.get(
+                "answers"
+            )
+            or {}
+        )
+
+        if isinstance(
+            existing_answers,
+            dict,
+        ):
+            merged_answers = {
+                str(
+                    field
+                ):
+                str(
+                    answer
+                )
+                for field, answer
+                in existing_answers.items()
+                if str(
+                    field
+                ).strip()
+                and str(
+                    answer
+                ).strip()
+            }
+
+    for field, answer in (
+        clarification_in
+        .answers
+        .items()
+    ):
+        if answer:
+            merged_answers[
+                field
+            ] = answer
+        else:
+            merged_answers.pop(
+                field,
+                None,
+            )
+
+    if len(
+        merged_answers
+    ) > 64:
+        raise HTTPException(
+            status_code=(
+                status.HTTP_422_UNPROCESSABLE_ENTITY
+            ),
+            detail=(
+                "At most 64 durable clarification "
+                "answers may be stored."
+            ),
+        )
+
+    project.clarification_context = {
+        "schema_version":
+            "clarification_context_v1",
+
+        "answers":
+            merged_answers,
+    }
+
+    output_language = (
+        normalize_output_language(
+            getattr(
+                project,
+                "output_language",
+                "fr",
+            )
+        )
+    )
+
+    market_region = (
+        normalize_market_region(
+            project.market_region
+        )
+    )
+
+    idea_readiness = (
+        idea_readiness_checker
+        .evaluate(
+            title=(
+                project.title
+                or ""
+            ),
+            description=(
+                project.description
+                or ""
+            ),
+            industry=(
+                project.industry
+                or ""
+            ),
+            target_region=(
+                market_region
+            ),
+            output_language=(
+                output_language
+            ),
+            analysis_data={},
+            clarification_answers=(
+                merged_answers
+            ),
+        )
+    )
+
+    readiness_analysis_data = (
+        _build_readiness_analysis_data(
+            idea_readiness
+        )
+    )
+
+    # The previous report was computed without the newly saved explicit
+    # user facts, so it is no longer authoritative.
+    project.startup_score = None
+    project.analysis_data = (
+        readiness_analysis_data
+    )
+    project.analysis_error = None
+    project.analysis_run_id = None
+    project.analysis_started_at = None
+    project.analysis_completed_at = None
+    project.analysis_heartbeat_at = None
+
+    if idea_readiness.get(
+        "ready_for_agents",
+        False,
+    ):
+        project.analysis_status = (
+            "not_started"
+        )
+        project.analysis_step = (
+            "Context validated"
+            if output_language
+            == "en"
+            else "Contexte valide"
+        )
+        project.analysis_progress = 0
+
+    else:
+        project.analysis_status = (
+            "needs_clarification"
+        )
+        project.analysis_step = (
+            _clarification_step(
+                output_language
+            )
+        )
+        project.analysis_progress = 10
+
+    await db.commit()
+    await db.refresh(
+        project
+    )
+
+    return analysis_to_public_response(
+        project
+    )
+
 
 @router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_project(

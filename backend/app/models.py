@@ -196,6 +196,15 @@ class Project(Base):
         nullable=True,
     )
 
+    # Durable explicit user facts collected by the context
+    # clarification workflow.
+    #
+    # Unlike analysis_data, this field survives analysis runs.
+    clarification_context: Mapped[Optional[dict]] = mapped_column(
+        JSON,
+        nullable=True,
+    )
+
     analysis_error: Mapped[Optional[str]] = mapped_column(
         Text,
         nullable=True,

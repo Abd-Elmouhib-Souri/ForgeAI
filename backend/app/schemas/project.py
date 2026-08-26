@@ -49,6 +49,94 @@ class ProjectUpdate(BaseModel):
         return normalize_output_language(value)
 
 
+class ProjectClarificationUpdate(BaseModel):
+    """
+    Durable answers keyed by canonical clarification field.
+
+    An empty answer means remove the previously stored answer for that
+    field. Question text is never used as persistence identity.
+    """
+
+    answers: Dict[str, str]
+
+    @field_validator("answers")
+    @classmethod
+    def validate_answers(
+        cls,
+        value: Dict[str, str],
+    ) -> Dict[str, str]:
+        answers = dict(
+            value
+            or {}
+        )
+
+        if len(
+            answers
+        ) > 64:
+            raise ValueError(
+                "At most 64 clarification answers "
+                "may be submitted at once."
+            )
+
+        normalized: Dict[str, str] = {}
+
+        for raw_field, raw_answer in (
+            answers.items()
+        ):
+            field = str(
+                raw_field
+                or ""
+            ).strip()
+
+            answer = str(
+                raw_answer
+                or ""
+            ).strip()
+
+            if not field:
+                raise ValueError(
+                    "Clarification field must not "
+                    "be empty."
+                )
+
+            if len(
+                field
+            ) > 120:
+                raise ValueError(
+                    "Clarification field is too long."
+                )
+
+            if (
+                not field.isascii()
+                or not field[
+                    0
+                ].isalpha()
+                or field.lower()
+                != field
+                or not field.replace(
+                    "_",
+                    "",
+                ).isalnum()
+            ):
+                raise ValueError(
+                    "Clarification field must be a "
+                    "canonical lowercase identifier."
+                )
+
+            if len(
+                answer
+            ) > 4000:
+                raise ValueError(
+                    "Clarification answer is too long."
+                )
+
+            normalized[
+                field
+            ] = answer
+
+        return normalized
+
+
 class ProjectResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -68,6 +156,7 @@ class ProjectResponse(BaseModel):
     analysis_step: str = "idle"
     analysis_progress: int = 0
     analysis_data: Optional[Dict[str, Any]] = None
+    clarification_context: Optional[Dict[str, Any]] = None
     analysis_error: Optional[str] = None
     analysis_started_at: Optional[datetime] = None
     analysis_completed_at: Optional[datetime] = None
@@ -79,6 +168,7 @@ class ProjectAnalysisResponse(BaseModel):
     analysis_step: str = "idle"
     analysis_progress: int = 0
     analysis_data: Optional[Dict[str, Any]] = None
+    clarification_context: Optional[Dict[str, Any]] = None
     analysis_error: Optional[str] = None
     analysis_started_at: Optional[datetime] = None
     analysis_completed_at: Optional[datetime] = None
