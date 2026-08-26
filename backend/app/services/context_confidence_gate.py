@@ -15,6 +15,9 @@ from app.schemas.analysis_context import (
     comparison_key,
     unique_texts,
 )
+from app.services.clarification_answer_projector import (
+    clarification_answer_projector,
+)
 
 
 @dataclass(frozen=True)
@@ -405,6 +408,90 @@ class ContextConfidenceGate:
     ) -> None:
         self.policy = policy or ContextGatePolicy()
 
+    def _explicit_clarification_resolution(
+        self,
+        packet: ProjectContextPacketV3,
+        requirement: str,
+    ) -> bool | None:
+        """
+        Return the authoritative resolution of an explicit field-bound
+        clarification, or None when no explicit clarification exists.
+
+        Resolution semantics remain owned by _requirement_is_present(),
+        which delegates resolved/unresolved classification to
+        ClarificationAnswerProjector.
+        """
+        clarification_fact = clean_text(
+            (
+                getattr(
+                    packet,
+                    "clarification_facts",
+                    {},
+                )
+                or {}
+            ).get(
+                requirement
+            )
+        )
+
+        if not clarification_fact:
+            return None
+
+        return self._requirement_is_present(
+            packet,
+            requirement,
+        )
+
+    def _quality_with_explicit_clarification(
+        self,
+        *,
+        packet: ProjectContextPacketV3,
+        requirement: str,
+        structural_quality: float,
+    ) -> float:
+        """
+        Explicit user facts override inferred structural quality only when
+        that exact canonical field was explicitly answered.
+        """
+        resolution = (
+            self._explicit_clarification_resolution(
+                packet,
+                requirement,
+            )
+        )
+
+        if resolution is None:
+            return structural_quality
+
+        return (
+            1.0
+            if resolution
+            else 0.0
+        )
+
+    def _presence_with_explicit_clarification(
+        self,
+        *,
+        packet: ProjectContextPacketV3,
+        requirement: str,
+        structural_present: bool,
+    ) -> bool:
+        """
+        Preserve existing structural evaluation when there is no answer;
+        otherwise consume the exact field-bound explicit user authority.
+        """
+        resolution = (
+            self._explicit_clarification_resolution(
+                packet,
+                requirement,
+            )
+        )
+
+        if resolution is None:
+            return structural_present
+
+        return resolution
+
     def evaluate(
         self,
         packet: ProjectContextPacketV3,
@@ -424,8 +511,16 @@ class ContextConfidenceGate:
         # Problème
         # --------------------------------------------------------------
 
-        problem_quality = self._problem_quality(
-            packet
+        problem_quality = (
+            self._quality_with_explicit_clarification(
+                packet=packet,
+                requirement="problem",
+                structural_quality=(
+                    self._problem_quality(
+                        packet
+                    )
+                ),
+            )
         )
 
         field_scores["problem"] = (
@@ -449,8 +544,16 @@ class ContextConfidenceGate:
         # Solution
         # --------------------------------------------------------------
 
-        solution_quality = self._solution_quality(
-            packet
+        solution_quality = (
+            self._quality_with_explicit_clarification(
+                packet=packet,
+                requirement="solution",
+                structural_quality=(
+                    self._solution_quality(
+                        packet
+                    )
+                ),
+            )
         )
 
         field_scores["solution"] = (
@@ -474,8 +577,16 @@ class ContextConfidenceGate:
         # Acteurs
         # --------------------------------------------------------------
 
-        actors_quality = self._actors_quality(
-            packet.actors
+        actors_quality = (
+            self._quality_with_explicit_clarification(
+                packet=packet,
+                requirement="actors",
+                structural_quality=(
+                    self._actors_quality(
+                        packet.actors
+                    )
+                ),
+            )
         )
 
         field_scores["actors"] = (
@@ -499,9 +610,17 @@ class ContextConfidenceGate:
         # Workflow
         # --------------------------------------------------------------
 
-        workflow_quality = self._workflow_quality(
-            packet.priority_workflows,
-            packet.mvp_scope,
+        workflow_quality = (
+            self._quality_with_explicit_clarification(
+                packet=packet,
+                requirement="priority_workflow",
+                structural_quality=(
+                    self._workflow_quality(
+                        packet.priority_workflows,
+                        packet.mvp_scope,
+                    )
+                ),
+            )
         )
 
         field_scores["priority_workflow"] = (
@@ -525,9 +644,15 @@ class ContextConfidenceGate:
         # Nom
         # --------------------------------------------------------------
 
-        project_name_present = bool(
-            clean_text(
-                packet.project_name
+        project_name_present = (
+            self._presence_with_explicit_clarification(
+                packet=packet,
+                requirement="project_name",
+                structural_present=bool(
+                    clean_text(
+                        packet.project_name
+                    )
+                ),
             )
         )
 
@@ -546,9 +671,15 @@ class ContextConfidenceGate:
         # Région
         # --------------------------------------------------------------
 
-        target_region_present = bool(
-            clean_text(
-                packet.target_region
+        target_region_present = (
+            self._presence_with_explicit_clarification(
+                packet=packet,
+                requirement="target_region",
+                structural_present=bool(
+                    clean_text(
+                        packet.target_region
+                    )
+                ),
             )
         )
 
@@ -568,8 +699,14 @@ class ContextConfidenceGate:
         # --------------------------------------------------------------
 
         archetype_specific = (
-            self._has_specific_archetype(
-                packet
+            self._presence_with_explicit_clarification(
+                packet=packet,
+                requirement="project_archetype",
+                structural_present=(
+                    self._has_specific_archetype(
+                        packet
+                    )
+                ),
             )
         )
 
@@ -589,8 +726,14 @@ class ContextConfidenceGate:
         # --------------------------------------------------------------
 
         explicit_business_model = (
-            self._has_explicit_business_model(
-                packet
+            self._presence_with_explicit_clarification(
+                packet=packet,
+                requirement="business_model",
+                structural_present=(
+                    self._has_explicit_business_model(
+                        packet
+                    )
+                ),
             )
         )
 
@@ -614,8 +757,14 @@ class ContextConfidenceGate:
         # Périmètre MVP
         # --------------------------------------------------------------
 
-        mvp_scope_present = bool(
-            packet.mvp_scope
+        mvp_scope_present = (
+            self._presence_with_explicit_clarification(
+                packet=packet,
+                requirement="mvp_scope",
+                structural_present=bool(
+                    packet.mvp_scope
+                ),
+            )
         )
 
         field_scores["mvp_scope"] = (
@@ -633,8 +782,14 @@ class ContextConfidenceGate:
         # Contraintes
         # --------------------------------------------------------------
 
-        constraints_present = bool(
-            packet.constraints
+        constraints_present = (
+            self._presence_with_explicit_clarification(
+                packet=packet,
+                requirement="constraints",
+                structural_present=bool(
+                    packet.constraints
+                ),
+            )
         )
 
         field_scores["constraints"] = (
@@ -652,8 +807,14 @@ class ContextConfidenceGate:
         # Métriques de succès
         # --------------------------------------------------------------
 
-        success_metrics_present = bool(
-            packet.success_metrics
+        success_metrics_present = (
+            self._presence_with_explicit_clarification(
+                packet=packet,
+                requirement="success_metrics",
+                structural_present=bool(
+                    packet.success_metrics
+                ),
+            )
         )
 
         field_scores["success_metrics"] = (
@@ -1195,6 +1356,70 @@ class ContextConfidenceGate:
         """
         Résout une exigence universelle à partir du packet canonique.
         """
+
+        # Explicit field-bound clarification has authority over
+        # inference. Resolved/unresolved classification itself belongs
+        # exclusively to ClarificationAnswerProjector.
+        # U7-A canonical requirement field authority.
+        #
+        # Structured canonical facts are authoritative when present.
+        # Historical inference remains below as compatibility fallback.
+        canonical_requirement_fields = {
+            "input_data",
+            "output_decision",
+            "human_oversight",
+            "maintenance_model",
+        }
+
+        if requirement in canonical_requirement_fields:
+            canonical_value = getattr(
+                packet,
+                requirement,
+                None,
+            )
+
+            if isinstance(
+                canonical_value,
+                str,
+            ):
+                if canonical_value.strip():
+                    return True
+
+            elif isinstance(
+                canonical_value,
+                (
+                    list,
+                    tuple,
+                    set,
+                ),
+            ):
+                if any(
+                    str(item).strip()
+                    for item in canonical_value
+                    if item is not None
+                ):
+                    return True
+
+        clarification_fact = clean_text(
+            (
+                getattr(
+                    packet,
+                    "clarification_facts",
+                    {},
+                )
+                or {}
+            ).get(
+                requirement
+            )
+        )
+
+        if clarification_fact:
+            return (
+                clarification_answer_projector
+                .is_resolved(
+                    clarification_fact
+                )
+            )
         transaction = packet.transaction_unit
         workflow = packet.primary_workflow
 

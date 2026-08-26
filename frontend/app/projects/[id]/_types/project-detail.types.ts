@@ -39,6 +39,22 @@ export interface IdeaReadinessChecklistItem {
   required?: boolean;
 }
 
+export type ClarificationKind =
+  | "missing"
+  | "ambiguous"
+  | "blocking";
+
+export interface ClarificationItem {
+  field: string;
+  kind: ClarificationKind;
+  question: string;
+}
+
+export interface ClarificationContextData {
+  schema_version?: string;
+  answers?: Record<string, string>;
+}
+
 export interface IdeaReadinessData {
   format?: string;
   canonical_format?: string;
@@ -54,6 +70,7 @@ export interface IdeaReadinessData {
   assumptions?: string[];
   questions?: string[];
   clarification_questions?: string[];
+  clarification_items?: ClarificationItem[];
   checklist?: IdeaReadinessChecklistItem[];
   recommendation?: string;
   reasons?: string[];
@@ -102,6 +119,7 @@ export interface Project {
   industry?: string | null;
   market_region?: string | null;
   output_language?: OutputLanguage | null;
+  clarification_context?: ClarificationContextData | null;
   status?: string | null;
   startup_score?: number | null;
   analysis_status?: AnalysisStatus | null;
@@ -1033,6 +1051,7 @@ export interface AnalysisData {
 
 export interface ProjectAnalysisResponse {
   project_id?: number;
+  clarification_context?: ClarificationContextData | null;
   analysis_status?: AnalysisStatus | null;
   analysis_step?: string | null;
   analysis_progress?: number | null;

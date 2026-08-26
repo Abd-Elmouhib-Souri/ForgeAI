@@ -95,7 +95,8 @@ class ProjectContextExtractor:
         ),
         (
             re.compile(
-                r"\bréserv(?:er|e|ation)?\b"
+                r"\br(?:e|\u00e9)serv"
+                r"(?:er|e|ent|ait|aient|era|eront|ation)?\b"
                 r"|\bbook(?:s|ed|ing)?\b",
                 re.IGNORECASE,
             ),
@@ -370,6 +371,18 @@ class ProjectContextExtractor:
         "responsables",
         "manager",
         "managers",
+        "supervisor",
+        "supervisors",
+        "superviseur",
+        "superviseurs",
+        "superviseuse",
+        "superviseuses",
+        "coordinator",
+        "coordinators",
+        "coordinateur",
+        "coordinateurs",
+        "coordinatrice",
+        "coordinatrices",
         "directeur",
         "directeurs",
         "dirigeant",
@@ -386,6 +399,10 @@ class ProjectContextExtractor:
         "techniciens",
         "technician",
         "technicians",
+        "contractor",
+        "contractors",
+        "consultant",
+        "consultants",
         "opérateur",
         "opérateurs",
         "operateur",
@@ -569,12 +586,76 @@ class ProjectContextExtractor:
             analysis_data=analysis_data,
         )
 
-        structured = (
+        structured = dict(
             intelligence.get(
                 "structured_project_context"
             )
             or {}
         )
+
+        explicit_sections = (
+            self._explicit_semantic_sections(
+                description
+            )
+        )
+
+        narrative_sections = (
+            self._narrative_semantic_sections(
+                description
+            )
+        )
+
+        for (
+            field_name,
+            narrative_values,
+        ) in narrative_sections.items():
+            explicit_sections[
+                field_name
+            ] = unique_texts(
+                [
+                    *explicit_sections.get(
+                        field_name,
+                        [],
+                    ),
+                    *narrative_values,
+                ]
+            )
+
+        # Explicit user facts outrank inferred structured context.
+        for field_name in (
+            "solution",
+            "value_proposition",
+        ):
+            explicit_values = (
+                explicit_sections.get(
+                    field_name
+                )
+                or []
+            )
+
+            if explicit_values:
+                structured[
+                    field_name
+                ] = explicit_values[0]
+
+        for field_name in (
+            "input_data",
+            "output_decision",
+            "human_oversight",
+            "maintenance_model",
+            "deployment_environment",
+        ):
+            explicit_values = (
+                explicit_sections.get(
+                    field_name
+                )
+                or []
+            )
+
+            if explicit_values:
+                structured[
+                    field_name
+                ] = explicit_values
 
         archetype_context = (
             intelligence.get(
@@ -587,10 +668,26 @@ class ProjectContextExtractor:
             description
         )
 
+        clarification_facts = (
+            self._canonical_clarification_facts(
+                project_context=project_context,
+                idea_readiness=idea_readiness,
+                analysis_data=analysis_data,
+                structured=structured,
+            )
+        )
+
         actors = self._extract_explicit_actors(
             description=description,
             project_context=project_context,
             analysis_data=analysis_data,
+        )
+
+        actors = (
+            self._reconcile_fresh_declared_actor_authority(
+                actors=actors,
+                description=description,
+            )
         )
 
         if not actors:
@@ -612,6 +709,16 @@ class ProjectContextExtractor:
             mvp_scope=mvp_scope,
             structured=structured,
             language=language,
+        )
+
+        # U2 canonical workflow actor membership authority.
+        #
+        # Explicit business actors discovered while resolving
+        # workflows must join the canonical actor registry before
+        # transaction and public role projections consume it.
+        actors = self._reconcile_workflow_actor_membership(
+            actors=actors,
+            workflows=workflows,
         )
 
         problem = ProblemContext(
@@ -675,6 +782,7 @@ class ProjectContextExtractor:
             sentences=sentences,
             actors=actors,
             workflows=workflows,
+            clarification_facts=clarification_facts,
         )
 
         # Canonical payer and decision-maker name lists are
@@ -779,9 +887,34 @@ class ProjectContextExtractor:
             priority_workflows=workflows,
             transaction_unit=transaction_unit,
             mvp_scope=mvp_scope,
+            input_data=(
+                self._canonical_requirement_values(
+                    structured,
+                    "input_data",
+                )
+            ),
+            output_decision=(
+                self._canonical_requirement_values(
+                    structured,
+                    "output_decision",
+                )
+            ),
+            human_oversight=(
+                self._canonical_requirement_values(
+                    structured,
+                    "human_oversight",
+                )
+            ),
+            maintenance_model=(
+                self._canonical_requirement_values(
+                    structured,
+                    "maintenance_model",
+                )
+            ),
             deployment_environment=(
                 self._deployment_environment(
-                    sentences
+                    sentences,
+                    structured=structured,
                 )
             ),
             success_metrics=self._listify(
@@ -857,6 +990,54 @@ class ProjectContextExtractor:
             ),
             confidence=confidence,
         )
+
+
+    def _is_actor_identity_pronoun(
+        self,
+        value: str,
+    ) -> bool:
+        """
+        Return True when a candidate is only a referential pronoun.
+
+        A pronoun may refer to a previously declared actor, but it is
+        never sufficient evidence for creating a new canonical
+        ActorContext identity.
+
+        This intentionally performs no coreference resolution.
+        """
+        key = comparison_key(
+            self._clean_actor(
+                value
+            )
+        )
+
+        if not key:
+            return False
+
+        pronouns = {
+            # French subject pronouns.
+            "je",
+            "j",
+            "tu",
+            "il",
+            "elle",
+            "on",
+            "nous",
+            "vous",
+            "ils",
+            "elles",
+
+            # English subject pronouns.
+            "i",
+            "you",
+            "he",
+            "she",
+            "it",
+            "we",
+            "they",
+        }
+
+        return key in pronouns
 
 
     def _actor_alias_identity_key(
@@ -1025,9 +1206,23 @@ class ProjectContextExtractor:
             description
         )
 
+        # Canonical scope polarity owns whether a sentence is
+        # positive project evidence or an explicit exclusion.
+        #
+        # An exclusion may describe an actor or market segment,
+        # but it may not independently materialize that entity
+        # as a canonical target actor.
+        actor_target_sentences = [
+            sentence
+            for sentence in sentences
+            if not is_scope_exclusion_statement(
+                sentence
+            )
+        ]
+
         high_priority_found = False
 
-        for sentence in sentences:
+        for sentence in actor_target_sentences:
             for pattern in self.TARGET_PATTERNS[:2]:
                 match = pattern.search(
                     sentence
@@ -1057,7 +1252,7 @@ class ProjectContextExtractor:
                 )
 
         if not high_priority_found:
-            for sentence in sentences:
+            for sentence in actor_target_sentences:
                 for pattern in self.TARGET_PATTERNS[2:]:
                     match = pattern.search(
                         sentence
@@ -1124,7 +1319,9 @@ class ProjectContextExtractor:
             if (
                 not name
                 or not key
-                or key in self.GENERIC_ACTORS
+                or self._is_actor_identity_pronoun(
+                    name
+                )
                 or role_identity
                 in seen_declared_role_identities
             ):
@@ -1163,6 +1360,9 @@ class ProjectContextExtractor:
             if (
                 not name
                 or not key
+                or self._is_actor_identity_pronoun(
+                    name
+                )
                 or key in seen
                 or key in self.GENERIC_ACTORS
             ):
@@ -1218,18 +1418,105 @@ class ProjectContextExtractor:
             if (
                 not name
                 or not key
+                or self._is_actor_identity_pronoun(
+                    name
+                )
                 or key in self.GENERIC_ACTORS
             ):
                 continue
 
-            represented = any(
-                key in existing_key
-                or existing_key in key
-                for existing_key in seen
-                if existing_key
-            )
+            # A structural actor declaration may refine a shorter
+            # operational reference that was extracted earlier.
+            #
+            # Example:
+            #
+            #   "The primary operational user is the shift supervisor."
+            #   "The supervisor uses the platform..."
+            #
+            # Both statements refer to USER authority, but the first
+            # statement carries the more specific canonical identity.
+            #
+            # Refinement is deliberately conservative:
+            # - same explicit role;
+            # - lexical overlap already accepted by the existing
+            #   identity policy;
+            # - the structural name must be a strict token superset;
+            # - exactly one existing actor may be refined.
+            #
+            # No semantic synonym inference is introduced here.
+            candidate_tokens = {
+                token
+                for token in key.split()
+                if token
+            }
 
-            if represented:
+            overlapping_indexes: List[int] = []
+            refinable_indexes: List[int] = []
+            same_role_non_refinable = False
+
+            for index, existing_actor in enumerate(
+                output
+            ):
+                existing_key = comparison_key(
+                    existing_actor.name
+                )
+
+                if (
+                    not existing_key
+                    or not (
+                        key in existing_key
+                        or existing_key in key
+                    )
+                ):
+                    continue
+
+                overlapping_indexes.append(
+                    index
+                )
+
+                if existing_actor.role != role:
+                    continue
+
+                existing_tokens = {
+                    token
+                    for token
+                    in existing_key.split()
+                    if token
+                }
+
+                if (
+                    existing_tokens
+                    and existing_tokens
+                    < candidate_tokens
+                ):
+                    refinable_indexes.append(
+                        index
+                    )
+                else:
+                    same_role_non_refinable = True
+
+            if (
+                len(refinable_indexes) == 1
+                and not same_role_non_refinable
+            ):
+                output[
+                    refinable_indexes[0]
+                ] = ActorContext(
+                    name=name,
+                    role=role,
+                    is_explicit=True,
+                )
+
+                # Preserve the shorter identity key as a suppression
+                # alias. Lower-authority target extraction must not
+                # re-materialize the abbreviated actor afterwards.
+                seen.add(
+                    key
+                )
+
+                continue
+
+            if overlapping_indexes:
                 continue
 
             seen.add(
@@ -1257,6 +1544,9 @@ class ProjectContextExtractor:
             if (
                 not name
                 or not key
+                or self._is_actor_identity_pronoun(
+                    name
+                )
                 or key in self.GENERIC_ACTORS
             ):
                 continue
@@ -1291,20 +1581,17 @@ class ProjectContextExtractor:
         description: str,
     ) -> List[Tuple[str, ActorRole]]:
         """
-        Extract explicitly declared individual sides of a two-sided
+        Extract explicitly declared structural sides of a two-sided
         operating model.
 
-        Examples:
-        - "Le premier cote est constitue de ..."
-        - "Le second cote est constitue de ..."
-        - "The first side consists of ..."
-        - "The second side consists of ..."
+        Side order is topology only:
+        "first" / "second" never assigns an economic role.
 
-        Ordinal position carries no business-role authority.
-        Provider / buyer classification comes only from semantic
-        evidence inside the declared side.
+        Economic role authority comes from either:
+        - explicit actor semantics, or
+        - an explicitly named supply/demand side.
         """
-        french_pattern = re.compile(
+        french_side_first_pattern = re.compile(
             r"\b(?:le|la)\s+"
             r"(?:"
             r"premier|premi(?:e|\u00e8)re|"
@@ -1333,7 +1620,7 @@ class ProjectContextExtractor:
             re.IGNORECASE,
         )
 
-        english_pattern = re.compile(
+        english_side_first_pattern = re.compile(
             r"\b(?:the\s+)?"
             r"(?:first|second|1st|2nd)\s+"
             r"(?:side|party|group)\s+"
@@ -1352,6 +1639,140 @@ class ProjectContextExtractor:
             re.IGNORECASE,
         )
 
+        # Actor-first ordinal declarations:
+        #
+        #   "Les prestataires constituent le second cote..."
+        #   "Providers form the second side..."
+        #
+        # The ordinal is deliberately NOT used to assign the role.
+        french_actor_first_ordinal = re.compile(
+            r"^\s*"
+            r"(?:le\s+|la\s+|les\s+|"
+            r"l['\u2019]\s*)?"
+            r"(.+?)\s+"
+            r"(?:"
+            r"constitu(?:e|ent)"
+            r"|form(?:e|ent)"
+            r"|compos(?:e|ent)"
+            r")\s+"
+            r"(?:le|la)\s+"
+            r"(?:"
+            r"premier|premi(?:e|\u00e8)re|"
+            r"second|seconde|"
+            r"deuxi(?:e|\u00e8)me|"
+            r"1er|1re|2e"
+            r")\s+"
+            r"(?:"
+            r"c(?:o|\u00f4)t(?:e|\u00e9)|"
+            r"partie|groupe"
+            r")"
+            r"(?:\s+(?:de|dans)\s+(?:la|le)\s+"
+            r"(?:marketplace|plateforme))?"
+            r"(?=[.;]|$)",
+            re.IGNORECASE,
+        )
+
+        english_actor_first_ordinal = re.compile(
+            r"^\s*(?:the\s+)?"
+            r"(.+?)\s+"
+            r"(?:"
+            r"forms?"
+            r"|constitutes?"
+            r"|makes?\s+up"
+            r")\s+"
+            r"(?:the\s+)?"
+            r"(?:first|second|1st|2nd)\s+"
+            r"(?:side|party|group)"
+            r"(?:\s+of\s+(?:the\s+)?"
+            r"(?:marketplace|platform))?"
+            r"(?=[.;]|$)",
+            re.IGNORECASE,
+        )
+
+        # Explicitly named economic sides DO carry role authority:
+        #
+        #   "X forms the supply side"
+        #   "Y forms the demand side"
+        #
+        # This is fundamentally different from "first/second side".
+        french_actor_first_supply = re.compile(
+            r"^\s*"
+            r"(?:le\s+|la\s+|les\s+|"
+            r"l['\u2019]\s*)?"
+            r"(.+?)\s+"
+            r"(?:"
+            r"constitu(?:e|ent)"
+            r"|form(?:e|ent)"
+            r"|compos(?:e|ent)"
+            r")\s+"
+            r"(?:le|la)\s+"
+            r"(?:"
+            r"c(?:o|\u00f4)t(?:e|\u00e9)|"
+            r"partie"
+            r")\s+"
+            r"(?:offre|fournisseur|vendeur)"
+            r"(?:\s+(?:de|dans)\s+(?:la|le)\s+"
+            r"(?:marketplace|plateforme))?"
+            r"(?=[.;]|$)",
+            re.IGNORECASE,
+        )
+
+        french_actor_first_demand = re.compile(
+            r"^\s*"
+            r"(?:le\s+|la\s+|les\s+|"
+            r"l['\u2019]\s*)?"
+            r"(.+?)\s+"
+            r"(?:"
+            r"constitu(?:e|ent)"
+            r"|form(?:e|ent)"
+            r"|compos(?:e|ent)"
+            r")\s+"
+            r"(?:le|la)\s+"
+            r"(?:"
+            r"c(?:o|\u00f4)t(?:e|\u00e9)|"
+            r"partie"
+            r")\s+"
+            r"(?:demande|acheteur|client)"
+            r"(?:\s+(?:de|dans)\s+(?:la|le)\s+"
+            r"(?:marketplace|plateforme))?"
+            r"(?=[.;]|$)",
+            re.IGNORECASE,
+        )
+
+        english_actor_first_supply = re.compile(
+            r"^\s*(?:the\s+)?"
+            r"(.+?)\s+"
+            r"(?:"
+            r"forms?"
+            r"|constitutes?"
+            r"|makes?\s+up"
+            r")\s+"
+            r"(?:the\s+)?"
+            r"(?:supply|provider|seller)\s+side"
+            r"(?:\s+of\s+(?:the\s+)?"
+            r"(?:marketplace|platform))?"
+            r"(?:\s+and\b.*)?"
+            r"(?=[.;]|$)",
+            re.IGNORECASE,
+        )
+
+        english_actor_first_demand = re.compile(
+            r"^\s*(?:the\s+)?"
+            r"(.+?)\s+"
+            r"(?:"
+            r"forms?"
+            r"|constitutes?"
+            r"|makes?\s+up"
+            r")\s+"
+            r"(?:the\s+)?"
+            r"(?:demand|buyer|customer)\s+side"
+            r"(?:\s+of\s+(?:the\s+)?"
+            r"(?:marketplace|platform))?"
+            r"(?:\s+and\b.*)?"
+            r"(?=[.;]|$)",
+            re.IGNORECASE,
+        )
+
         output: List[
             Tuple[str, ActorRole]
         ] = []
@@ -1360,36 +1781,32 @@ class ProjectContextExtractor:
             Tuple[str, str]
         ] = set()
 
-        for sentence in self._sentences(
-            description
-        ):
-            match = (
-                french_pattern.search(
-                    sentence
-                )
-                or english_pattern.search(
-                    sentence
-                )
-            )
-
-            if not match:
-                continue
-
+        def append_candidate(
+            raw_actor: str,
+            forced_role=None,
+        ) -> None:
             raw_actor = clean_text(
-                match.group(1)
-            )
-
-            role = self._marketplace_side_role(
                 raw_actor
             )
 
-            # A declaration of a "side" does not by itself prove
-            # which economic role that side plays.
+            if not raw_actor:
+                return
+
+            role = (
+                forced_role
+                if forced_role is not None
+                else self._marketplace_side_role(
+                    raw_actor
+                )
+            )
+
+            # A merely ordinal side declaration is structural evidence,
+            # but it does not prove the economic role by itself.
             if role not in {
                 ActorRole.PROVIDER,
                 ActorRole.BUYER,
             }:
-                continue
+                return
 
             name = self._marketplace_side_actor_name(
                 raw_actor
@@ -1400,7 +1817,7 @@ class ProjectContextExtractor:
             )
 
             if not name or not key:
-                continue
+                return
 
             identity = (
                 key,
@@ -1408,7 +1825,7 @@ class ProjectContextExtractor:
             )
 
             if identity in seen:
-                continue
+                return
 
             seen.add(
                 identity
@@ -1421,8 +1838,61 @@ class ProjectContextExtractor:
                 )
             )
 
-        return output
+        ordinal_patterns = (
+            french_side_first_pattern,
+            english_side_first_pattern,
+            french_actor_first_ordinal,
+            english_actor_first_ordinal,
+        )
 
+        named_side_patterns = (
+            (
+                french_actor_first_supply,
+                ActorRole.PROVIDER,
+            ),
+            (
+                french_actor_first_demand,
+                ActorRole.BUYER,
+            ),
+            (
+                english_actor_first_supply,
+                ActorRole.PROVIDER,
+            ),
+            (
+                english_actor_first_demand,
+                ActorRole.BUYER,
+            ),
+        )
+
+        for sentence in self._sentences(
+            description
+        ):
+            for pattern in ordinal_patterns:
+                match = pattern.search(
+                    sentence
+                )
+
+                if not match:
+                    continue
+
+                append_candidate(
+                    match.group(1)
+                )
+
+            for pattern, role in named_side_patterns:
+                match = pattern.search(
+                    sentence
+                )
+
+                if not match:
+                    continue
+
+                append_candidate(
+                    match.group(1),
+                    role,
+                )
+
+        return output
 
     def _marketplace_side_role(
         self,
@@ -1675,9 +2145,79 @@ class ProjectContextExtractor:
                 re.Pattern[str],
                 ActorRole,
                 bool,
+                bool,
             ],
             ...,
         ] = (
+            # U7 universal colon-labeled operational-user authority.
+            #
+            # Explicit field-style declarations have the same authority
+            # as copular natural-language declarations.
+            #
+            #   Utilisateur operationnel principal: X
+            #   Primary operational user: X
+            (
+                re.compile(
+                    r"\b"
+                    r"utilisateur\s+"
+                    r"op(?:e|\u00e9)rationnel\s+"
+                    r"principal"
+                    r"\s*:\s*"
+                    r"(.+?)"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.USER,
+                False,
+                True,
+            ),
+            (
+                re.compile(
+                    r"\b(?:the\s+)?"
+                    r"(?:primary|main|key)\s+"
+                    r"operational\s+user"
+                    r"\s*:\s*"
+                    r"(.+?)"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.USER,
+                False,
+                True,
+            ),
+            # U2 universal actor-first operational-user authority.
+            #
+            # Explicit relation:
+            #
+            #   "X is an operational user."
+            #   "X are operational users."
+            #   "X est un utilisateur operationnel."
+            #   "X sont les utilisateurs operationnels."
+            #
+            # The relation itself owns USER authority.
+            # Lexical identity such as "operator" must not downgrade
+            # an explicitly declared operational USER relation.
+            (
+                re.compile(
+                    r"^\s*"
+                    r"(?:le\s+|la\s+|les\s+|"
+                    r"un\s+|une\s+|des\s+|"
+                    r"l['\u2019]\s*)?"
+                    r"(.+?)\s+"
+                    r"(?:est|sont)\s+"
+                    r"(?:un\s+|une\s+|des\s+|"
+                    r"le\s+|la\s+|les\s+|"
+                    r"l['\u2019]\s*)?"
+                    r"utilisateurs?\s+"
+                    r"op(?:e|\u00e9)rationnel(?:le)?s?\b"
+                    r"(?:\s+.+?)?"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.USER,
+                False,
+                True,
+            ),
             (
                 re.compile(
                     r"\b(?:les\s+)?"
@@ -1691,6 +2231,7 @@ class ProjectContextExtractor:
                 ),
                 ActorRole.USER,
                 True,
+                False,
             ),
             (
                 re.compile(
@@ -1705,6 +2246,92 @@ class ProjectContextExtractor:
                 ),
                 ActorRole.USER,
                 True,
+                False,
+            ),
+
+            # Label-first operational-user declarations:
+            #
+            #   "The primary operational user of Product is X."
+            #   "L'utilisateur operationnel principal de Produit est X."
+            #
+            # The explicit declaration owns USER authority.
+            # Product name, sector and archetype do not infer the actor.
+            (
+                re.compile(
+                    r"\b(?:the\s+)?"
+                    r"(?:primary|main|key)\s+"
+                    r"operational\s+user"
+                    r"(?:\s+of\s+[^.;]+?)?"
+                    r"\s+(?:is|will\s+be|would\s+be)\s+"
+                    r"(?:the\s+|a\s+|an\s+)?"
+                    r"(.+?)"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.USER,
+                False,
+                True,
+            ),
+            (
+                re.compile(
+                    r"\b(?:l['\u2019]\s*)?"
+                    r"utilisateur\s+"
+                    r"op(?:e|\u00e9)rationnel\s+principal"
+                    r"(?:\s+de\s+[^.;]+?)?"
+                    r"\s+(?:est|sera|serait)\s+"
+                    r"(?:le\s+|la\s+|les\s+|"
+                    r"l['\u2019]\s*)?"
+                    r"(.+?)"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.USER,
+                False,
+                True,
+            ),
+
+            # Actor-first primary-user declarations:
+            #
+            #   "Warehouse operators are the primary users."
+            #   "The warehouse supervisor is the primary user."
+            #   "Les operateurs logistiques sont les utilisateurs principaux."
+            #
+            # The grammatical subject is the canonical actor identity.
+            # Unlike "Primary users are X and Y", one explicit subject
+            # can itself denote a valid user group, so require_multiple=False.
+            (
+                re.compile(
+                    r"^\s*(?:the\s+)?"
+                    r"(.+?)\s+"
+                    r"(?:is|are)\s+"
+                    r"(?:the\s+)?"
+                    r"(?:main|primary|key)\s+"
+                    r"users?\b"
+                    r"(?:\s+.+?)?"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.USER,
+                False,
+                False,
+            ),
+            (
+                re.compile(
+                    r"^\s*(?:le\s+|la\s+|les\s+|"
+                    r"l['\u2019]\s*)?"
+                    r"(.+?)\s+"
+                    r"(?:est|sont)\s+"
+                    r"(?:le\s+|la\s+|les\s+|"
+                    r"l['\u2019]\s*)?"
+                    r"(?:utilisateur\s+principal|"
+                    r"utilisateurs\s+principaux)\b"
+                    r"(?:\s+.+?)?"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.USER,
+                False,
+                False,
             ),
         )
 
@@ -1713,10 +2340,50 @@ class ProjectContextExtractor:
                 re.Pattern[str],
                 ActorRole,
                 bool,
+                bool,
             ],
             ...,
         ] = (
             *primary_user_patterns,
+            # Actor-first secondary-user declarations:
+            #
+            #   "Employees are secondary users."
+            #   "Les employes sont des utilisateurs secondaires."
+            #
+            # This is explicit structural USER authority, not an
+            # archetype-derived persona.
+            (
+                re.compile(
+                    r"^\s*(?:the\s+)?"
+                    r"(.+?)\s+"
+                    r"(?:is|are)\s+"
+                    r"(?:a\s+|an\s+|the\s+)?"
+                    r"secondary\s+users?\b"
+                    r"(?:\s+.+?)?"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.USER,
+                False,
+                False,
+            ),
+            (
+                re.compile(
+                    r"^\s*(?:le\s+|la\s+|les\s+|"
+                    r"l['\u2019]\s*)?"
+                    r"(.+?)\s+"
+                    r"(?:est|sont)\s+"
+                    r"(?:un\s+|une\s+|des\s+|"
+                    r"le\s+|la\s+|les\s+)?"
+                    r"utilisateurs?\s+secondaires?\b"
+                    r"(?:\s+.+?)?"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.USER,
+                False,
+                False,
+            ),
             (
                 re.compile(
                     r"\b(?:les\s+)?(?:deux\s+)?"
@@ -1729,6 +2396,7 @@ class ProjectContextExtractor:
                     re.IGNORECASE,
                 ),
                 ActorRole.USER,
+                False,
                 False,
             ),
             (
@@ -1744,6 +2412,7 @@ class ProjectContextExtractor:
                 ),
                 ActorRole.USER,
                 False,
+                False,
             ),
             (
                 re.compile(
@@ -1758,6 +2427,7 @@ class ProjectContextExtractor:
                 ),
                 ActorRole.OTHER,
                 True,
+                False,
             ),
             (
                 re.compile(
@@ -1772,6 +2442,7 @@ class ProjectContextExtractor:
                 ),
                 ActorRole.OTHER,
                 True,
+                False,
             ),
         )
 
@@ -1788,6 +2459,7 @@ class ProjectContextExtractor:
                 pattern,
                 fallback_role,
                 require_multiple,
+                role_assignment_authoritative,
             ) in patterns:
                 match = pattern.search(
                     sentence
@@ -1818,6 +2490,41 @@ class ProjectContextExtractor:
                         raw_name
                     )
 
+                    # Structural actor declarations own actor identity.
+                    #
+                    # Determiners introducing an item in an explicit
+                    # actor declaration are grammatical syntax, not part
+                    # of the canonical actor name:
+                    #
+                    #   "les utilisateurs principaux sont
+                    #    le responsable logistique et
+                    #    le responsable maintenance"
+                    #
+                    #       -> "responsable logistique"
+                    #       -> "responsable maintenance"
+                    #
+                    # Apply this normalization only inside the structural
+                    # declaration authority. _clean_actor() remains
+                    # unchanged globally.
+                    name = re.sub(
+                        r"^(?:"
+                        r"le|la|les|"
+                        r"un|une|des|"
+                        r"l['\u2019]"
+                        r")\s*",
+                        "",
+                        name,
+                        count=1,
+                        flags=(
+                            re.IGNORECASE
+                            | re.UNICODE
+                        ),
+                    )
+
+                    name = clean_text(
+                        name
+                    )
+
                     key = comparison_key(
                         name
                     )
@@ -1830,12 +2537,37 @@ class ProjectContextExtractor:
                     ):
                         continue
 
-                    role = self._actor_role(
-                        name
-                    )
-
-                    if role == ActorRole.OTHER:
+                    # Structural declarations have two distinct
+                    # authority semantics.
+                    #
+                    # 1. Explicit operational-role assignment:
+                    #
+                    #      "The primary operational user is X."
+                    #
+                    #    The declaration itself owns USER authority.
+                    #
+                    # 2. Structural membership declaration:
+                    #
+                    #      "The primary users are X and Y."
+                    #      "Employees are secondary users."
+                    #      "The user groups are X and Y."
+                    #
+                    #    The declaration proves actor membership but
+                    #    must not erase a more precise canonical role
+                    #    already supported by the actor phrase itself.
+                    #
+                    # The pattern metadata decides which semantic rule
+                    # applies. No project, sector or actor name is
+                    # hard-coded here.
+                    if role_assignment_authoritative:
                         role = fallback_role
+                    else:
+                        role = self._actor_role(
+                            name
+                        )
+
+                        if role == ActorRole.OTHER:
+                            role = fallback_role
 
                     local_seen.add(
                         key
@@ -2080,49 +2812,394 @@ class ProjectContextExtractor:
         operational user, economic buyer, payer or decision-maker.
         The industry never assigns the role.
         """
+        relation_context_key = comparison_key(
+            description
+        )
+
+        marketplace_context = any(
+            marker in relation_context_key
+            for marker in (
+                "marketplace",
+                "two sided",
+                "deux cotes",
+                "mise en relation",
+                "met en relation",
+                "place de marche",
+            )
+        )
+
+        english_payment_predicate_pattern = re.compile(
+            r"^\s*(?:the\s+|a\s+|an\s+)?"
+            r"(.+?)\s+"
+            r"(?:"
+            r"(?:can|could|may|might)\s+"
+            r"(?:choose|decide)\s+to\s+pay"
+            r"|(?:chooses?|decides?)\s+to\s+pay"
+            r"|(?:can|could|may|might|should|must)\s+pay"
+            r"|will\s+pay"
+            r"|would\s+pay"
+            r"|is\s+paying"
+            r"|are\s+paying"
+            r"|has\s+paid"
+            r"|have\s+paid"
+            r"|pays?"
+            r"|paid"
+            r")\b"
+            r"(?:\s+.+?)?"
+            r"(?=[.;]|$)",
+            re.IGNORECASE,
+        )
+
+        french_payment_predicate_pattern = re.compile(
+            r"^\s*"
+            r"(?:le\s+|la\s+|les\s+|"
+            r"l['\u2019]\s*)?"
+            r"(.+?)\s+"
+            r"(?:"
+            r"pai(?:e|ent|era|eront|erait|eraient)"
+            r"|pay(?:e|ent|era|eront|erait|eraient)"
+            r"|a\s+pay(?:e|\u00e9)"
+            r"|ont\s+pay(?:e|\u00e9)"
+            r")\b"
+            r"(?:\s+.+?)?"
+            r"(?=[.;]|$)",
+            re.IGNORECASE,
+        )
+
         patterns: Tuple[
             Tuple[re.Pattern[str], ActorRole],
             ...,
         ] = (
+            # U7 universal purchase-decision and colon-role authority.
+            #
+            # ----------------------------------------------------------
+            # Explicit field-style decision-maker declarations
+            # ----------------------------------------------------------
             (
                 re.compile(
-                    r"\b(?:the\s+)?"
-                    r"(?:main|primary)\s+"
-                    r"operational\s+user\s+"
-                    r"(?:"
-                    r"is"
-                    r"|would(?:\s+(?:probably|likely|typically))?\s+be"
-                    r"|will\s+be"
-                    r")\s+"
+                    r"\b(?:"
+                    r"d(?:e|\u00e9)cideur"
+                    r"|d(?:e|\u00e9)cideuse"
+                    r")"
+                    r"(?:\s+d['\u2019]achat)?"
+                    r"(?:\s+(?:"
+                    r"principal(?:e)?"
+                    r"|secondaire"
+                    r"))?"
+                    r"\s*:\s*"
                     r"(.+?)"
-                    r"(?="
-                    r"\s+(?:responsible\s+for|in\s+charge\s+of)\b"
-                    r"|,\s*(?:but|however|although)\b"
-                    r"|[.;]"
-                    r"|$"
-                    r")",
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.DECISION_MAKER,
+            ),
+            (
+                re.compile(
+                    r"\b"
+                    r"(?:(?:primary|main|key|secondary)\s+)?"
+                    r"decision[ -]?maker"
+                    r"\s*:\s*"
+                    r"(.+?)"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.DECISION_MAKER,
+            ),
+
+            # ----------------------------------------------------------
+            # Explicit field-style payer declarations
+            # ----------------------------------------------------------
+            (
+                re.compile(
+                    r"\b"
+                    r"payeur"
+                    r"(?:\s+(?:"
+                    r"(?:e|\u00e9)conomique"
+                    r"|principal"
+                    r"))?"
+                    r"\s*:\s*"
+                    r"(.+?)"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.PAYER,
+            ),
+            (
+                re.compile(
+                    r"\b"
+                    r"(?:(?:primary|main|economic)\s+)?"
+                    r"payer"
+                    r"\s*:\s*"
+                    r"(.+?)"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.PAYER,
+            ),
+
+            # ----------------------------------------------------------
+            # French acquisition / purchase decision authority
+            #
+            # Operational decisions remain excluded because the semantic
+            # object must explicitly be acquisition, purchase, subscription
+            # or adoption.
+            # ----------------------------------------------------------
+            (
+                re.compile(
+                    r"^\s*"
+                    r"(?:le\s+|la\s+|les\s+|"
+                    r"l['\u2019]\s*)?"
+                    r"(.+?)\s+"
+                    r"(?:"
+                    r"peut|peuvent"
+                    r"|pourrait|pourraient"
+                    r"|doit|doivent"
+                    r"|devrait|devraient"
+                    r")\s+"
+                    r"(?:"
+                    r"d(?:e|\u00e9)cider"
+                    r"|approuver"
+                    r"|autoriser"
+                    r"|valider"
+                    r")\s+"
+                    r"(?:"
+                    r"de\s+"
+                    r"|d['\u2019]\s*"
+                    r")?"
+                    r"(?:l['\u2019]\s*)?"
+                    r"(?:"
+                    r"acquisition"
+                    r"|achat"
+                    r"|abonnement"
+                    r"|adoption"
+                    r")\b"
+                    r"(?:\s+.+?)?"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.DECISION_MAKER,
+            ),
+
+            # ----------------------------------------------------------
+            # English acquisition / purchase decision authority
+            # ----------------------------------------------------------
+            (
+                re.compile(
+                    r"^\s*(?:the\s+)?"
+                    r"(.+?)\s+"
+                    r"(?:"
+                    r"may|can|could|might"
+                    r"|should|must|will|would"
+                    r")\s+"
+                    r"(?:"
+                    r"(?:approve|authorize|validate)\s+"
+                    r"(?:the\s+)?"
+                    r"(?:"
+                    r"purchase"
+                    r"|acquisition"
+                    r"|subscription"
+                    r"|adoption"
+                    r"|procurement"
+                    r")"
+                    r"|decide\s+on\s+"
+                    r"(?:the\s+)?"
+                    r"(?:"
+                    r"purchase"
+                    r"|acquisition"
+                    r"|subscription"
+                    r"|adoption"
+                    r")"
+                    r")\b"
+                    r"(?:\s+.+?)?"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.DECISION_MAKER,
+            ),
+            # U2 universal French label-first decision-maker authority.
+            #
+            # Examples:
+            #
+            #   "Le decideur principal est le gerant."
+            #   "La decideuse principale est la directrice."
+            #
+            # Label-first and actor-first declarations express the
+            # same explicit relation and therefore receive the same
+            # canonical DECISION_MAKER authority.
+            (
+                re.compile(
+                    r"\b(?:"
+                    r"d(?:e|\u00e9)cideur"
+                    r"|d(?:e|\u00e9)cideuse"
+                    r")"
+                    r"(?:\s+d['\u2019]achat)?"
+                    r"(?:\s+principal(?:e)?)?"
+                    r"\s+"
+                    r"(?:"
+                    r"est"
+                    r"|serait"
+                    r"|sera"
+                    r"|peut\s+(?:e|\u00ea)tre"
+                    r"|pourrait\s+(?:e|\u00ea)tre"
+                    r")"
+                    r"(?:\s+(?:"
+                    r"probablement|vraisemblablement"
+                    r"))?"
+                    r"\s+"
+                    r"(?:le\s+|la\s+|les\s+|"
+                    r"un\s+|une\s+|"
+                    r"l['\u2019]\s*)?"
+                    r"(.+?)"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.DECISION_MAKER,
+            ),
+            # Explicit request initiation is operational-user authority.
+            #
+            # This does not imply payment authority. In a marketplace,
+            # USER is sufficient to represent the demand-side actor.
+            (
+                re.compile(
+                    r"^\s*"
+                    r"(?:le\s+|la\s+|les\s+|"
+                    r"l['\u2019]\s*)?"
+                    r"(.+?)\s+"
+                    r"(?:"
+                    r"est\s+l['\u2019]acteur\s+qui\s+"
+                    r")?"
+                    r"(?:"
+                    r"initie|initient"
+                    r"|cr(?:e|\u00e9)e"
+                    r"|cr(?:e|\u00e9)ent"
+                    r"|soumet|soumettent"
+                    r"|envoie|envoient"
+                    r")\s+"
+                    r"(?:la\s+|une\s+|le\s+|un\s+)?"
+                    r"(?:demande|requ(?:e|\u00ea)te)\b"
+                    r"(?:\s+.+?)?"
+                    r"(?=[.;]|$)",
                     re.IGNORECASE,
                 ),
                 ActorRole.USER,
             ),
             (
                 re.compile(
-                    r"\b(?:utilisateur|usager)\s+"
-                    r"op(?:e|\u00e9)rationnel\s+"
-                    r"(?:principal\s+)?"
-                    r"(?:est|serait|sera)"
-                    r"(?:\s+(?:probablement|vraisemblablement))?"
-                    r"\s+(.+?)"
-                    r"(?="
-                    r"\s+(?:responsable\s+de|charg(?:e|\u00e9)e?\s+de)\b"
-                    r"|,\s*(?:mais|cependant)\b"
-                    r"|[.;]"
-                    r"|$"
-                    r")",
+                    r"^\s*(?:the\s+)?"
+                    r"(.+?)\s+"
+                    r"(?:"
+                    r"is\s+the\s+actor\s+(?:who|that)\s+"
+                    r")?"
+                    r"(?:"
+                    r"initiates?"
+                    r"|creates?"
+                    r"|submits?"
+                    r"|sends?"
+                    r")\s+"
+                    r"(?:the\s+|a\s+|an\s+)?"
+                    r"(?:service\s+)?request\b"
+                    r"(?:\s+.+?)?"
+                    r"(?=[.;]|$)",
                     re.IGNORECASE,
                 ),
                 ActorRole.USER,
             ),
+
+            # Explicit execution of the requested/reserved service is
+            # provider authority only in an explicitly two-sided /
+            # marketplace context.
+            (
+                re.compile(
+                    r"^\s*"
+                    r"(?:le\s+|la\s+|les\s+|"
+                    r"l['\u2019]\s*)?"
+                    r"(.+?)\s+"
+                    r"(?:"
+                    r"ex(?:e|\u00e9)cute"
+                    r"|ex(?:e|\u00e9)cutent"
+                    r"|r(?:e|\u00e9)alise"
+                    r"|r(?:e|\u00e9)alisent"
+                    r"|effectue|effectuent"
+                    r"|fournit|fournissent"
+                    r")"
+                    r"(?:\s+(?:ensuite|directement))?\s+"
+                    r"(?:"
+                    r"l['\u2019]\s*"
+                    r"|le\s+|la\s+|les\s+"
+                    r"|un\s+|une\s+|des\s+"
+                    r")?"
+                    r"(?=[^.;]{0,120}\b(?:"
+                    r"services?"
+                    r"|missions?"
+                    r"|prestations?"
+                    r"|interventions?"
+                    r"|travail"
+                    r"|travaux"
+                    r")\b)"
+                    r"[^.;]*?"
+                    r"(?:"
+                    r"services?"
+                    r"|missions?"
+                    r"|prestations?"
+                    r"|interventions?"
+                    r"|travail"
+                    r"|travaux"
+                    r")\b"
+                    r"(?:\s+.+?)?"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.PROVIDER,
+            ),
+            (
+                re.compile(
+                    r"^\s*(?:the\s+)?"
+                    r"(.+?)\s+"
+                    r"(?:"
+                    r"performs?"
+                    r"|delivers?"
+                    r"|provides?"
+                    r"|executes?"
+                    r")"
+                    r"(?:\s+(?:then|directly))?\s+"
+                    r"(?:the\s+|a\s+|an\s+)?"
+                    r"(?=[^.;]{0,120}\b(?:"
+                    r"services?|missions?|jobs?|work"
+                    r")\b)"
+                    r"[^.;]*?"
+                    r"(?:"
+                    r"services?"
+                    r"|missions?"
+                    r"|jobs?"
+                    r"|work"
+                    r")\b"
+                    r"(?:\s+.+?)?"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.PROVIDER,
+            ),
+
+            # Label-first primary operational-user declarations
+            # intentionally do not live in _declared_actor_roles().
+            #
+            # Canonical ownership:
+            #
+            #   "The primary operational user is X."
+            #   "L'utilisateur operationnel principal est X."
+            #
+            #       -> _declared_actor_groups()
+            #
+            # Operational actor-first evidence such as:
+            #
+            #   "The supervisor uses the platform."
+            #   "Le superviseur utilise la plateforme."
+            #
+            #       -> operational_user_patterns below
+            #
+            # Keeping these responsibilities separate prevents one
+            # explicit relation from materializing competing long and
+            # abbreviated identities while preserving USER authority.
             (
                 re.compile(
                     r"\b(?:the\s+)?"
@@ -2158,6 +3235,85 @@ class ProjectContextExtractor:
                 ),
                 ActorRole.PAYER,
             ),
+            # Actor-first decision-maker declarations:
+            #
+            #   "Le responsable de site est le decideur principal..."
+            #   "The operations director is the primary decision maker..."
+            #
+            # The grammatical subject is the canonical actor.
+            # Qualifiers after the role describe decision scope and are
+            # deliberately excluded from the actor identity.
+            (
+                re.compile(
+                    r"^\s*"
+                    r"(?:le\s+|la\s+|les\s+|"
+                    r"l['\u2019]\s*)?"
+                    r"(.+?)\s+"
+                    r"(?:"
+                    r"est"
+                    r"|serait"
+                    r"|sera"
+                    r")"
+                    r"(?:\s+(?:probablement|vraisemblablement))?"
+                    r"\s+"
+                    r"(?:le\s+|la\s+|"
+                    r"l['\u2019]\s*)?"
+                    r"(?:principal(?:e)?\s+)?"
+                    r"(?:"
+                    r"d(?:e|\u00e9)cideur"
+                    r"|d(?:e|\u00e9)cideuse"
+                    r")"
+                    r"(?:\s+d['\u2019]achat)?"
+                    r"(?:\s+principal(?:e)?)?"
+                    r"(?="
+                    r"\s+(?:"
+                    r"pour\b"
+                    r"|charg(?:e|\u00e9)e?\s+de\b"
+                    r"|responsable\s+de\b"
+                    r"|et\b"
+                    r")"
+                    r"|[.;]"
+                    r"|$"
+                    r")",
+                    re.IGNORECASE,
+                ),
+                ActorRole.DECISION_MAKER,
+            ),
+            (
+                re.compile(
+                    r"^\s*(?:the\s+)?"
+                    r"(.+?)\s+"
+                    r"(?:"
+                    r"is"
+                    r"|can\s+be"
+                    r"|could\s+be"
+                    r"|would(?:\s+(?:probably|likely))?\s+be"
+                    r"|will\s+be"
+                    r")\s+"
+                    r"(?:the\s+|a\s+|an\s+)?"
+                    r"(?:(?:primary|main|key)\s+)?"
+                    r"(?:(?:"
+                    r"purchasing"
+                    r"|purchase"
+                    r"|procurement"
+                    r"|buying"
+                    r")\s+)?"
+                    r"decision[ -]?maker"
+                    r"(?="
+                    r"\s+(?:"
+                    r"for\b"
+                    r"|responsible\s+for\b"
+                    r"|in\s+charge\s+of\b"
+                    r"|and\b"
+                    r")"
+                    r"|[.;]"
+                    r"|$"
+                    r")",
+                    re.IGNORECASE,
+                ),
+                ActorRole.DECISION_MAKER,
+            ),
+
             (
                 re.compile(
                     r"\b(?:the\s+)?"
@@ -2196,6 +3352,82 @@ class ProjectContextExtractor:
                 ),
                 ActorRole.DECISION_MAKER,
             ),
+            # Blind-B2 passive purchasing-decision authority.
+            #
+            # Examples:
+            #
+            #   The purchasing decision is made by A, B or C.
+            #   The procurement decision is taken by A.
+            #   La d?cision d'achat est prise par A, B ou C.
+            #   La d?cision d'acquisition est valid?e par A.
+            #
+            # A generic operational decision deliberately does not match:
+            #
+            #   The scheduling decision is made by A.
+            (
+                re.compile(
+                    r"\b(?:the\s+)?"
+                    r"(?:"
+                    r"purchasing"
+                    r"|purchase"
+                    r"|procurement"
+                    r"|buying"
+                    r"|acquisition"
+                    r")\s+"
+                    r"decision\s+"
+                    r"(?:"
+                    r"is"
+                    r"|can\s+be"
+                    r"|could\s+be"
+                    r"|would(?:\s+(?:probably|likely))?\s+be"
+                    r"|will\s+be"
+                    r")\s+"
+                    r"(?:"
+                    r"made"
+                    r"|taken"
+                    r"|approved"
+                    r"|validated"
+                    r")\s+by\s+"
+                    r"(?:the\s+)?"
+                    r"(.+?)"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.DECISION_MAKER,
+            ),
+            (
+                re.compile(
+                    r"\b(?:la\s+)?"
+                    r"d(?:e|\u00e9)cision\s+"
+                    r"d['\u2019]"
+                    r"(?:"
+                    r"achat"
+                    r"|acquisition"
+                    r")\s+"
+                    r"(?:"
+                    r"est"
+                    r"|serait"
+                    r"|sera"
+                    r"|peut\s+(?:e|\u00ea)tre"
+                    r"|pourrait\s+(?:e|\u00ea)tre"
+                    r")\s+"
+                    r"(?:"
+                    r"prise"
+                    r"|faite"
+                    r"|valid(?:e|\u00e9)e"
+                    r"|approuv(?:e|\u00e9)e"
+                    r")\s+par\s+"
+                    r"(?:"
+                    r"le\s+|la\s+|les\s+|"
+                    r"l['\u2019]\s*"
+                    r")?"
+                    r"(.+?)"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.DECISION_MAKER,
+            ),
+
             # Payer declarations are authoritative regardless of
             # grammatical direction:
             #
@@ -2331,44 +3563,88 @@ class ProjectContextExtractor:
             # as "the platform allows users to pay" do not match because
             # the payment verb is not the subject's predicate.
             (
-                re.compile(
-                    r"^\s*"
-                    r"(?:le\s+|la\s+|les\s+|"
-                    r"l['\u2019]\s*)?"
-                    r"(.+?)\s+"
-                    r"(?:"
-                    r"pai(?:e|ent|era|eront|erait|eraient)"
-                    r"|pay(?:e|ent|era|eront|erait|eraient)"
-                    r"|a\s+pay(?:e|\u00e9)"
-                    r"|ont\s+pay(?:e|\u00e9)"
-                    r")\b"
-                    r"(?:\s+.+?)?"
-                    r"(?=[.;]|$)",
-                    re.IGNORECASE,
-                ),
+                french_payment_predicate_pattern,
                 ActorRole.PAYER,
             ),
             (
-                re.compile(
-                    r"^\s*(?:the\s+)?"
-                    r"(.+?)\s+"
-                    r"(?:"
-                    r"pay"
-                    r"|pays"
-                    r"|paid"
-                    r"|will\s+pay"
-                    r"|would\s+pay"
-                    r"|is\s+paying"
-                    r"|are\s+paying"
-                    r"|has\s+paid"
-                    r"|have\s+paid"
-                    r")\b"
-                    r"(?:\s+.+?)?"
-                    r"(?=[.;]|$)",
-                    re.IGNORECASE,
-                ),
+                english_payment_predicate_pattern,
                 ActorRole.PAYER,
             ),
+        )
+
+
+        # ----------------------------------------------------------
+        # Operational actor-first relations.
+        #
+        # These predicates identify an explicitly named human or
+        # organizational subject interacting with the product or
+        # initiating/reviewing a business operation.
+        #
+        # Role authority remains USER/OPERATOR only. Payment,
+        # decision-making and service execution have independent
+        # authorities and are deliberately excluded here.
+        # ----------------------------------------------------------
+
+        # Request predicates are lexically ambiguous:
+        #
+        #   "The customer requests a service." -> predicate
+        #   "The manager approves the request." -> noun
+        #
+        # Actor authority therefore reuses the canonical workflow
+        # noun-vs-action grammar rather than maintaining a parallel
+        # interpretation of request / demande.
+        english_operational_request_pattern = re.compile(
+            r"^\s*(?:the\s+|a\s+|an\s+)?"
+            r"(.+?)\s+"
+            r"(requests?)\b"
+            r"(?:\s+.+?)?"
+            r"(?=[.;]|$)",
+            re.IGNORECASE,
+        )
+
+        french_operational_request_pattern = re.compile(
+            r"^\s*(?:le\s+|la\s+|les\s+|"
+            r"un\s+|une\s+|des\s+|"
+            r"l['\u2019]\s*)?"
+            r"(.+?)\s+"
+            r"(demand(?:e|ent))\b"
+            r"(?:\s+.+?)?"
+            r"(?=[.;]|$)",
+            re.IGNORECASE,
+        )
+
+        operational_user_patterns: Tuple[
+            re.Pattern[str],
+            ...,
+        ] = (
+            re.compile(
+                r"^\s*(?:the\s+|a\s+|an\s+)?"
+                r"(.+?)\s+"
+                r"(?:"
+                r"uses?"
+                r"|reviews?"
+                r"|validates?"
+                r")\b"
+                r"(?:\s+.+?)?"
+                r"(?=[.;]|$)",
+                re.IGNORECASE,
+            ),
+            english_operational_request_pattern,
+            re.compile(
+                r"^\s*(?:le\s+|la\s+|les\s+|"
+                r"un\s+|une\s+|des\s+|"
+                r"l['\u2019]\s*)?"
+                r"(.+?)\s+"
+                r"(?:"
+                r"utilis(?:e|ent)"
+                r"|examin(?:e|ent)"
+                r"|valid(?:e|ent)"
+                r")\b"
+                r"(?:\s+.+?)?"
+                r"(?=[.;]|$)",
+                re.IGNORECASE,
+            ),
+            french_operational_request_pattern,
         )
 
         output: List[
@@ -2388,12 +3664,301 @@ class ProjectContextExtractor:
                 )
             )
 
+            for operational_pattern in operational_user_patterns:
+                operational_match = operational_pattern.search(
+                    relation_sentence
+                )
+
+                if not operational_match:
+                    continue
+
+                # Canonical scope polarity owns the matched relation prefix.
+                # An exclusion may mention an actor/action, but that negative
+                # scope fragment cannot establish operational-user authority.
+                if is_scope_exclusion_statement(
+                    relation_sentence[
+                        :operational_match.end()
+                    ]
+                ):
+                    continue
+
+                # Request / demande is admitted as operational USER
+                # authority only when the shared workflow grammar
+                # independently confirms that the matched token is an
+                # action predicate at the same location.
+                if (
+                    operational_pattern
+                    is english_operational_request_pattern
+                    or operational_pattern
+                    is french_operational_request_pattern
+                ):
+                    predicate_start = (
+                        operational_match.start(
+                            2
+                        )
+                    )
+
+                    request_is_action = any(
+                        occurrence[
+                            "action"
+                        ]
+                        == "demander"
+                        and occurrence[
+                            "match"
+                        ].start()
+                        == predicate_start
+                        for occurrence in (
+                            self._workflow_action_occurrences(
+                                relation_sentence
+                            )
+                        )
+                    )
+
+                    if not request_is_action:
+                        continue
+
+                operational_name = self._clean_actor(
+                    operational_match.group(1)
+                )
+
+                operational_key = comparison_key(
+                    operational_name
+                )
+
+                if (
+                    not operational_name
+                    or not operational_key
+                    or self._is_actor_identity_pronoun(
+                        operational_name
+                    )
+                    or not self._looks_like_actor_phrase(
+                        operational_name
+                    )
+                ):
+                    continue
+
+                operational_role = self._actor_role(
+                    operational_name
+                )
+
+                if operational_role not in {
+                    ActorRole.USER,
+                    ActorRole.OPERATOR,
+                    ActorRole.BUYER,
+                    ActorRole.BENEFICIARY,
+                }:
+                    operational_role = ActorRole.USER
+
+                identity = (
+                    operational_key,
+                    str(
+                        operational_role.value
+                    ),
+                )
+
+                if identity in seen:
+                    continue
+
+                seen.add(
+                    identity
+                )
+
+                output.append(
+                    (
+                        operational_name,
+                        operational_role,
+                    )
+                )
+
             for pattern, role in patterns:
                 match = pattern.search(
                     relation_sentence
                 )
 
                 if not match:
+                    continue
+
+                # Canonical scope polarity owns the matched relation prefix.
+                # A negative MVP/product-scope fragment can mention payment,
+                # providers or decision roles, but cannot independently
+                # materialize canonical actor-role authority.
+                if is_scope_exclusion_statement(
+                    relation_sentence[
+                        :match.end()
+                    ]
+                ):
+                    continue
+
+                payer_subject_override = ""
+
+                if (
+                    role == ActorRole.PAYER
+                    and (
+                        pattern is english_payment_predicate_pattern
+                        or pattern is french_payment_predicate_pattern
+                    )
+                ):
+                    # group(1) spans everything preceding the payment
+                    # predicate. It can contain a prior coordinated
+                    # workflow:
+                    #
+                    #   "customer books ... and pays ..."
+                    #
+                    # The shared workflow subject authority owns that
+                    # grammatical boundary.
+                    payer_prefix = relation_sentence[
+                        :match.end(1)
+                    ]
+
+                    # U7 universal economic-payer subject boundary.
+                    #
+                    # Examples:
+                    #
+                    #   X est le payeur economique et paie...
+                    #   X is the economic payer and pays...
+                    #
+                    # The actor identity is X, never the complete
+                    # relational predicate before the payment verb.
+                    copular_payer_subject = ""
+
+                    copular_payer_patterns = (
+                        re.compile(
+                            r"^\s*"
+                            r"(?:le\s+|la\s+|les\s+|"
+                            r"l['\u2019]\s*)?"
+                            r"(.+?)\s+"
+                            r"(?:est|serait|sera)\s+"
+                            r"(?:le\s+|la\s+|"
+                            r"l['\u2019]\s*)?"
+                            r"payeur"
+                            r"(?:\s+"
+                            r"(?:e|\u00e9)conomique"
+                            r")?"
+                            r"\s+(?:et|&)\s*$",
+                            re.IGNORECASE,
+                        ),
+                        re.compile(
+                            r"^\s*(?:the\s+)?"
+                            r"(.+?)\s+"
+                            r"(?:"
+                            r"is"
+                            r"|would(?:\s+(?:probably|likely))?\s+be"
+                            r"|will\s+be"
+                            r")\s+"
+                            r"(?:the\s+)?"
+                            r"(?:economic\s+)?"
+                            r"payer"
+                            r"\s+(?:and|&)\s*$",
+                            re.IGNORECASE,
+                        ),
+                    )
+
+                    for copular_pattern in copular_payer_patterns:
+                        copular_match = copular_pattern.search(
+                            payer_prefix
+                        )
+
+                        if not copular_match:
+                            continue
+
+                        copular_payer_subject = self._clean_actor(
+                            copular_match.group(1)
+                        )
+
+                        break
+
+                    payer_subject = (
+                        copular_payer_subject
+                        or self._clean_actor(
+                            self._workflow_subject_candidate(
+                                payer_prefix
+                            )
+                        )
+                    )
+
+                    payer_subject_key = comparison_key(
+                        payer_subject
+                    )
+
+                    # A delegation/capability clause before "pay" means
+                    # the grammatical subject does not perform payment.
+                    if (
+                        not payer_subject_key
+                        or re.search(
+                            r"\b(?:"
+                            r"allows?"
+                            r"|enables?"
+                            r"|lets?"
+                            r"|permits?"
+                            r"|authorizes?"
+                            r"|asks?"
+                            r"|requires?"
+                            r"|prompts?"
+                            r")\b",
+                            payer_subject_key,
+                            flags=re.IGNORECASE,
+                        )
+                        or re.search(
+                            r"\b(?:"
+                            r"to"
+                            r"|can"
+                            r"|could"
+                            r"|may"
+                            r"|might"
+                            r"|should"
+                            r"|must"
+                            r"|cannot"
+                            r"|not"
+                            r")$",
+                            payer_subject_key,
+                            flags=re.IGNORECASE,
+                        )
+                    ):
+                        continue
+
+                    payer_subject_override = (
+                        payer_subject
+                    )
+
+                # Explicit service execution is provider authority
+                # independently of project archetype. The grammatical
+                # subject must still be a valid canonical actor identity.
+                if role == ActorRole.PROVIDER:
+                    provider_candidate = self._clean_actor(
+                        match.group(1)
+                    )
+
+                    if (
+                        not provider_candidate
+                        or self._is_actor_identity_pronoun(
+                            provider_candidate
+                        )
+                        or not self._looks_like_actor_phrase(
+                            provider_candidate
+                        )
+                    ):
+                        continue
+
+                # Avoid turning the whole left-hand side of a compound
+                # "X forms the supply side and performs..." sentence
+                # into an actor identity. That sentence is handled by
+                # _declared_marketplace_sides(), which has stronger
+                # structural authority.
+                if (
+                    role == ActorRole.PROVIDER
+                    and any(
+                        marker
+                        in comparison_key(
+                            match.group(1)
+                        )
+                        for marker in (
+                            "supply side",
+                            "provider side",
+                            "seller side",
+                            "marketplace",
+                        )
+                    )
+                ):
                     continue
 
                 if (
@@ -2418,9 +3983,94 @@ class ProjectContextExtractor:
                         == ActorRole.DECISION_MAKER
                     )
                     else [
-                        match.group(1)
+                        payer_subject_override
+                        or match.group(1)
                     ]
                 )
+
+                # U7 coordinated decision-actor normalization.
+                #
+                # At this point the surrounding relation has already
+                # established DECISION_MAKER authority. We can therefore
+                # normalize residual coordinated alternatives locally
+                # without weakening the conservative global actor-list
+                # grammar.
+                #
+                # Blind-B2.3 extends only this already-authoritative
+                # relation. Global _split_actor_list() remains unchanged.
+                if (
+                    role
+                    == ActorRole.DECISION_MAKER
+                ):
+                    decision_blob = clean_text(
+                        match.group(1)
+                    )
+
+                    has_structural_list = (
+                        bool(
+                            re.search(
+                                r"\b(?:ou|or)\b",
+                                decision_blob,
+                                flags=re.IGNORECASE,
+                            )
+                        )
+                        or decision_blob.count(
+                            ","
+                        )
+                        >= 2
+                    )
+
+                    if has_structural_list:
+                        raw_names = [
+                            item
+                            for item
+                            in re.split(
+                                r"\s*,\s*"
+                                r"(?:(?:ou|or)\s+)?"
+                                r"|\s+\b(?:ou|or)\b\s+",
+                                decision_blob,
+                                flags=re.IGNORECASE,
+                            )
+                            if clean_text(
+                                item
+                            )
+                        ]
+
+                    normalized_raw_names: List[str] = []
+
+                    for raw_name in raw_names:
+                        residual_names = re.split(
+                            r"\s+\b(?:ou|or)\b\s+",
+                            clean_text(
+                                raw_name
+                            ),
+                            flags=re.IGNORECASE,
+                        )
+
+                        for residual_name in residual_names:
+                            residual_name = re.sub(
+                                r"^(?:"
+                                r"(?:le|la|les|the|a|an)"
+                                r"\b\s+"
+                                r"|l['\u2019]\s*"
+                                r")",
+                                "",
+                                clean_text(
+                                    residual_name
+                                ),
+                                flags=re.IGNORECASE,
+                            )
+
+                            residual_name = clean_text(
+                                residual_name
+                            )
+
+                            if residual_name:
+                                normalized_raw_names.append(
+                                    residual_name
+                                )
+
+                    raw_names = normalized_raw_names
 
                 for raw_name in raw_names:
                     name = self._clean_actor(
@@ -2517,12 +4167,45 @@ class ProjectContextExtractor:
         sentences: Sequence[str],
         structured: Dict[str, Any],
     ) -> str:
-        structured_problem = clean_text(
-            structured.get(
-                "problem"
+        # Blind-B2.3 typed problem and decision-list authority.
+        #
+        # A canonical structured problem is data, not printable prose.
+        # Only its semantic pain value may become ProblemContext.pain.
+        # Empty structured pain must not suppress stronger fresh evidence
+        # from the current user description.
+        def structured_problem_text(
+            value: Any,
+        ) -> str:
+            if isinstance(
+                value,
+                dict,
+            ):
+                return clean_text(
+                    value.get(
+                        "pain"
+                    )
+                )
+
+            if isinstance(
+                value,
+                str,
+            ):
+                return clean_text(
+                    value
+                )
+
+            return ""
+
+        structured_problem = (
+            structured_problem_text(
+                structured.get(
+                    "problem"
+                )
             )
-            or structured.get(
-                "core_problem"
+            or structured_problem_text(
+                structured.get(
+                    "core_problem"
+                )
             )
         )
 
@@ -2545,12 +4228,1051 @@ class ProjectContextExtractor:
             500,
         )
 
+    # U7-A canonical semantic-section authority.
+    #
+    # Explicit field-style facts in the user's description outrank
+    # inferred structured context. Each value stops at the next
+    # recognized semantic label so semantic fields cannot absorb
+    # neighboring sections.
+
+    # Golden-R2 canonical refresh authority.
+    #
+    # These helpers resolve fresh explicit semantics before historical
+    # compatibility projections can influence the canonical packet.
+    #
+    # They are language-grammar based and contain no project, sector,
+    # country or archetype fixture.
+
+    def _narrative_semantic_sections(
+        self,
+        description: str,
+    ) -> Dict[str, List[str]]:
+        """
+        Extract semantic requirements written as ordinary prose.
+
+        Colon-labelled sections remain authoritative through
+        _explicit_semantic_sections(). This helper covers equivalent
+        narrative formulations such as:
+
+            "The main input data are ..."
+            "Les donn?es d'entr?e principales sont ..."
+
+        Human oversight and maintenance require explicit responsibility
+        or process language; the mere word "maintenance" is insufficient.
+        """
+        output: Dict[
+            str,
+            List[str],
+        ] = {
+            "input_data": [],
+            "output_decision": [],
+            "human_oversight": [],
+            "maintenance_model": [],
+        }
+
+        value_patterns: Dict[
+            str,
+            Tuple[re.Pattern[str], ...],
+        ] = {
+            "input_data": (
+                re.compile(
+                    r"\b(?:les\s+)?"
+                    r"donn[e?]es?\s+"
+                    r"d['?]entr[e?]e"
+                    r"(?:\s+principales?)?\s+"
+                    r"(?:sont|incluent|comprennent)\s+"
+                    r"(.+)$",
+                    re.IGNORECASE,
+                ),
+                re.compile(
+                    r"\b(?:the\s+)?"
+                    r"(?:main\s+|primary\s+)?"
+                    r"input\s+data\s+"
+                    r"(?:are|is|include|includes|"
+                    r"comprise|comprises)\s+"
+                    r"(.+)$",
+                    re.IGNORECASE,
+                ),
+            ),
+
+            "output_decision": (
+                re.compile(
+                    r"\b(?:les\s+)?"
+                    r"sorties?\s+principales?\s+"
+                    r"(?:sont|incluent|comprennent)\s+"
+                    r"(.+)$",
+                    re.IGNORECASE,
+                ),
+                re.compile(
+                    r"\b(?:the\s+)?"
+                    r"(?:main\s+|primary\s+)?"
+                    r"outputs?\s+"
+                    r"(?:are|is|include|includes|"
+                    r"comprise|comprises)\s+"
+                    r"(.+)$",
+                    re.IGNORECASE,
+                ),
+            ),
+        }
+
+        for sentence in self._sentences(
+            description
+        ):
+            for field_name, patterns in (
+                value_patterns.items()
+            ):
+                for pattern in patterns:
+                    match = pattern.search(
+                        sentence
+                    )
+
+                    if not match:
+                        continue
+
+                    value = clean_text(
+                        match.group(1)
+                        .strip(
+                            " .,:;"
+                        )
+                    )
+
+                    if value:
+                        output[
+                            field_name
+                        ].append(
+                            value
+                        )
+
+                    break
+
+            # Golden-R2.1 normalized French narrative fallback.
+            #
+            # Recognize ordinary French narrative field declarations
+            # through canonical normalized text while preserving the
+            # original user value.
+            key = comparison_key(
+                sentence
+            )
+
+            french_narrative_field = ""
+
+            french_input_declaration = bool(
+                re.search(
+                    r"\bdonnees?\s+(?:d\s+)?entree"
+                    r"(?:\s+principales?)?\s+"
+                    r"(?:sont|incluent|comprennent)\b",
+                    key,
+                    flags=re.IGNORECASE,
+                )
+            )
+
+            french_output_declaration = bool(
+                re.search(
+                    r"\bsorties?\s+principales?\s+"
+                    r"(?:sont|incluent|comprennent)\b",
+                    key,
+                    flags=re.IGNORECASE,
+                )
+            )
+
+            if french_input_declaration:
+                french_narrative_field = (
+                    "input_data"
+                )
+
+            elif french_output_declaration:
+                french_narrative_field = (
+                    "output_decision"
+                )
+
+            if french_narrative_field:
+                narrative_value_match = re.search(
+                    r"\b(?:"
+                    r"sont|"
+                    r"incluent|"
+                    r"comprennent"
+                    r")\b\s+(.+)$",
+                    sentence,
+                    flags=re.IGNORECASE,
+                )
+
+                if narrative_value_match:
+                    narrative_value = clean_text(
+                        narrative_value_match
+                        .group(1)
+                        .strip(
+                            " .,:;"
+                        )
+                    )
+
+                    if narrative_value:
+                        output[
+                            french_narrative_field
+                        ].append(
+                            narrative_value
+                        )
+
+            human_markers = (
+                "human supervisor",
+                "human reviewer",
+                "human operator",
+                "human validation",
+                "human approval",
+                "responsable humain",
+                "superviseur humain",
+                "operateur humain",
+                "validation humaine",
+                "controle humain",
+            )
+
+            human_action_markers = (
+                "review",
+                "valid",
+                "verif",
+                "approv",
+                "autorisation",
+                "responsable",
+            )
+
+            if (
+                any(
+                    marker in key
+                    for marker
+                    in human_markers
+                )
+                and any(
+                    marker in key
+                    for marker
+                    in human_action_markers
+                )
+            ):
+                output[
+                    "human_oversight"
+                ].append(
+                    sentence
+                )
+
+            maintenance_markers = (
+                "maintenance process",
+                "maintenance model",
+                "maintenance procedure",
+                "maintenance responsibility",
+                "responsible for maintenance",
+                "maintained by",
+                "maintains the",
+                "processus de maintenance",
+                "modele de maintenance",
+                "procedure de maintenance",
+                "responsabilite de maintenance",
+                "responsable de la maintenance",
+                "assure la maintenance",
+                "maintient le",
+            )
+
+            if (
+                "maintenance"
+                in key
+                and any(
+                    marker in key
+                    for marker
+                    in maintenance_markers
+                )
+            ):
+                output[
+                    "maintenance_model"
+                ].append(
+                    sentence
+                )
+
+        return {
+            field_name:
+                unique_texts(
+                    values
+                )
+            for field_name, values
+            in output.items()
+            if values
+        }
+
+
+    def _canonical_clarification_facts(
+        self,
+        *,
+        project_context: Dict[str, Any],
+        idea_readiness: Dict[str, Any] | None,
+        analysis_data: Dict[str, Any],
+        structured: Dict[str, Any],
+    ) -> Dict[str, str]:
+        """
+        Resolve the canonical explicit-fact channel without recursively
+        treating arbitrary historical analysis output as user truth.
+
+        Lower-authority historical packet projections are read first.
+        More direct current contexts overwrite them.
+        """
+        result: Dict[
+            str,
+            str,
+        ] = {}
+
+        readiness_data = (
+            idea_readiness
+            if isinstance(
+                idea_readiness,
+                dict,
+            )
+            else {}
+        )
+
+        stored_readiness = (
+            analysis_data.get(
+                "idea_readiness"
+            )
+            if isinstance(
+                analysis_data.get(
+                    "idea_readiness"
+                ),
+                dict,
+            )
+            else {}
+        )
+
+        def nested(
+            container: Any,
+            key: str,
+        ) -> Dict[str, Any]:
+            if not isinstance(
+                container,
+                dict,
+            ):
+                return {}
+
+            value = container.get(
+                key
+            )
+
+            return (
+                value
+                if isinstance(
+                    value,
+                    dict,
+                )
+                else {}
+            )
+
+        sources = (
+            nested(
+                analysis_data,
+                "legacy_project_context",
+            ),
+            nested(
+                analysis_data,
+                "project_context_packet",
+            ),
+            nested(
+                stored_readiness,
+                "legacy_project_context",
+            ),
+            nested(
+                stored_readiness,
+                "project_context_packet",
+            ),
+            analysis_data,
+            structured,
+            nested(
+                project_context,
+                "legacy_project_context",
+            ),
+            nested(
+                project_context,
+                "project_context_packet",
+            ),
+            project_context,
+            nested(
+                readiness_data,
+                "legacy_project_context",
+            ),
+            nested(
+                readiness_data,
+                "project_context_packet",
+            ),
+            readiness_data,
+        )
+
+        for source in sources:
+            if not isinstance(
+                source,
+                dict,
+            ):
+                continue
+
+            facts = source.get(
+                "clarification_facts"
+            )
+
+            if not isinstance(
+                facts,
+                dict,
+            ):
+                continue
+
+            for raw_field, raw_value in (
+                facts.items()
+            ):
+                field = clean_text(
+                    raw_field
+                )
+
+                value = clean_text(
+                    raw_value
+                )
+
+                if (
+                    field
+                    and value
+                ):
+                    result[
+                        field
+                    ] = value
+
+        return result
+
+
+    def _reconcile_fresh_declared_actor_authority(
+        self,
+        *,
+        actors: Sequence[ActorContext],
+        description: str,
+    ) -> List[ActorContext]:
+        """
+        A fresh explicit actor-role relation outranks a malformed legacy
+        identity that merely appended role grammar to the same actor.
+
+        Distinct actors and legitimate multi-role actors are preserved.
+        """
+        declared = (
+            self._declared_actor_roles(
+                description
+            )
+        )
+
+        if not declared:
+            return list(
+                actors
+            )
+
+        declared_by_role: Dict[
+            ActorRole,
+            List[str],
+        ] = {}
+
+        for raw_name, role in declared:
+            name = self._clean_actor(
+                raw_name
+            )
+
+            key = comparison_key(
+                name
+            )
+
+            if (
+                not key
+                or not name
+            ):
+                continue
+
+            declared_by_role.setdefault(
+                role,
+                [],
+            ).append(
+                key
+            )
+
+        relation_markers = {
+            ActorRole.PAYER: (
+                "payer",
+                "payeur",
+                "payeur economique",
+                "economic payer",
+                "economic buyer",
+                "acheteur economique",
+            ),
+            ActorRole.BUYER: (
+                "buyer",
+                "acheteur",
+                "economic buyer",
+                "acheteur economique",
+            ),
+            ActorRole.DECISION_MAKER: (
+                "decision maker",
+                "decision-maker",
+                "decideur",
+                "decideuse",
+                "purchasing authority",
+                "autorite d achat",
+            ),
+        }
+
+        output: List[
+            ActorContext
+        ] = []
+
+        seen: set[
+            Tuple[str, str]
+        ] = set()
+
+        for actor in actors:
+            actor_key = comparison_key(
+                actor.name
+            )
+
+            if not actor_key:
+                continue
+
+            discard = False
+
+            fresh_keys = (
+                declared_by_role.get(
+                    actor.role,
+                    [],
+                )
+            )
+
+            markers = (
+                relation_markers.get(
+                    actor.role,
+                    (),
+                )
+            )
+
+            for fresh_key in fresh_keys:
+                if (
+                    actor_key
+                    == fresh_key
+                ):
+                    continue
+
+                if not actor_key.startswith(
+                    fresh_key + " "
+                ):
+                    continue
+
+                suffix = actor_key[
+                    len(
+                        fresh_key
+                    ):
+                ].strip()
+
+                if any(
+                    marker in suffix
+                    for marker
+                    in markers
+                ):
+                    discard = True
+                    break
+
+            if discard:
+                continue
+
+            identity = (
+                actor_key,
+                actor.role.value,
+            )
+
+            if identity in seen:
+                continue
+
+            seen.add(
+                identity
+            )
+
+            output.append(
+                actor
+            )
+
+        return output[:8]
+
+
+    def _is_monetization_only_solution(
+        self,
+        value: str,
+    ) -> bool:
+        """
+        Revenue mechanics are business-model facts, not a solution
+        mechanism when no non-commercial operation is described.
+        """
+        text = clean_text(
+            value
+        )
+
+        if not text:
+            return False
+
+        key = comparison_key(
+            text
+        )
+
+        revenue_pattern = re.compile(
+            r"\b(?:"
+            r"pay|pays|paid|payment|payments|"
+            r"paie|paient|payer|paiement|paiements|"
+            r"commission|commissions|"
+            r"fee|fees|frais|"
+            r"subscription|subscriptions|abonnement|abonnements|"
+            r"billing|invoice|invoicing|"
+            r"facturation|facture|"
+            r"revenue|revenues|revenu|revenus"
+            r")\b",
+            re.IGNORECASE,
+        )
+
+        if not revenue_pattern.search(
+            key
+        ):
+            return False
+
+        occurrences = (
+            self._workflow_action_occurrences(
+                text
+            )
+        )
+
+        for occurrence in occurrences:
+            action_key = comparison_key(
+                occurrence.get(
+                    "action"
+                )
+                or ""
+            )
+
+            surface_key = comparison_key(
+                occurrence.get(
+                    "surface"
+                )
+                or ""
+            )
+
+            payment_action = bool(
+                re.fullmatch(
+                    r"(?:"
+                    r"pay|pays|paid|"
+                    r"paie|paient|payer"
+                    r")",
+                    surface_key,
+                    flags=re.IGNORECASE,
+                )
+                or action_key
+                in {
+                    "payer",
+                }
+            )
+
+            if not payment_action:
+                return False
+
+        return True
+
+
+    def _fresh_solution_candidates(
+        self,
+        sentences: Sequence[str],
+    ) -> List[str]:
+        """
+        Select explicit operational mechanism sentences while excluding
+        pure commercial/revenue framing.
+        """
+        output: List[
+            str
+        ] = []
+
+        for sentence in sentences:
+            if not self._canonical_action(
+                sentence
+            ):
+                continue
+
+            if self._is_problem_sentence(
+                sentence
+            ):
+                continue
+
+            if self._is_scope_only(
+                sentence
+            ):
+                continue
+
+            if self._is_monetization_only_solution(
+                sentence
+            ):
+                continue
+
+            output.append(
+                sentence
+            )
+
+        return unique_texts(
+            output
+        )
+
+
+    def _workflow_has_zero_object_polarity(
+        self,
+        value: str,
+    ) -> bool:
+        """
+        Reject legacy positive-looking workflow projections whose action
+        object itself explicitly denotes zero / none.
+
+        Examples of the grammar class:
+            action + no object
+            action + directly + aucune object
+
+        Conditional workflows mentioning absence later in the sentence
+        are not rejected by this narrow object-position rule.
+        """
+        text = clean_text(
+            value
+        )
+
+        if not text:
+            return False
+
+        for occurrence in (
+            self._workflow_action_occurrences(
+                text
+            )
+        ):
+            match = occurrence.get(
+                "match"
+            )
+
+            if match is None:
+                continue
+
+            tail_key = comparison_key(
+                text[
+                    match.end():
+                ]
+            )
+
+            if re.match(
+                r"^(?:(?:"
+                r"directly|directement|"
+                r"automatically|automatiquement"
+                r")\s+){0,2}"
+                r"(?:"
+                r"aucun(?:e|s|es)?|"
+                r"no|zero"
+                r")\b",
+                tail_key,
+                flags=re.IGNORECASE,
+            ):
+                return True
+
+        return False
+
+
+    def _explicit_semantic_sections(
+        self,
+        description: str,
+    ) -> Dict[str, List[str]]:
+        label_patterns: Tuple[
+            Tuple[str, str],
+            ...,
+        ] = (
+            (
+                "solution",
+                r"(?:"
+                r"proposed\s+solution"
+                r"|solution\s+propos(?:e|\u00e9)e"
+                r"|solution"
+                r")",
+            ),
+            (
+                "value_proposition",
+                r"(?:"
+                r"value\s+proposition"
+                r"|proposed\s+value"
+                r"|valeur\s+propos(?:e|\u00e9)e"
+                r")",
+            ),
+            (
+                "input_data",
+                r"(?:"
+                r"input\s+data"
+                r"|input\s+information"
+                r"|donn(?:e|\u00e9)es?\s+d['\u2019]entr(?:e|\u00e9)e"
+                r")",
+            ),
+            (
+                "output_decision",
+                r"(?:"
+                r"main\s+outputs?"
+                r"|outputs?"
+                r"|result(?:s)?\s+produced"
+                r"|sorties?\s+principales?"
+                r"|r(?:e|\u00e9)sultats?\s+produits?"
+                r")",
+            ),
+            (
+                "human_oversight",
+                r"(?:"
+                r"human\s+oversight"
+                r"|human\s+validation"
+                r"|contr(?:o|\u00f4)le\s+humain"
+                r"|validation\s+humaine"
+                r")",
+            ),
+            (
+                "maintenance_model",
+                r"(?:"
+                r"maintenance\s+model"
+                r"|maintenance\s+responsibility"
+                r"|mod(?:e|\u00e8)le\s+de\s+maintenance"
+                r"|responsabilit(?:e|\u00e9)\s+de\s+maintenance"
+                r")",
+            ),
+            (
+                "priority_workflow",
+                r"(?:"
+                r"priority\s+workflow"
+                r"|main\s+workflow"
+                r"|workflow\s+prioritaire"
+                r"|processus\s+prioritaire"
+                r")",
+            ),
+            (
+                "business_model",
+                r"(?:"
+                r"business\s+model"
+                r"|revenue\s+model"
+                r"|mod(?:e|\u00e8)le\s+(?:e|\u00e9)conomique"
+                r")",
+            ),
+            (
+                "payment",
+                r"(?:"
+                r"payment"
+                r"|pricing"
+                r"|paiement"
+                r"|tarification"
+                r")",
+            ),
+            (
+                "deployment_environment",
+                r"(?:"
+                r"deployment\s+environment"
+                r"|operating\s+environment"
+                r"|environnement\s+de\s+d(?:e|\u00e9)ploiement"
+                r"|environnement\s+d['\u2019]utilisation"
+                r")",
+            ),
+            (
+                "business_hypothesis",
+                r"(?:"
+                r"business\s+hypothesis"
+                r"|business\s+assumption"
+                r"|hypoth(?:e|\u00e8)se\s+business"
+                r"|hypoth(?:e|\u00e8)se\s+commerciale"
+                r")",
+            ),
+            (
+                "mvp_scope",
+                r"(?:"
+                r"mvp\s+scope"
+                r"|p(?:e|\u00e9)rim(?:e|\u00e8)tre\s+mvp"
+                r"|mvp"
+                r")",
+            ),
+            (
+                "constraints",
+                r"(?:"
+                r"constraints?"
+                r"|contraintes?"
+                r")",
+            ),
+            (
+                "success_metrics",
+                r"(?:"
+                r"success\s+metrics?"
+                r"|success\s+criteria"
+                r"|m(?:e|\u00e9)triques?\s+de\s+succ(?:e|\u00e8)s"
+                r"|crit(?:e|\u00e8)res?\s+de\s+succ(?:e|\u00e8)s"
+                r")",
+            ),
+        )
+
+        group_parts: List[str] = []
+
+        for index, (
+            _canonical_name,
+            pattern,
+        ) in enumerate(
+            label_patterns
+        ):
+            group_parts.append(
+                f"(?P<section_{index}>{pattern})"
+            )
+
+        label_re = re.compile(
+            r"(?<!\w)(?:"
+            + "|".join(
+                group_parts
+            )
+            + r")\s*[:\uff1a]\s*",
+            re.IGNORECASE,
+        )
+
+        matches = list(
+            label_re.finditer(
+                description or ""
+            )
+        )
+
+        if not matches:
+            return {}
+
+        output: Dict[
+            str,
+            List[str],
+        ] = {}
+
+        for index, match in enumerate(
+            matches
+        ):
+            canonical_name = ""
+
+            for group_index, (
+                name,
+                _pattern,
+            ) in enumerate(
+                label_patterns
+            ):
+                if match.group(
+                    f"section_{group_index}"
+                ):
+                    canonical_name = name
+                    break
+
+            if not canonical_name:
+                continue
+
+            value_start = match.end()
+
+            value_end = (
+                matches[index + 1].start()
+                if index + 1 < len(matches)
+                else len(description)
+            )
+
+            value = clean_text(
+                description[
+                    value_start:value_end
+                ]
+            )
+
+            value = re.sub(
+                r"^[\s\-???]+",
+                "",
+                value,
+            )
+
+            value = re.sub(
+                r"[\s;]+$",
+                "",
+                value,
+            )
+
+            value = clean_text(
+                value
+            )
+
+            if not value:
+                continue
+
+            output.setdefault(
+                canonical_name,
+                []
+            ).append(
+                value
+            )
+
+        return {
+            key: unique_texts(
+                values
+            )
+            for key, values
+            in output.items()
+            if values
+        }
+
+    def _canonical_requirement_values(
+        self,
+        structured: Dict[str, Any],
+        key: str,
+    ) -> List[str]:
+        value = (
+            structured.get(
+                key
+            )
+            if structured
+            else None
+        )
+
+        if value is None:
+            return []
+
+        if isinstance(
+            value,
+            str,
+        ):
+            values = [
+                value
+            ]
+
+        elif isinstance(
+            value,
+            (
+                list,
+                tuple,
+                set,
+            ),
+        ):
+            values = list(
+                value
+            )
+
+        else:
+            values = [
+                value
+            ]
+
+        return unique_texts(
+            clean_text(
+                str(item)
+            )
+            for item in values
+            if clean_text(
+                str(item)
+            )
+        )
+
     def _extract_solution_text(
         self,
         *,
         sentences: Sequence[str],
         structured: Dict[str, Any],
     ) -> str:
+        """
+        Resolve the canonical operational solution mechanism.
+
+        A valid structured mechanism is preserved.
+
+        When a historical structured projection contains only pricing,
+        payment, commission or other revenue mechanics, a fresh explicit
+        operational mechanism from the current user description has
+        stronger semantic authority.
+        """
         structured_solution = clean_text(
             structured.get(
                 "solution"
@@ -2560,31 +5282,32 @@ class ProjectContextExtractor:
             )
         )
 
-        if structured_solution:
-            return structured_solution
+        fresh_candidates = (
+            self._fresh_solution_candidates(
+                sentences
+            )
+        )
 
-        candidates = [
-            sentence
-            for sentence in sentences
-            if (
-                self._canonical_action(
-                    sentence
-                )
-                and not self._is_problem_sentence(
-                    sentence
-                )
-                and not self._is_scope_only(
-                    sentence
+        if (
+            structured_solution
+            and not (
+                fresh_candidates
+                and self._is_monetization_only_solution(
+                    structured_solution
                 )
             )
-        ]
+        ):
+            return structured_solution
 
-        return self._compact(
-            " ".join(
-                candidates[:3]
-            ),
-            700,
-        )
+        if fresh_candidates:
+            return self._compact(
+                " ".join(
+                    fresh_candidates[:3]
+                ),
+                700,
+            )
+
+        return structured_solution
 
     def _extract_mvp_scope(
         self,
@@ -2881,6 +5604,116 @@ class ProjectContextExtractor:
             ):
                 candidate = right
                 break
+
+        # A trailing coordination / sequence marker before the next
+        # predicate inherits the subject of the preceding predicate:
+        #
+        #   "customer books a service and [pays ...]"
+        #   "customer requests a service then [pays ...]"
+        #
+        # A compound actor such as "sales and marketing team" is
+        # preserved because inheritance requires an actionable predicate
+        # on the left side.
+        trailing_link = re.search(
+            r"\b(?:"
+            r"and|et|or|ou|"
+            r"then|puis|ensuite"
+            r")\s*$",
+            candidate,
+            flags=re.IGNORECASE,
+        )
+
+        if trailing_link is not None:
+            link_key = comparison_key(
+                trailing_link.group(0)
+            )
+
+            left = clean_text(
+                candidate[
+                    :trailing_link.start()
+                ]
+            )
+
+            left_actions = (
+                self._workflow_action_occurrences(
+                    left
+                )
+            )
+
+            if left_actions:
+                first_action = min(
+                    left_actions,
+                    key=lambda item: (
+                        item["match"].start()
+                    ),
+                )
+
+                inherited_subject = (
+                    self._workflow_subject_candidate(
+                        left[
+                            :first_action[
+                                "match"
+                            ].start()
+                        ]
+                    )
+                )
+
+                if inherited_subject:
+                    candidate = (
+                        inherited_subject
+                    )
+
+            elif link_key in {
+                "then",
+                "puis",
+                "ensuite",
+            }:
+                # Pure sequencing:
+                #
+                #   "customer then [pays ...]"
+                #
+                # contains no preceding action to inherit from.
+                candidate = left
+
+        # Control/modal clauses belong to the downstream predicate,
+        # not to the local actor identity:
+        #
+        #   "manager decides to approve ..."
+        #   "manager chooses to approve ..."
+        #   "user can choose to pay ..."
+        #
+        # Preserve direct-object choice:
+        #
+        #   "user can choose a meal"
+        #
+        # because this boundary is applied only to a prefix that ends
+        # in the infinitive connector immediately before another action.
+        candidate = re.sub(
+            r"\s+\b(?:"
+            r"(?:(?:"
+            r"can|could|may|might|must|should|"
+            r"will|would"
+            r")\s+)?"
+            r"(?:"
+            r"choose|chooses|chose|chosen|choosing|"
+            r"decide|decides|decided|deciding"
+            r")\s+to"
+            r"|"
+            r"(?:(?:"
+            r"peut|peuvent|doit|doivent|"
+            r"pourrait|pourraient"
+            r")\s+)?"
+            r"(?:"
+            r"choisir|choisit|choisissent|"
+            r"d(?:e|\u00e9)cider|"
+            r"d(?:e|\u00e9)cide|"
+            r"d(?:e|\u00e9)cident"
+            r")\s+(?:de|d['\u2019])"
+            r")\s*$",
+            "",
+            candidate,
+            flags=re.IGNORECASE,
+        )
 
         # Modal auxiliaries belong to the predicate, not to the actor.
         candidate = re.sub(
@@ -3421,6 +6254,7 @@ class ProjectContextExtractor:
             *,
             index: int,
             explicit: bool,
+            priority_explicit: bool = False,
         ) -> None:
             nonlocal last_actor_name
 
@@ -3551,11 +6385,71 @@ class ProjectContextExtractor:
                             )
                         )
                     else:
-                        next_start = (
+                        next_action_start = (
                             next_occurrence[
                                 "match"
                             ].start()
                         )
+
+                        next_start = (
+                            next_action_start
+                        )
+
+                        # ------------------------------------------
+                        # Canonical coordinated-predicate boundary.
+                        #
+                        # The next action occurrence already owns
+                        # action identity. The clause boundary must
+                        # therefore stop before the coordination /
+                        # sequence marker that introduces that next
+                        # predicate, including an explicit new subject:
+                        #
+                        #   books a service
+                        #   and the company pays ...
+                        #
+                        #   reserve un service
+                        #   et l'entreprise paie ...
+                        #
+                        # Use the LAST structural boundary before the
+                        # next canonical action so compound objects are
+                        # preserved:
+                        #
+                        #   books transport and accommodation
+                        #   and the company pays ...
+                        #
+                        # No action vocabulary is duplicated here.
+                        # ------------------------------------------
+
+                        between_actions = (
+                            sentence[
+                                match.end():
+                                next_action_start
+                            ]
+                        )
+
+                        predicate_boundaries = list(
+                            re.finditer(
+                                r"[,;]"
+                                r"|\b(?:"
+                                r"and|et|or|ou|"
+                                r"then|puis|ensuite"
+                                r")\b",
+                                between_actions,
+                                flags=re.IGNORECASE,
+                            )
+                        )
+
+                        if predicate_boundaries:
+                            boundary = (
+                                predicate_boundaries[
+                                    -1
+                                ]
+                            )
+
+                            next_start = (
+                                match.end()
+                                + boundary.start()
+                            )
 
                 clause = sentence[
                     match.start():
@@ -3607,8 +6501,16 @@ class ProjectContextExtractor:
                                     "action"
                                 ],
                             )
+                            + (
+                                100
+                                if priority_explicit
+                                else 0
+                            )
                         ),
                         "explicit": explicit,
+                        "priority_explicit": (
+                            priority_explicit
+                        ),
                         "actor": occurrence_actor,
                         "alternative_action": (
                             alternative_occurrence[
@@ -3627,12 +6529,112 @@ class ProjectContextExtractor:
                     }
                 )
 
+        # ----------------------------------------------------------
+        # Explicit workflow provenance authority.
+        #
+        # User-declared priority is stronger than lexical action
+        # priority:
+        #
+        #   explicit priority workflow
+        #       >
+        #   incidental activity
+        #
+        # This prevents a generic high-priority verb such as
+        # "monitor" from replacing a flow explicitly identified by
+        # the user.
+        #
+        # The block can be written as prose:
+        #
+        #   "Le workflow prioritaire est le suivant: ..."
+        #
+        # or as a structured section followed by Step/Etape lines.
+        # ----------------------------------------------------------
+
+        priority_marker_pattern = re.compile(
+            r"\b(?:"
+            r"workflow|processus|parcours"
+            r")\s+"
+            r"(?:"
+            r"prioritaire|principal|cle"
+            r")\b"
+            r"|"
+            r"\b(?:"
+            r"priority|primary|main|key"
+            r")\s+"
+            r"(?:workflow|process)\b",
+            flags=re.IGNORECASE,
+        )
+
+        secondary_transition_pattern = re.compile(
+            r"\b(?:"
+            r"aussi|egalement|"
+            r"also|additionally|in\s+addition"
+            r")\b",
+            flags=re.IGNORECASE,
+        )
+
+        structured_label_pattern = re.compile(
+            r"^[^:]{1,80}:\s*",
+            flags=re.IGNORECASE,
+        )
+
+        step_label_pattern = re.compile(
+            r"^(?:etape|step)\s+\d+\b",
+            flags=re.IGNORECASE,
+        )
+
+        priority_block_active = False
+
         for index, sentence in enumerate(
             sentences
         ):
+            sentence_key = comparison_key(
+                sentence
+            )
+
+            clean_sentence = clean_text(
+                sentence
+            )
+
+            has_priority_marker = bool(
+                priority_marker_pattern.search(
+                    sentence_key
+                )
+            )
+
+            is_step_label = bool(
+                step_label_pattern.match(
+                    sentence_key
+                )
+            )
+
+            if has_priority_marker:
+                priority_block_active = True
+
+            elif priority_block_active:
+                if secondary_transition_pattern.search(
+                    sentence_key
+                ):
+                    priority_block_active = False
+
+                elif (
+                    structured_label_pattern.match(
+                        clean_sentence
+                    )
+                    and not is_step_label
+                ):
+                    priority_block_active = False
+
             if self._workflow_sentence_is_non_action_context(
                 sentence
             ):
+                if (
+                    priority_block_active
+                    and not has_priority_marker
+                    and not is_step_label
+                ):
+                    priority_block_active = False
+
                 continue
 
             if self._is_problem_sentence(
@@ -3644,6 +6646,9 @@ class ProjectContextExtractor:
                 sentence,
                 index=index,
                 explicit=True,
+                priority_explicit=(
+                    priority_block_active
+                ),
             )
 
         # Legacy structured workflows may still exist in old persisted
@@ -3661,6 +6666,11 @@ class ProjectContextExtractor:
                 continue
 
             if self._is_problem_sentence(
+                value
+            ):
+                continue
+
+            if self._workflow_has_zero_object_polarity(
                 value
             ):
                 continue
@@ -4057,6 +7067,158 @@ class ProjectContextExtractor:
         # Therefore a real actor/delegation is present.
         return False
 
+    def _workflow_match_is_negated_predicate(
+        self,
+        *,
+        sentence: str,
+        item: Dict[str, Any],
+    ) -> bool:
+        """
+        Reject an action occurrence when the user explicitly negates
+        that predicate.
+
+        This is workflow polarity authority, not MVP/scope authority.
+
+        Examples rejected:
+        - "Le logiciel ne commande aucune machine."
+        - "Le syst?me ne doit pas envoyer automatiquement..."
+        - "The software does not control machines."
+        - "The service will not automatically approve requests."
+
+        Positive statements remain eligible.
+
+        The rule is grammar-based and contains no project, sector,
+        region or archetype vocabulary.
+        """
+        match = item.get(
+            "match"
+        )
+
+        if match is None:
+            return False
+
+        prefix_key = comparison_key(
+            sentence[
+                :match.start()
+            ]
+        ).strip()
+
+        suffix_key = comparison_key(
+            sentence[
+                match.end():
+            ]
+        ).strip()
+
+        prefix_tail = " ".join(
+            prefix_key.split()[
+                -10:
+            ]
+        )
+
+        suffix_head = " ".join(
+            suffix_key.split()[
+                :7
+            ]
+        )
+
+        # ------------------------------------------------------
+        # English predicate negation.
+        #
+        # does not control
+        # will not approve
+        # cannot send
+        # never records
+        # ------------------------------------------------------
+
+        if re.search(
+            r"(?:"
+            r"\b(?:"
+            r"do|does|did|"
+            r"is|are|was|were|"
+            r"will|would|"
+            r"can|could|"
+            r"should|must|"
+            r"may|might|shall|"
+            r"has|have|had"
+            r")\s+not\b"
+            r"|\bcannot\b"
+            r"|\bnever\b"
+            r")"
+            r"(?:\s+[^\s]+){0,4}\s*$",
+            prefix_tail,
+            flags=re.IGNORECASE,
+        ):
+            return True
+
+        # comparison_key() may separate apostrophe contractions:
+        #
+        # doesn't -> doesn t
+        # can't    -> can t
+        #
+        # Keep those forms inside the same universal authority.
+        if re.search(
+            r"\b(?:"
+            r"don|doesn|didn|"
+            r"isn|aren|wasn|weren|"
+            r"won|wouldn|"
+            r"can|couldn|"
+            r"shouldn|mustn|"
+            r"hasn|haven|hadn"
+            r")\s+t\b"
+            r"(?:\s+[^\s]+){0,4}\s*$",
+            prefix_tail,
+            flags=re.IGNORECASE,
+        ):
+            return True
+
+        # ------------------------------------------------------
+        # French predicate negation.
+        #
+        # ne commande pas
+        # ne commande aucune machine
+        # ne doit pas commander
+        # ne peut jamais envoyer
+        #
+        # French commonly splits negation around the predicate,
+        # therefore inspect both the close prefix and close suffix.
+        # ------------------------------------------------------
+
+        has_french_ne = bool(
+            re.search(
+                r"(?:^|\s)(?:ne|n)\b",
+                prefix_tail,
+                flags=re.IGNORECASE,
+            )
+        )
+
+        if has_french_ne:
+            if re.search(
+                r"\b(?:"
+                r"pas|plus|jamais|"
+                r"aucun|aucune|"
+                r"aucuns|aucunes|"
+                r"rien|personne|ni"
+                r")\b",
+                prefix_tail,
+                flags=re.IGNORECASE,
+            ):
+                return True
+
+            if re.search(
+                r"\b(?:"
+                r"pas|plus|jamais|"
+                r"aucun|aucune|"
+                r"aucuns|aucunes|"
+                r"rien|personne|ni"
+                r")\b",
+                suffix_head,
+                flags=re.IGNORECASE,
+            ):
+                return True
+
+        return False
+
+
     def _workflow_match_is_conditional_passive_context(
         self,
         *,
@@ -4169,6 +7331,24 @@ class ProjectContextExtractor:
             Tuple[re.Pattern[str], str],
             ...,
         ] = (
+            # U2 universal comparison workflow authority.
+            #
+            # Comparison is a real generic business action, not merely
+            # a grammatical boundary.
+            (
+                re.compile(
+                    r"\bcompare(?:s|d|ing)?\b"
+                    r"|\bcompar"
+                    r"(?:"
+                    r"er|e|es|ent|"
+                    r"ait|aient|"
+                    r"era|eront|"
+                    r"ant"
+                    r")\b",
+                    re.IGNORECASE,
+                ),
+                "comparer",
+            ),
             (
                 re.compile(
                     r"\bcreat(?:e|es|ed|ing)?\b"
@@ -4190,8 +7370,12 @@ class ProjectContextExtractor:
             (
                 re.compile(
                     r"\bapprove(?:s|d|ing)?\b"
+                    r"|\bvalidate(?:s|d|ing)?\b"
                     r"|\bapprouv"
-                    r"(?:er|e|\u00e9|ent|ait|ant)?\b",
+                    r"(?:er|e|\u00e9|ent|ait|ant)?\b"
+                    r"|\bvalid"
+                    r"(?:er|e|es|ent|ait|ant"
+                    r"|\u00e9(?:e|es|s)?)\b",
                     re.IGNORECASE,
                 ),
                 "approuver",
@@ -4411,6 +7595,76 @@ class ProjectContextExtractor:
             )
         )
 
+        # ----------------------------------------------------------
+        # Control-wrapper authority.
+        #
+        # "choose" / "choisir" remains a valid business action when
+        # it owns a direct object:
+        #
+        #   "choose a meal"
+        #   "choisir une option"
+        #
+        # It is not a separate workflow when it merely controls a
+        # downstream action already recognized by the same lexical
+        # authority:
+        #
+        #   "choose to pay"
+        #   "choisir de payer"
+        #
+        # We resolve this from the already-built raw occurrence set;
+        # no parallel action vocabulary is introduced here.
+        # ----------------------------------------------------------
+
+        control_wrapper_ids: set[int] = set()
+
+        for item in raw:
+            if item["action"] != "choisir":
+                continue
+
+            match = item["match"]
+
+            downstream = [
+                candidate
+                for candidate in raw
+                if (
+                    candidate is not item
+                    and candidate[
+                        "match"
+                    ].start()
+                    >= match.end()
+                )
+            ]
+
+            if not downstream:
+                continue
+
+            next_start = min(
+                candidate[
+                    "match"
+                ].start()
+                for candidate in downstream
+            )
+
+            connector = sentence[
+                match.end():
+                next_start
+            ]
+
+            if re.fullmatch(
+                r"\s*(?:"
+                r"to"
+                r"|de"
+                r"|d['\u2019]"
+                r")\s*",
+                connector,
+                flags=re.IGNORECASE,
+            ):
+                control_wrapper_ids.add(
+                    id(
+                        item
+                    )
+                )
+
         output: List[
             Dict[str, Any]
         ] = []
@@ -4420,6 +7674,9 @@ class ProjectContextExtractor:
         ] = []
 
         for item in raw:
+            if id(item) in control_wrapper_ids:
+                continue
+
             match = item["match"]
 
             start = match.start()
@@ -4437,6 +7694,12 @@ class ProjectContextExtractor:
                 sentence=sentence,
                 item=item,
                 accepted=output,
+            ):
+                continue
+
+            if self._workflow_match_is_negated_predicate(
+                sentence=sentence,
+                item=item,
             ):
                 continue
 
@@ -4467,6 +7730,164 @@ class ProjectContextExtractor:
         )
 
         return output
+
+
+    def _workflow_match_has_french_preverbal_object_clitic(
+        self,
+        *,
+        sentence: str,
+        item: Dict[str, Any],
+    ) -> bool:
+        """
+        Return True when French ``le``, ``la`` or ``les`` immediately
+        before an already-recognized action surface is functioning as
+        a preverbal direct-object clitic rather than as a determiner.
+
+        Examples:
+
+            "l'acheteur le reserve"
+            "le client la valide"
+            "les clients les commandent"
+
+        Counter-example:
+
+            "la reserve du lot"
+
+        This helper decides grammar only. It does not infer a workflow,
+        actor role, transaction, object identity, or lifecycle relation.
+        """
+        match = item.get(
+            "match"
+        )
+
+        if match is None:
+            return False
+
+        prefix = sentence[
+            :match.start()
+        ].rstrip()
+
+        clitic_match = re.search(
+            r"\b(?:le|la|les)\s*$",
+            prefix,
+            flags=(
+                re.IGNORECASE
+                | re.UNICODE
+            ),
+        )
+
+        if clitic_match is None:
+            return False
+
+        before_clitic = prefix[
+            :clitic_match.start()
+        ].rstrip()
+
+        if not before_clitic:
+            return False
+
+        # Preserve real nominal frames:
+        #
+        #   "la reserve du lot"
+        #   "la demande de service"
+        suffix_key = comparison_key(
+            sentence[
+                match.end():
+            ]
+        ).strip()
+
+        if re.match(
+            r"^(?:de|du|des|d)\b",
+            suffix_key,
+            flags=re.IGNORECASE,
+        ):
+            return False
+
+        # Keep only the local subject clause immediately preceding the
+        # clitic. This is grammar, not domain interpretation.
+        local_subject_clause = re.split(
+            r"[,;]"
+            r"|\b(?:"
+            r"et|puis|ensuite|mais"
+            r")\b",
+            before_clitic,
+            flags=re.IGNORECASE,
+        )[-1].strip()
+
+        if not local_subject_clause:
+            return False
+
+        subject = (
+            self._workflow_subject_candidate(
+                local_subject_clause
+            )
+        )
+
+        if not clean_text(
+            subject
+        ):
+            return False
+
+        # ----------------------------------------------------------
+        # Distinguish a real preverbal object clitic from a nominal
+        # determiner inside the object of an already-established
+        # predicate.
+        #
+        # Real clitic:
+        #
+        #   "publie un lot et l'acheteur le reserve"
+        #
+        #       prior action: publier
+        #       boundary:     "et"
+        #
+        # Nominal object:
+        #
+        #   "examine la reserve disponible"
+        #
+        #       prior action: examiner
+        #       boundary:     none
+        #
+        # Reuse canonical Workflow action authority on the STRICTLY
+        # SHORTER prefix. No second action vocabulary is introduced.
+        #
+        # The recursive shape is bounded because each nested call
+        # receives text ending before the current clitic/action.
+        # ----------------------------------------------------------
+
+        prior_actions = (
+            self._workflow_action_occurrences(
+                before_clitic
+            )
+        )
+
+        if prior_actions:
+            previous_match = (
+                prior_actions[-1][
+                    "match"
+                ]
+            )
+
+            between_previous_and_clitic = (
+                before_clitic[
+                    previous_match.end():
+                ]
+            )
+
+            has_predicate_boundary = bool(
+                re.search(
+                    r"[,;]"
+                    r"|\b(?:"
+                    r"and|et|puis|ensuite|mais"
+                    r")\b",
+                    between_previous_and_clitic,
+                    flags=re.IGNORECASE,
+                )
+            )
+
+            if not has_predicate_boundary:
+                return False
+
+        return True
 
 
     def _workflow_match_is_nominal(
@@ -4512,6 +7933,133 @@ class ProjectContextExtractor:
             if previous_word_match
             else ""
         )
+
+        # ------------------------------------------------------
+        # French "le suivant" / "la suivante" is a nominal or
+        # adjectival reference, not the workflow verb "suivre".
+        #
+        # Example:
+        #   "Le workflow prioritaire est le suivant : ..."
+        #
+        # This rule is grammatical and does not depend on a domain.
+        # ------------------------------------------------------
+
+        if (
+            surface_key
+            in {
+                "suivant",
+                "suivante",
+                "suivants",
+                "suivantes",
+            }
+            and previous_word
+            in {
+                "le",
+                "la",
+                "les",
+                "un",
+                "une",
+                "des",
+                "du",
+            }
+        ):
+            return True
+
+        # ------------------------------------------------------
+        # Policy/control subject authority.
+        #
+        # Some action vocabulary is also a noun:
+        #
+        #   "Toute commande fournisseur n?cessite..."
+        #   "Any supplier order requires..."
+        #
+        # In those forms the matched lexical item belongs to the
+        # SUBJECT of a rule. It is not the action predicate.
+        #
+        # Preserve true actions:
+        #
+        #   "La cliente commande un produit."
+        #   "The customers order supplies."
+        #
+        # The rule requires both:
+        #   1. a quantified/determined noun subject;
+        #   2. a nearby control predicate after that noun phrase.
+        # ------------------------------------------------------
+
+        ambiguous_policy_subject_surfaces = {
+            "commande",
+            "commandes",
+            "order",
+            "orders",
+            "demande",
+            "demandes",
+            "request",
+            "requests",
+            "reservation",
+            "reservations",
+            "booking",
+            "bookings",
+            "suivi",
+            "monitoring",
+            "alerte",
+            "alertes",
+            "alert",
+            "alerts",
+        }
+
+        if (
+            surface_key
+            in ambiguous_policy_subject_surfaces
+        ):
+            prefix_key = comparison_key(
+                prefix
+            )
+
+            suffix_key = comparison_key(
+                sentence[
+                    match.end():
+                ]
+            ).strip()
+
+            quantified_subject = re.search(
+                r"(?:^|\s)"
+                r"(?:"
+                r"any|every|each|all|"
+                r"the|a|an|"
+                r"tout|toute|tous|toutes|chaque|"
+                r"le|la|les|un|une|des"
+                r")"
+                r"(?:\s+[^\s]+){0,4}\s*$",
+                prefix_key,
+                flags=re.IGNORECASE,
+            )
+
+            control_predicate = re.match(
+                r"^(?:"
+                r"(?!(?:"
+                r"and|or|then|"
+                r"et|ou|puis|ensuite|"
+                r"a|an|the|"
+                r"un|une|le|la|les|des|du"
+                r")\b)"
+                r"[^\s]+\s+"
+                r"){0,2}"
+                r"(?:"
+                r"requires?|needs?|"
+                r"must|should|shall|"
+                r"necessite|necessitent|"
+                r"requiert|requierent|"
+                r"doit|doivent"
+                r")\b",
+                suffix_key,
+                flags=re.IGNORECASE,
+            )
+
+            if (
+                quantified_subject is not None
+                and control_predicate is not None
+            ):
+                return True
 
         # Many workflow vocabulary surfaces are lexically ambiguous:
         # "alert", "request", "booking", "monitoring", "suivi",
@@ -4568,7 +8116,21 @@ class ProjectContextExtractor:
         }
 
         if previous_word in nominal_determiners:
-            return True
+            french_preverbal_object_clitic = bool(
+                previous_word
+                in {
+                    "le",
+                    "la",
+                    "les",
+                }
+                and self._workflow_match_has_french_preverbal_object_clitic(
+                    sentence=sentence,
+                    item=item,
+                )
+            )
+
+            if not french_preverbal_object_clitic:
+                return True
 
         # Some workflow vocabulary is both nominal and verbal.
         #
@@ -4612,6 +8174,38 @@ class ProjectContextExtractor:
             in nominal_prepositions
             and surface_key
             in ambiguous_nominal_surfaces
+        ):
+            return True
+
+        # Ambiguous workflow vocabulary can appear as a nominal
+        # modifier inside a copular project/product description:
+        #
+        #   "The product is an IoT monitoring device."
+        #   "The service is a booking platform."
+        #
+        # The article-led nominal frame distinguishes these cases from
+        # progressive predicates such as:
+        #
+        #   "The application is monitoring conditions."
+        #
+        # This is grammatical authority only; no domain vocabulary is
+        # used to infer the workflow.
+        if (
+            surface_key
+            in ambiguous_nominal_surfaces
+            and re.search(
+                r"\b(?:is|are|was|were)\s+"
+                r"(?:a|an|the)"
+                r"(?:\s+"
+                r"[^\W\d_]+"
+                r"(?:-[^\W\d_]+)?"
+                r"){0,4}$",
+                prefix,
+                flags=(
+                    re.IGNORECASE
+                    | re.UNICODE
+                ),
+            )
         ):
             return True
 
@@ -4726,6 +8320,25 @@ class ProjectContextExtractor:
                 )
             )
 
+            # Once an action predicate has already been accepted,
+            # another ambiguous lexical surface without an explicit
+            # coordination separator is normally part of that action's
+            # object rather than a second predicate:
+            #
+            #   "reviews sensor alerts"
+            #                   -> alerts = noun
+            #
+            # Explicit coordination remains authoritative:
+            #
+            #   "reviews and alerts the supervisor"
+            #                -> alerts = predicate
+            if (
+                surface_key
+                in ambiguous_nominal_surfaces
+                and not has_action_separator
+            ):
+                return True
+
             if (
                 action_key
                 in {
@@ -4768,6 +8381,14 @@ class ProjectContextExtractor:
             surface
         )
 
+        # U2 universal comparison workflow authority.
+        if action_key == "comparer":
+            return (
+                "compare"
+                if language == "en"
+                else "comparer"
+            )
+
         if language == "en":
             if action_key == "planifier":
                 if (
@@ -4789,6 +8410,14 @@ class ProjectContextExtractor:
                     return "notify"
 
                 return "alert"
+
+            if action_key == "approuver":
+                if surface_key.startswith(
+                    "valid"
+                ):
+                    return "validate"
+
+                return "approve"
 
             if action_key == "transmettre":
                 if surface_key.startswith(
@@ -4836,6 +8465,14 @@ class ProjectContextExtractor:
                 action_key,
                 action,
             )
+
+        if action_key == "approuver":
+            if surface_key.startswith(
+                "valid"
+            ):
+                return "valider"
+
+            return "approuver"
 
         french_actions = {
             "creer": "cr\u00e9er",
@@ -5124,11 +8761,27 @@ class ProjectContextExtractor:
             ]
         )
 
+        # Archetype scoring consumes only positive or neutral
+        # description evidence. Explicit scope exclusions remain
+        # canonical scope information, but they must never become
+        # positive archetype evidence.
+        positive_description = clean_text(
+            " ".join(
+                sentence
+                for sentence in self._sentences(
+                    description
+                )
+                if not is_scope_exclusion_statement(
+                    sentence
+                )
+            )
+        )
+
         searchable_text = clean_text(
             " ".join(
                 [
                     industry,
-                    description,
+                    positive_description,
                     *structured_sector_terms,
                     *structured_solution_terms,
                 ]
@@ -6570,18 +10223,58 @@ class ProjectContextExtractor:
         )
 
 
+    def _transaction_match_is_grammatically_operational(
+        self,
+        *,
+        sentence: str,
+        action: str,
+        action_match: re.Match[str],
+    ) -> bool:
+        """
+        Reuse canonical Workflow grammatical authority for a
+        Transaction lexical match.
+
+        Transaction owns lifecycle semantics. It must not maintain a
+        second grammar for deciding whether an ambiguous lexical
+        surface is a predicate, noun, modifier, or passive context.
+        """
+        item = {
+            "pattern": action_match.re,
+            "action": action,
+            "match": action_match,
+            "surface": action_match.group(0),
+        }
+
+        if self._workflow_match_is_nominal(
+            sentence=sentence,
+            item=item,
+            accepted=[],
+        ):
+            return False
+
+        if self._workflow_match_is_conditional_passive_context(
+            sentence=sentence,
+            item=item,
+        ):
+            return False
+
+        return True
+
+
     def _transaction_action_candidate(
         self,
         sentence: str,
         pattern: re.Pattern[str],
+        action: str = "",
     ) -> re.Match[str] | None:
         """
         Return a usable transaction-action match only when the sentence
         is positive operational evidence.
+
+        Ambiguous lexical forms that can also be nouns or modifiers are
+        accepted only when their local grammatical context is compatible
+        with an action predicate.
         """
-        # Transaction heuristics must consume the canonical
-        # scope-polarity authority rather than independently
-        # reinterpret MVP / exclusion language.
         if self._is_scope_only(
             sentence
         ):
@@ -6600,9 +10293,61 @@ class ProjectContextExtractor:
         ):
             return None
 
+        matched_key = comparison_key(
+            match.group(0)
+        )
+
+        before_key = comparison_key(
+            sentence[
+                :match.start()
+            ]
+        )
+
+        # French "demande" can be either:
+        #
+        #   "le client demande..."  -> predicate
+        #   "une demande..."        -> noun
+        #
+        # Determiner-led nominal use must not become transaction
+        # initiation evidence.
+        if matched_key == "demande":
+            if re.search(
+                r"\b(?:"
+                r"un|une|le|la|les|"
+                r"ce|cet|cette|ces|"
+                r"sa|son|ses|"
+                r"notre|nos|leur|leurs"
+                r")\s*$",
+                before_key,
+                flags=re.IGNORECASE,
+            ):
+                return None
+
+        # English past "requested" can be a finite predicate or a
+        # participial modifier:
+        #
+        #   "the client requested a service" -> predicate
+        #   "the requested service"          -> modifier
+        if matched_key == "requested":
+            if re.search(
+                r"\b(?:"
+                r"the|a|an|"
+                r"this|that|these|those|"
+                r"its|their|our|your|my"
+                r")\s*$",
+                before_key,
+                flags=re.IGNORECASE,
+            ):
+                return None
+
+        if not self._transaction_match_is_grammatically_operational(
+            sentence=sentence,
+            action=action,
+            action_match=match,
+        ):
+            return None
+
         return match
-
-
     def _transaction_initiation_patterns(
         self,
     ) -> Tuple[
@@ -6615,14 +10360,15 @@ class ProjectContextExtractor:
         """
         Shared transaction-initiation authority.
 
-        These predicates represent an operational start of an
-        exchange. Generic solution mechanisms such as connecting
-        two sides are deliberately excluded.
+        Predicates represent an explicit operational start of an
+        exchange. Structural marketplace nouns and participial
+        modifiers are not transaction actions.
         """
         return (
             (
                 re.compile(
                     r"\bpubl(?:ier|ie|ient|ies)?\b"
+                    r"|\bpublish(?:es|ed|ing)?\b"
                     r"|\bpost(?:e|ent|s|ed|ing)?\b",
                     re.IGNORECASE,
                 ),
@@ -6646,29 +10392,885 @@ class ProjectContextExtractor:
                 ),
                 "soumettre",
             ),
+
+            # Explicit initiation predicate:
+            #
+            # "initie une demande..."
+            # "initiates a service request..."
             (
                 re.compile(
-                    r"\bdemand(?:er|e|ent)?\b"
-                    r"|\brequest(?:s|ed|ing)?\b",
+                    r"\biniti"
+                    r"(?:"
+                    r"er|e|ent|era|eront|ait|aient"
+                    r")\b"
+                    r"|\binitiat"
+                    r"(?:e|es|ed|ing)\b",
                     re.IGNORECASE,
                 ),
                 "demander",
             ),
+
+            # English send-request predicate.
+            #
+            # The send verb becomes initiation authority only when
+            # its immediate object is explicitly a request:
+            #
+            #   "A customer sends a request."
+            #   "A customer sent the request."
+            #
+            # Generic send/delivery statements remain untouched.
+            (
+                re.compile(
+                    r"\b(?:send|sends|sent|sending)\b"
+                    r"(?=\s+"
+                    r"(?:(?:a|an|the|this|that)\s+)?"
+                    r"requests?\b"
+                    r")",
+                    re.IGNORECASE,
+                ),
+                "demander",
+            ),
+
+            # Direct request predicate.
+            #
+            # French bare "demand" is intentionally excluded because
+            # it collides with the English structural noun "demand".
+            #
+            # English bare "request" is also excluded conservatively;
+            # requests/requested/requesting remain explicit predicates.
+            (
+                re.compile(
+                    r"\bdemand"
+                    r"(?:er|e|ent)\b"
+                    r"|\brequest"
+                    r"(?:s|ed|ing)\b",
+                    re.IGNORECASE,
+                ),
+                "demander",
+            ),
+
+            # Reservation / booking is an exchange start.
+            (
+                re.compile(
+                    r"\br(?:e|\u00e9)serv"
+                    r"(?:er|e|ent|ait|aient|era|eront)\b"
+                    r"|\bbook"
+                    r"(?:s|ed|ing)?\b",
+                    re.IGNORECASE,
+                ),
+                "r\u00e9server",
+            ),
+
+            # Order / commande is likewise a transaction event.
+            #
+            # Lifecycle position determines whether it is initiation
+            # or a downstream event. Nominal uses are rejected by the
+            # shared grammatical authority.
+            (
+                re.compile(
+                    r"\bcommand(?:er|e|ent)?\b"
+                    r"|\border(?:s|ed|ing)?\b",
+                    re.IGNORECASE,
+                ),
+                "commander",
+            ),
+        )
+    def _transaction_completion_candidate_is_operational(
+        self,
+        *,
+        sentence: str,
+        action: str,
+        action_match: re.Match[str],
+    ) -> bool:
+        """
+        Validate terminal lifecycle evidence before it can become
+        canonical transaction completion.
+
+        A terminal participle used only as an attribute/state label is
+        not an operational event:
+
+            "commission sur chaque intervention terminee"
+            "fee on each completed transaction"
+
+        Explicit predicates remain valid:
+
+            "l'intervention est terminee"
+            "the transaction is completed"
+            "the transaction completed"
+        """
+        if not self._transaction_match_is_grammatically_operational(
+            sentence=sentence,
+            action=action,
+            action_match=action_match,
+        ):
+            return False
+
+        if action != "terminer":
+            return True
+
+        text = clean_text(
+            sentence
         )
 
-    def _explicit_transaction_flow_bounds(
+        if not text:
+            return False
+
+        matched_key = comparison_key(
+            action_match.group(0)
+        )
+
+        before_key = comparison_key(
+            text[
+                max(
+                    0,
+                    action_match.start() - 120,
+                ):
+                action_match.start()
+            ]
+        )
+
+        after_key = comparison_key(
+            text[
+                action_match.end():
+                min(
+                    len(text),
+                    action_match.end() + 120,
+                )
+            ]
+        )
+
+
+        # --------------------------------------------------------------
+        # English attributive participles.
+        #
+        #   "each completed transaction"
+        #   "fee on completed transactions"
+        #
+        # Here "completed" modifies the following noun. It is not an
+        # event asserting that the transaction completed.
+        # --------------------------------------------------------------
+
+        if matched_key in {
+            "completed",
+            "finished",
+            "finalized",
+            "finalised",
+        }:
+            following_word = re.match(
+                r"^([a-z0-9][a-z0-9_-]*)\b",
+                after_key,
+                flags=re.IGNORECASE,
+            )
+
+            attributive_prefix = re.search(
+                r"\b(?:"
+                r"a|an|the|"
+                r"each|every|all|any|"
+                r"this|that|these|those|"
+                r"per|on|for|of|to|from|with"
+                r")\s*$",
+                before_key,
+                flags=re.IGNORECASE,
+            )
+
+            if (
+                following_word is not None
+                and attributive_prefix is not None
+            ):
+                return False
+
+
+        # --------------------------------------------------------------
+        # French terminal participles used after a noun.
+        #
+        #   "chaque intervention terminee"
+        #
+        # is descriptive.
+        #
+        #   "l'intervention est terminee"
+        #
+        # is a real terminal predicate and remains valid.
+        # --------------------------------------------------------------
+
+        if matched_key in {
+            "terminee",
+            "terminees",
+            "achevee",
+            "achevees",
+            "finalisee",
+            "finalisees",
+        }:
+            explicit_copula = re.search(
+                r"\b(?:"
+                r"est|sont|"
+                r"etait|etaient|"
+                r"sera|seront"
+                r")\s*$",
+                before_key,
+                flags=re.IGNORECASE,
+            )
+
+            explicit_compound_copula = re.search(
+                r"\b(?:"
+                r"a|ont|avait|avaient|aura|auront"
+                r")\s+ete\s*$",
+                before_key,
+                flags=re.IGNORECASE,
+            )
+
+            if (
+                explicit_copula is not None
+                or explicit_compound_copula is not None
+            ):
+                return True
+
+            # Without an explicit predicate, feminine terminal
+            # participles are treated conservatively as modifiers,
+            # not as lifecycle events.
+            return False
+
+
+        return True
+
+    def _transaction_events_are_continuous(
+        self,
+        *,
+        initiation_sentence: str,
+        initiation_action: str,
+        initiation_match: re.Match[str],
+        completion_sentence: str,
+        completion_action: str,
+        completion_match: re.Match[str],
+    ) -> bool:
+        """
+        Decide whether two already-valid lifecycle events belong to
+        the same transaction.
+
+        This authority does not classify actions. Workflow grammar and
+        Transaction action/completion authorities have already done
+        that upstream.
+
+        Continuity is accepted from generic discourse evidence only:
+
+        1. a meaningful shared transaction-object anchor;
+        2. an explicit terminal lifecycle reference;
+        3. a strong anaphoric reference;
+        4. a conservative economic reference tied to the same actor;
+        5. a coordinated same-actor generic reference.
+
+        Mere temporal order, sentence proximity, or actor equality is
+        never sufficient by itself.
+        """
+        initiation_text = clean_text(
+            initiation_sentence
+        )
+
+        completion_text = clean_text(
+            completion_sentence
+        )
+
+        if (
+            not initiation_text
+            or not completion_text
+        ):
+            return False
+
+        initiation_object = (
+            self._transaction_object(
+                initiation_text,
+                initiation_match,
+            )
+        )
+
+        completion_object = (
+            self._transaction_object(
+                completion_text,
+                completion_match,
+            )
+        )
+
+        # ----------------------------------------------------------
+        # Generic lexical anchors.
+        #
+        # comparison_key remains the shared normalization authority.
+        # Structural, temporal, and monetary modifiers cannot prove
+        # object identity on their own.
+        # ----------------------------------------------------------
+
+        non_anchor_tokens = {
+            # English structure.
+            "a",
+            "an",
+            "the",
+            "of",
+            "for",
+            "to",
+            "from",
+            "with",
+            "on",
+            "in",
+            "and",
+            "or",
+            "this",
+            "that",
+            "these",
+            "those",
+            "my",
+            "your",
+            "our",
+            "their",
+            "its",
+
+            # French structure.
+            "un",
+            "une",
+            "des",
+            "du",
+            "de",
+            "la",
+            "le",
+            "les",
+            "l",
+            "pour",
+            "avec",
+            "dans",
+            "sur",
+            "et",
+            "ou",
+            "ce",
+            "cet",
+            "cette",
+            "ces",
+            "mon",
+            "ma",
+            "mes",
+            "ton",
+            "ta",
+            "tes",
+            "son",
+            "sa",
+            "ses",
+            "notre",
+            "nos",
+            "votre",
+            "vos",
+            "leur",
+            "leurs",
+
+            # Frequency / schedule modifiers.
+            "daily",
+            "weekly",
+            "monthly",
+            "annual",
+            "yearly",
+            "quotidien",
+            "quotidienne",
+            "hebdomadaire",
+            "mensuel",
+            "mensuelle",
+            "annuel",
+            "annuelle",
+
+            # Monetary descriptors cannot prove object identity.
+            "fee",
+            "fees",
+            "price",
+            "prices",
+            "cost",
+            "costs",
+            "payment",
+            "payments",
+            "amount",
+            "amounts",
+            "frais",
+            "prix",
+            "cout",
+            "couts",
+            "paiement",
+            "paiements",
+            "montant",
+            "montants",
+        }
+
+        monetary_reference_tokens = {
+            "fee",
+            "fees",
+            "price",
+            "prices",
+            "cost",
+            "costs",
+            "payment",
+            "payments",
+            "amount",
+            "amounts",
+            "frais",
+            "prix",
+            "cout",
+            "couts",
+            "paiement",
+            "paiements",
+            "montant",
+            "montants",
+        }
+
+        # These are generic lifecycle / exchange references, not
+        # project or sector vocabulary.
+        generic_transaction_reference_tokens = {
+            "transaction",
+            "transactions",
+            "exchange",
+            "exchanges",
+            "echange",
+            "echanges",
+            "service",
+            "services",
+            "item",
+            "items",
+            "product",
+            "products",
+            "produit",
+            "produits",
+            "order",
+            "orders",
+            "commande",
+            "commandes",
+            "booking",
+            "bookings",
+            "reservation",
+            "reservations",
+            "request",
+            "requests",
+            "demande",
+            "demandes",
+            "purchase",
+            "purchases",
+            "achat",
+            "achats",
+            "delivery",
+            "deliveries",
+            "livraison",
+            "livraisons",
+        }
+
+        generic_actor_tokens = {
+            "provider",
+            "providers",
+            "supplier",
+            "suppliers",
+            "customer",
+            "customers",
+            "client",
+            "clients",
+            "buyer",
+            "buyers",
+            "seller",
+            "sellers",
+            "company",
+            "companies",
+            "user",
+            "users",
+            "prestataire",
+            "prestataires",
+            "fournisseur",
+            "fournisseurs",
+            "client",
+            "clients",
+            "acheteur",
+            "acheteurs",
+            "vendeur",
+            "vendeurs",
+            "entreprise",
+            "entreprises",
+            "utilisateur",
+            "utilisateurs",
+        }
+
+        def anchor_tokens(
+            value: str,
+        ) -> set[str]:
+            key = comparison_key(
+                value
+            )
+
+            return {
+                token
+                for token in key.split()
+                if (
+                    len(token) > 1
+                    and token
+                    not in non_anchor_tokens
+                )
+            }
+
+        initiation_tokens = (
+            anchor_tokens(
+                initiation_object
+            )
+        )
+
+        completion_tokens = (
+            anchor_tokens(
+                completion_object
+            )
+        )
+
+        # Direct semantic anchor remains the strongest generic signal.
+        if (
+            initiation_tokens
+            & completion_tokens
+        ):
+            return True
+
+        completion_action_key = (
+            comparison_key(
+                completion_action
+            )
+        )
+
+        completion_sentence_key = (
+            comparison_key(
+                completion_text
+            )
+        )
+
+        # ----------------------------------------------------------
+        # Explicit terminal lifecycle authority.
+        #
+        # Examples:
+        #
+        #   "the transaction is closed"
+        #   "conclut la transaction"
+        #   "l'intervention est terminee"
+        #
+        # The last form has no object after the terminal predicate, so
+        # the referenced object must be recovered from the sentence.
+        # ----------------------------------------------------------
+
+        explicit_terminal_action = bool(
+            completion_action_key
+            in {
+                "cloturer",
+                "terminer",
+            }
+            or completion_action_key.startswith(
+                "conclure"
+            )
+        )
+
+        if explicit_terminal_action:
+            if re.search(
+                r"\b(?:"
+                r"transaction"
+                r"|exchange"
+                r"|echange"
+                r")\b",
+                completion_sentence_key,
+                flags=re.IGNORECASE,
+            ):
+                return True
+
+            # Terminal participles often put the referenced object
+            # BEFORE the predicate:
+            #
+            #   "l'intervention est terminee"
+            #
+            # Use this fallback only for canonical terminal-state
+            # authority. Generic actor words cannot establish object
+            # continuity.
+            if (
+                completion_action_key
+                == "terminer"
+            ):
+                terminal_sentence_tokens = (
+                    anchor_tokens(
+                        completion_text
+                    )
+                )
+
+                terminal_shared_tokens = (
+                    initiation_tokens
+                    & terminal_sentence_tokens
+                ) - generic_actor_tokens
+
+                if terminal_shared_tokens:
+                    return True
+
+        # ----------------------------------------------------------
+        # Strong pronoun / demonstrative reference.
+        # ----------------------------------------------------------
+
+        completion_tail_key = (
+            comparison_key(
+                completion_text[
+                    completion_match.end():
+                ]
+            )
+        )
+
+        if re.match(
+            r"^(?:"
+            r"(?:(?:for|pour)\s+)?"
+            r"(?:"
+            r"it|them|this|that"
+            r"|cela|ca|lui|eux|elles"
+            r")"
+            r")\b",
+            completion_tail_key,
+            flags=re.IGNORECASE,
+        ):
+            return True
+
+        # ----------------------------------------------------------
+        # Subject continuity.
+        #
+        # Actor equality is NOT sufficient by itself. It is consumed
+        # only together with an explicit reference form below.
+        # ----------------------------------------------------------
+
+        initiation_subject = (
+            self._workflow_subject_candidate(
+                initiation_text[
+                    :initiation_match.start()
+                ]
+            )
+        )
+
+        completion_subject = (
+            self._workflow_subject_candidate(
+                completion_text[
+                    :completion_match.start()
+                ]
+            )
+        )
+
+        initiation_subject_key = (
+            comparison_key(
+                initiation_subject
+            )
+        )
+
+        completion_subject_key = (
+            comparison_key(
+                completion_subject
+            )
+        )
+
+        same_subject = bool(
+            initiation_subject_key
+            and completion_subject_key
+            and initiation_subject_key
+            == completion_subject_key
+        )
+
+        same_sentence = (
+            initiation_text
+            == completion_text
+        )
+
+        # ----------------------------------------------------------
+        # French preverbal object-clitic continuity.
+        #
+        # Grammar authority remains upstream in Workflow:
+        #
+        #   "l'acheteur le reserve"
+        #
+        # Transaction consumes that classification as an anaphoric
+        # continuity signal; it does NOT re-detect le/la/les itself.
+        #
+        # The signal is deliberately conservative:
+        #
+        #   - same sentence;
+        #   - a real initiation object anchor exists;
+        #   - no intervening accepted action can have introduced a
+        #     competing referent.
+        #
+        # Positive:
+        #
+        #   "publie un lot et l'acheteur le reserve"
+        #
+        # Rejected:
+        #
+        #   "publie un lot, examine une salle puis la reserve"
+        # ----------------------------------------------------------
+
+        if (
+            same_sentence
+            and initiation_tokens
+        ):
+            completion_item = {
+                "pattern":
+                    completion_match.re,
+
+                "action":
+                    completion_action,
+
+                "match":
+                    completion_match,
+
+                "surface":
+                    completion_match.group(0),
+            }
+
+            completion_has_object_clitic = (
+                self._workflow_match_has_french_preverbal_object_clitic(
+                    sentence=completion_text,
+                    item=completion_item,
+                )
+            )
+
+            if completion_has_object_clitic:
+                intervening_actions = [
+                    item
+                    for item
+                    in self._workflow_action_occurrences(
+                        completion_text
+                    )
+                    if (
+                        item[
+                            "match"
+                        ].start()
+                        >= initiation_match.end()
+                        and item[
+                            "match"
+                        ].start()
+                        < completion_match.start()
+                    )
+                ]
+
+                if not intervening_actions:
+                    return True
+
+        definite_reference = bool(
+            re.match(
+                r"^(?:"
+                r"(?:(?:for|pour)\s+)?"
+                r"(?:"
+                r"the|this|that|these|those"
+                r"|le|la|les|l"
+                r"|ce|cet|cette|ces"
+                r")"
+                r")\b",
+                completion_tail_key,
+                flags=re.IGNORECASE,
+            )
+        )
+
+        completion_object_words = set(
+            comparison_key(
+                completion_object
+            ).split()
+        )
+
+        monetary_reference = bool(
+            completion_object_words
+            & monetary_reference_tokens
+        )
+
+        generic_reference = bool(
+            completion_tokens
+            and completion_tokens
+            <= generic_transaction_reference_tokens
+        )
+
+        # ----------------------------------------------------------
+        # Conservative payment-reference continuity.
+        #
+        # Positive generic forms:
+        #
+        #   the fee
+        #   the transaction fee
+        #   the service fee
+        #   le prix du service
+        #
+        # Negative new-object forms remain rejected:
+        #
+        #   the monthly analytics subscription
+        #   the software fee
+        #
+        # unless the new noun already shares a real object anchor with
+        # the initiation event.
+        # ----------------------------------------------------------
+
+        if (
+            completion_action_key
+            == "payer"
+            and same_subject
+            and definite_reference
+        ):
+            if (
+                monetary_reference
+                and (
+                    not completion_tokens
+                    or generic_reference
+                )
+            ):
+                return True
+
+            # Same-sentence coordinated generic reference:
+            #
+            #   demande une intervention ... puis paie le service
+            #
+            # The same rule does NOT accept a newly introduced
+            # qualified subscription/product.
+            if (
+                same_sentence
+                and generic_reference
+            ):
+                return True
+
+        # ----------------------------------------------------------
+        # Non-payment coordinated generic reference.
+        #
+        # Preserve the previous C4 discourse rule, but prevent an
+        # arbitrary newly-qualified object from becoming continuity
+        # merely because the actor is the same.
+        # ----------------------------------------------------------
+
+        if (
+            same_sentence
+            and same_subject
+            and definite_reference
+            and generic_reference
+        ):
+            return True
+
+        return False
+
+
+    def _explicit_transaction_lifecycle_selection(
         self,
         sentences: Sequence[str],
-    ) -> Tuple[str, str]:
+    ) -> Dict[str, Any]:
         """
-        Resolve explicit transaction-flow boundaries conservatively.
+        Select canonical transaction lifecycle events while preserving exact evidence identity.
 
-        The explicitly declared transaction unit remains authoritative
-        for the exchanged object/value.
+        Authority rules:
 
-        Separate explicit operational statements may establish a
-        transaction start and lifecycle completion.
+        1. The earliest valid explicit initiation establishes the start.
+
+        2. Strong lifecycle/economic completion events after that start
+           establish completion.
+
+        3. Reservation / booking is contextual:
+           - it is a start when it is the earliest transaction event;
+           - it is a downstream completion when another explicit start
+             already exists before it.
+
+        4. Later explicit completion overrides an earlier intermediate
+           reservation.
+
+        5. Business-model declarations are not operational lifecycle
+           evidence merely because they mention a completed transaction.
         """
+
+        # ------------------------------------------------------------
+        # Strong lifecycle / economic completion predicates.
+        #
+        # Reservation / booking is deliberately NOT included here.
+        # It is resolved contextually after initiation authority is
+        # established.
+        # ------------------------------------------------------------
+
         completion_patterns: Tuple[
             Tuple[
                 re.Pattern[str],
@@ -6687,6 +11289,18 @@ class ProjectContextExtractor:
                 ),
                 "cloturer",
             ),
+
+            (
+                re.compile(
+                    r"\bconclu"
+                    r"(?:re|t|ent|ait|aient|ra|ront)?\b"
+                    r"|\bconclud"
+                    r"(?:e|es|ed|ing)\b",
+                    re.IGNORECASE,
+                ),
+                "conclure la transaction",
+            ),
+
             (
                 re.compile(
                     r"\bcomplete(?:s|d|ing)?\b"
@@ -6705,6 +11319,51 @@ class ProjectContextExtractor:
                 ),
                 "terminer",
             ),
+
+            (
+                re.compile(
+                    r"\bachet(?:er|e|ent)?\b"
+                    r"|\bbuy(?:s|ing)?\b"
+                    r"|\bbought\b",
+                    re.IGNORECASE,
+                ),
+                "acheter",
+            ),
+
+            (
+                re.compile(
+                    r"\bcommand(?:er|e|ent)?\b"
+                    r"|\border(?:s|ed|ing)?\b",
+                    re.IGNORECASE,
+                ),
+                "commander",
+            ),
+
+            (
+                re.compile(
+                    r"\bvalid(?:er|e|ent)?\b"
+                    r"|\bapprouv(?:er|e|ent)?\b"
+                    r"|\bapprove(?:s|d|ing)?\b",
+                    re.IGNORECASE,
+                ),
+                "valider",
+            ),
+
+            (
+                re.compile(
+                    r"\bpaie"
+                    r"(?:nt|ra|ront|rait|raient)?\b"
+                    r"|\bpaye"
+                    r"(?:nt|ra|ront|rait|raient)?\b"
+                    r"|\bpayer"
+                    r"(?:a|ont|ait|aient)?\b"
+                    r"|\bpay(?:s|ing)?\b"
+                    r"|\bpaid\b",
+                    re.IGNORECASE,
+                ),
+                "payer",
+            ),
+
             (
                 re.compile(
                     r"\breturn(?:s|ed|ing)?\b"
@@ -6715,6 +11374,7 @@ class ProjectContextExtractor:
                 ),
                 "retourner",
             ),
+
             (
                 re.compile(
                     r"\bdeliver(?:s|ed|ing)?\b"
@@ -6728,39 +11388,505 @@ class ProjectContextExtractor:
             ),
         )
 
-        completion_action = ""
 
-        completion_location: (
-            Tuple[int, int]
-            | None
-        ) = None
+        reservation_patterns: Tuple[
+            Tuple[
+                re.Pattern[str],
+                str,
+            ],
+            ...,
+        ] = (
+            (
+                re.compile(
+                    r"\br(?:e|\u00e9)serv"
+                    r"(?:er|e|ent|ait|aient|era|eront)\b"
+                    r"|\bbook"
+                    r"(?:s|ed|ing)?\b",
+                    re.IGNORECASE,
+                ),
+                "reserver",
+            ),
+        )
 
-        # Latest explicit lifecycle completion wins.
-        for sentence_index, sentence in enumerate(
-            sentences
-        ):
+
+        def operational_sentence(
+            sentence: str,
+        ) -> str:
+            """
+            Return usable operational evidence or an empty string.
+
+            Economic-model declarations describe monetization and must
+            not become transaction lifecycle events.
+            """
             sentence_text = clean_text(
                 sentence
             )
 
             if not sentence_text:
-                continue
+                return ""
 
             if self._is_scope_only(
                 sentence_text
             ):
-                continue
+                return ""
 
             if self._is_problem_sentence(
                 sentence_text
             ):
-                continue
+                return ""
 
             if (
                 self._workflow_sentence_is_non_action_context(
                     sentence_text
                 )
             ):
+                return ""
+
+            # Explicit transaction-unit metadata is object/value authority.
+            #
+            # "The primary transaction unit is a service booking."
+            # defines WHAT is exchanged; it is not evidence that a
+            # booking action actually occurred in the lifecycle.
+            if self._explicit_transaction_unit_text(
+                (sentence_text,)
+            ):
+                return ""
+
+            sentence_key = comparison_key(
+                sentence_text
+            )
+
+            if re.match(
+                r"^"
+                r"(?:(?:le|la|les|the|un|une)\s+)?"
+                r"(?:"
+                r"modele\s+economique"
+                r"|modele\s+de\s+revenus"
+                r"|modele\s+de\s+monetisation"
+                r"|business\s+model"
+                r"|revenue\s+model"
+                r"|monetization\s+model"
+                r"|monetisation\s+model"
+                r"|pricing\s+model"
+                r")\b",
+                sentence_key,
+                flags=re.IGNORECASE,
+            ):
+                return ""
+
+            return sentence_text
+
+
+        # ============================================================
+        # CANONICAL EVENT SELECTION
+        #
+        # Transaction lifecycle authority must preserve the exact event
+        # identity, not only an action label.
+        #
+        # We therefore collect every valid explicit initiation event,
+        # then ask the existing canonical continuity authority which
+        # downstream completion events belong to that initiation.
+        #
+        # Policy:
+        #
+        #   - initiation candidates are considered in document order;
+        #   - the first initiation owning a complete coherent lifecycle
+        #     outranks earlier orphan-only candidates;
+        #   - inside one selected lifecycle, the latest coherent
+        #     completion remains authoritative, preserving historical
+        #     completion precedence;
+        #   - when no complete lifecycle exists, the earliest valid
+        #     initiation remains as partial evidence;
+        #   - when no initiation exists at all, a valid strong
+        #     completion may remain as completion-only partial evidence.
+        # ============================================================
+
+        initiation_events: List[
+            Dict[str, Any]
+        ] = []
+
+        for sentence_index, sentence in enumerate(
+            sentences
+        ):
+            sentence_text = operational_sentence(
+                sentence
+            )
+
+            if not sentence_text:
+                continue
+
+            for pattern, action in (
+                self._transaction_initiation_patterns()
+            ):
+                for match in pattern.finditer(
+                    sentence_text
+                ):
+                    if (
+                        self._transaction_action_is_negated(
+                            sentence_text,
+                            match,
+                        )
+                    ):
+                        continue
+
+                    if not (
+                        self._transaction_match_is_grammatically_operational(
+                            sentence=sentence_text,
+                            action=action,
+                            action_match=match,
+                        )
+                    ):
+                        continue
+
+                    initiation_events.append(
+                        {
+                            "location": (
+                                sentence_index,
+                                match.start(),
+                            ),
+                            "sentence_index":
+                                sentence_index,
+                            "sentence":
+                                sentence_text,
+                            "action":
+                                action,
+                            "match":
+                                match,
+                        }
+                    )
+
+        initiation_events.sort(
+            key=lambda event:
+                event[
+                    "location"
+                ]
+        )
+
+
+        def strong_completion_events_for(
+            initiation_event: Dict[str, Any],
+        ) -> List[Dict[str, Any]]:
+            output: List[
+                Dict[str, Any]
+            ] = []
+
+            initiation_location = (
+                initiation_event[
+                    "location"
+                ]
+            )
+
+            for sentence_index, sentence in enumerate(
+                sentences
+            ):
+                sentence_text = operational_sentence(
+                    sentence
+                )
+
+                if not sentence_text:
+                    continue
+
+                for pattern, action in completion_patterns:
+                    for match in pattern.finditer(
+                        sentence_text
+                    ):
+                        if (
+                            self._transaction_action_is_negated(
+                                sentence_text,
+                                match,
+                            )
+                        ):
+                            continue
+
+                        if not (
+                            self._transaction_completion_candidate_is_operational(
+                                sentence=sentence_text,
+                                action=action,
+                                action_match=match,
+                            )
+                        ):
+                            continue
+
+                        location = (
+                            sentence_index,
+                            match.start(),
+                        )
+
+                        if (
+                            location
+                            <= initiation_location
+                        ):
+                            continue
+
+                        if not (
+                            self._transaction_events_are_continuous(
+                                initiation_sentence=(
+                                    initiation_event[
+                                        "sentence"
+                                    ]
+                                ),
+                                initiation_action=(
+                                    initiation_event[
+                                        "action"
+                                    ]
+                                ),
+                                initiation_match=(
+                                    initiation_event[
+                                        "match"
+                                    ]
+                                ),
+                                completion_sentence=sentence_text,
+                                completion_action=action,
+                                completion_match=match,
+                            )
+                        ):
+                            continue
+
+                        output.append(
+                            {
+                                "location":
+                                    location,
+                                "sentence_index":
+                                    sentence_index,
+                                "sentence":
+                                    sentence_text,
+                                "action":
+                                    action,
+                                "match":
+                                    match,
+                            }
+                        )
+
+            return output
+
+
+        def reservation_completion_events_for(
+            initiation_event: Dict[str, Any],
+        ) -> List[Dict[str, Any]]:
+            output: List[
+                Dict[str, Any]
+            ] = []
+
+            initiation_location = (
+                initiation_event[
+                    "location"
+                ]
+            )
+
+            for sentence_index, sentence in enumerate(
+                sentences
+            ):
+                sentence_text = operational_sentence(
+                    sentence
+                )
+
+                if not sentence_text:
+                    continue
+
+                for (
+                    pattern,
+                    action,
+                ) in reservation_patterns:
+                    for match in pattern.finditer(
+                        sentence_text
+                    ):
+                        if (
+                            self._transaction_action_is_negated(
+                                sentence_text,
+                                match,
+                            )
+                        ):
+                            continue
+
+                        if not (
+                            self._transaction_completion_candidate_is_operational(
+                                sentence=sentence_text,
+                                action=action,
+                                action_match=match,
+                            )
+                        ):
+                            continue
+
+                        location = (
+                            sentence_index,
+                            match.start(),
+                        )
+
+                        # Reservation cannot close itself when it is
+                        # the selected initiation event.
+                        if (
+                            location
+                            <= initiation_location
+                        ):
+                            continue
+
+                        if not (
+                            self._transaction_events_are_continuous(
+                                initiation_sentence=(
+                                    initiation_event[
+                                        "sentence"
+                                    ]
+                                ),
+                                initiation_action=(
+                                    initiation_event[
+                                        "action"
+                                    ]
+                                ),
+                                initiation_match=(
+                                    initiation_event[
+                                        "match"
+                                    ]
+                                ),
+                                completion_sentence=sentence_text,
+                                completion_action=action,
+                                completion_match=match,
+                            )
+                        ):
+                            continue
+
+                        output.append(
+                            {
+                                "location":
+                                    location,
+                                "sentence_index":
+                                    sentence_index,
+                                "sentence":
+                                    sentence_text,
+                                "action":
+                                    action,
+                                "match":
+                                    match,
+                            }
+                        )
+
+            return output
+
+
+        # ------------------------------------------------------------
+        # First COMPLETE lifecycle in initiation order.
+        #
+        # For each initiation, preserve the historical rule that the
+        # latest coherent downstream completion is the final boundary.
+        # ------------------------------------------------------------
+
+        for initiation_event in initiation_events:
+            completion_events = (
+                strong_completion_events_for(
+                    initiation_event
+                )
+                + reservation_completion_events_for(
+                    initiation_event
+                )
+            )
+
+            if not completion_events:
+                continue
+
+            completion_event = max(
+                completion_events,
+                key=lambda event:
+                    event[
+                        "location"
+                    ],
+            )
+
+            return {
+                "initiation_action":
+                    initiation_event[
+                        "action"
+                    ],
+                "initiation_sentence":
+                    initiation_event[
+                        "sentence"
+                    ],
+                "initiation_match":
+                    initiation_event[
+                        "match"
+                    ],
+                "initiation_location":
+                    initiation_event[
+                        "location"
+                    ],
+
+                "completion_action":
+                    completion_event[
+                        "action"
+                    ],
+                "completion_sentence":
+                    completion_event[
+                        "sentence"
+                    ],
+                "completion_match":
+                    completion_event[
+                        "match"
+                    ],
+                "completion_location":
+                    completion_event[
+                        "location"
+                    ],
+            }
+
+
+        # ------------------------------------------------------------
+        # No complete lifecycle:
+        # preserve earliest valid explicit initiation as partial
+        # authority exactly as before.
+        # ------------------------------------------------------------
+
+        if initiation_events:
+            initiation_event = (
+                initiation_events[0]
+            )
+
+            return {
+                "initiation_action":
+                    initiation_event[
+                        "action"
+                    ],
+                "initiation_sentence":
+                    initiation_event[
+                        "sentence"
+                    ],
+                "initiation_match":
+                    initiation_event[
+                        "match"
+                    ],
+                "initiation_location":
+                    initiation_event[
+                        "location"
+                    ],
+
+                "completion_action":
+                    "",
+                "completion_sentence":
+                    "",
+                "completion_match":
+                    None,
+                "completion_location":
+                    None,
+            }
+
+
+        # ------------------------------------------------------------
+        # Historical completion-only partial evidence.
+        #
+        # This branch applies ONLY when no initiation exists.
+        # Reservation is already an initiation authority, so only the
+        # strong completion family is considered here.
+        # ------------------------------------------------------------
+
+        completion_only_events: List[
+            Dict[str, Any]
+        ] = []
+
+        for sentence_index, sentence in enumerate(
+            sentences
+        ):
+            sentence_text = operational_sentence(
+                sentence
+            )
+
+            if not sentence_text:
                 continue
 
             for pattern, action in completion_patterns:
@@ -6775,91 +11901,331 @@ class ProjectContextExtractor:
                     ):
                         continue
 
-                    location = (
-                        sentence_index,
-                        match.start(),
+                    if not (
+                        self._transaction_completion_candidate_is_operational(
+                            sentence=sentence_text,
+                            action=action,
+                            action_match=match,
+                        )
+                    ):
+                        continue
+
+                    completion_only_events.append(
+                        {
+                            "location": (
+                                sentence_index,
+                                match.start(),
+                            ),
+                            "sentence_index":
+                                sentence_index,
+                            "sentence":
+                                sentence_text,
+                            "action":
+                                action,
+                            "match":
+                                match,
+                        }
                     )
 
-                    if (
-                        completion_location is None
-                        or location
-                        > completion_location
-                    ):
-                        completion_location = (
-                            location
-                        )
-
-                        completion_action = (
-                            action
-                        )
-
-        initiation_action = ""
-
-        # Earliest valid transaction initiation before completion.
-        for sentence_index, sentence in enumerate(
-            sentences
-        ):
-            sentence_text = clean_text(
-                sentence
+        if completion_only_events:
+            completion_event = max(
+                completion_only_events,
+                key=lambda event:
+                    event[
+                        "location"
+                    ],
             )
 
-            if not sentence_text:
-                continue
+            return {
+                "initiation_action":
+                    "",
+                "initiation_sentence":
+                    "",
+                "initiation_match":
+                    None,
+                "initiation_location":
+                    None,
 
-            if (
-                completion_location
-                and sentence_index
-                > completion_location[0]
-            ):
-                break
+                "completion_action":
+                    completion_event[
+                        "action"
+                    ],
+                "completion_sentence":
+                    completion_event[
+                        "sentence"
+                    ],
+                "completion_match":
+                    completion_event[
+                        "match"
+                    ],
+                "completion_location":
+                    completion_event[
+                        "location"
+                    ],
+            }
 
-            if self._is_problem_sentence(
-                sentence_text
-            ):
-                continue
 
-            if (
-                self._workflow_sentence_is_non_action_context(
-                    sentence_text
+        return {
+            "initiation_action":
+                "",
+            "initiation_sentence":
+                "",
+            "initiation_match":
+                None,
+            "initiation_location":
+                None,
+
+            "completion_action":
+                "",
+            "completion_sentence":
+                "",
+            "completion_match":
+                None,
+            "completion_location":
+                None,
+        }
+
+
+    def _explicit_transaction_flow_bounds(
+        self,
+        sentences: Sequence[str],
+    ) -> Tuple[str, str]:
+        """
+        Project canonical lifecycle selection to action boundaries.
+
+        Exact event identity is owned by
+        ``_explicit_transaction_lifecycle_selection``.
+        """
+        selection = (
+            self._explicit_transaction_lifecycle_selection(
+                sentences
+            )
+        )
+
+        return (
+            clean_text(
+                selection.get(
+                    "initiation_action"
                 )
-            ):
+                or ""
+            ),
+            clean_text(
+                selection.get(
+                    "completion_action"
+                )
+                or ""
+            ),
+        )
+
+    def _explicit_fulfillment_responsibility(
+        self,
+        *,
+        sentences: Sequence[str],
+        actors: Sequence[ActorContext],
+    ) -> str:
+        """
+        Resolve who explicitly performs transaction fulfillment.
+
+        Supply-side membership alone is not fulfillment authority.
+        A direct execution relation must be explicitly present.
+
+        The extracted subject is resolved to an existing canonical
+        ActorContext. This method intentionally does not infer
+        fulfillment mode.
+        """
+        french_pattern = re.compile(
+            r"^\s*"
+            r"(?:le\s+|la\s+|les\s+|"
+            r"l['\u2019]\s*)?"
+            r"(.+?)\s+"
+            r"(?:"
+            r"ex(?:e|\u00e9)cute"
+            r"|ex(?:e|\u00e9)cutent"
+            r"|r(?:e|\u00e9)alise"
+            r"|r(?:e|\u00e9)alisent"
+            r"|effectue|effectuent"
+            r"|fournit|fournissent"
+            r")"
+            r"(?:\s+(?:ensuite|directement))?\s+"
+            r"(?:"
+            r"l['\u2019]\s*"
+            r"|le\s+|la\s+|les\s+"
+            r"|un\s+|une\s+|des\s+"
+            r")?"
+            r"(?=[^.;]{0,120}\b(?:"
+            r"services?"
+            r"|missions?"
+            r"|prestations?"
+            r"|interventions?"
+            r"|travail"
+            r"|travaux"
+            r")\b)"
+            r"[^.;]*?"
+            r"(?:"
+            r"services?"
+            r"|missions?"
+            r"|prestations?"
+            r"|interventions?"
+            r"|travail"
+            r"|travaux"
+            r")\b"
+            r"(?:\s+.+?)?"
+            r"(?=[.;]|$)",
+            re.IGNORECASE,
+        )
+
+        english_pattern = re.compile(
+            r"^\s*(?:the\s+)?"
+            r"(.+?)\s+"
+            r"(?:"
+            r"performs?"
+            r"|delivers?"
+            r"|provides?"
+            r"|executes?"
+            r")"
+            r"(?:\s+(?:then|directly))?\s+"
+            r"(?:the\s+|a\s+|an\s+)?"
+            r"(?=[^.;]{0,120}\b(?:"
+            r"services?|missions?|jobs?|work"
+            r")\b)"
+            r"[^.;]*?"
+            r"(?:"
+            r"services?"
+            r"|missions?"
+            r"|jobs?"
+            r"|work"
+            r")\b"
+            r"(?:\s+.+?)?"
+            r"(?=[.;]|$)",
+            re.IGNORECASE,
+        )
+
+        actor_by_key: Dict[
+            str,
+            str,
+        ] = {}
+
+        actors_by_alias: Dict[
+            str,
+            List[str],
+        ] = {}
+
+        for actor in actors:
+            name = self._clean_actor(
+                actor.name
+            )
+
+            key = comparison_key(
+                name
+            )
+
+            if not name or not key:
                 continue
 
-            for pattern, action in (
-                self._transaction_initiation_patterns()
-            ):
-                match = (
-                    self._transaction_action_candidate(
-                        sentence_text,
-                        pattern,
-                    )
+            actor_by_key.setdefault(
+                key,
+                actor.name,
+            )
+
+            alias = (
+                self._actor_alias_identity_key(
+                    name
+                )
+            )
+
+            if alias:
+                actors_by_alias.setdefault(
+                    alias,
+                    [],
+                ).append(
+                    actor.name
                 )
 
-                if match is None:
+        for sentence in sentences:
+            relation_sentence = (
+                self._role_relation_sentence(
+                    sentence
+                )
+            )
+
+            for pattern in (
+                french_pattern,
+                english_pattern,
+            ):
+                match = pattern.search(
+                    relation_sentence
+                )
+
+                if not match:
                     continue
 
+                candidate = self._clean_actor(
+                    match.group(1)
+                )
+
                 if (
-                    completion_location
-                    and sentence_index
-                    == completion_location[0]
-                    and match.start()
-                    >= completion_location[1]
+                    not candidate
+                    or self._is_actor_identity_pronoun(
+                        candidate
+                    )
                 ):
                     continue
 
-                initiation_action = (
-                    action
+                candidate_key = comparison_key(
+                    candidate
                 )
 
-                break
+                if not candidate_key:
+                    continue
 
-            if initiation_action:
-                break
+                exact_actor = actor_by_key.get(
+                    candidate_key
+                )
 
-        return (
-            initiation_action,
-            completion_action,
-        )
+                if exact_actor:
+                    return exact_actor
+
+                candidate_alias = (
+                    self._actor_alias_identity_key(
+                        candidate
+                    )
+                )
+
+                if candidate_alias:
+                    alias_matches = list(
+                        dict.fromkeys(
+                            actors_by_alias.get(
+                                candidate_alias,
+                                [],
+                            )
+                        )
+                    )
+
+                    if len(alias_matches) == 1:
+                        return alias_matches[0]
+
+                # Reuse the canonical conservative identity matcher
+                # already used by workflow ownership. It performs
+                # token-by-token singular/plural reconciliation and
+                # does not introduce semantic synonym matching.
+                identity_matches = list(
+                    dict.fromkeys(
+                        actor.name
+                        for actor in actors
+                        if (
+                            self._workflow_actor_identity_prefix_match(
+                                candidate,
+                                actor.name,
+                            )
+                        )
+                    )
+                )
+
+                # Ambiguous morphology must never select arbitrarily.
+                if len(identity_matches) == 1:
+                    return identity_matches[0]
+
+        return ""
 
 
     def _extract_transaction_unit(
@@ -6868,32 +12234,63 @@ class ProjectContextExtractor:
         sentences: Sequence[str],
         actors: Sequence[ActorContext],
         workflows: Sequence[WorkflowContext],
+        clarification_facts: Dict[str, Any] | None = None,
     ) -> TransactionUnitContext:
         """
         Extrait l'unité centrale de valeur ou d'opération du projet.
         """
-        supply_actor = next(
-            (
-                actor.name
-                for actor in actors
-                if actor.role
-                == ActorRole.PROVIDER
-            ),
-            "",
+        facts = dict(
+            clarification_facts
+            or {}
         )
 
-        demand_actor = next(
-            (
-                actor.name
-                for actor in actors
-                if actor.role
-                in {
-                    ActorRole.BUYER,
-                    ActorRole.USER,
-                    ActorRole.BENEFICIARY,
-                }
-            ),
-            "",
+        clarified_supply = self._clean_actor(
+            facts.get(
+                "supply_side"
+            )
+        )
+
+        clarified_demand = self._clean_actor(
+            facts.get(
+                "demand_side"
+            )
+        )
+
+        supply_actor = (
+            clarified_supply
+            or next(
+                (
+                    actor.name
+                    for actor in actors
+                    if actor.role
+                    == ActorRole.PROVIDER
+                ),
+                "",
+            )
+        )
+
+        demand_actor = (
+            clarified_demand
+            or next(
+                (
+                    actor.name
+                    for actor in actors
+                    if actor.role
+                    in {
+                        ActorRole.BUYER,
+                        ActorRole.USER,
+                        ActorRole.BENEFICIARY,
+                    }
+                ),
+                "",
+            )
+        )
+
+        fulfillment_responsibility = (
+            self._explicit_fulfillment_responsibility(
+                sentences=sentences,
+                actors=actors,
+            )
         )
 
         explicit_unit = (
@@ -6927,6 +12324,7 @@ class ProjectContextExtractor:
                 object=explicit_unit,
                 supply_actor=supply_actor,
                 demand_actor=demand_actor,
+                fulfillment_responsibility=fulfillment_responsibility,
                 initiation_action=initiation_action,
                 completion_action=completion_action,
                 value_exchanged=explicit_unit,
@@ -6941,119 +12339,38 @@ class ProjectContextExtractor:
                 ),
             )
 
-        initiation_patterns = (
-            self._transaction_initiation_patterns()
+        lifecycle_selection = (
+            self._explicit_transaction_lifecycle_selection(
+                sentences
+            )
         )
 
-        completion_patterns = (
-            (
-                re.compile(
-                    r"\bréserv(?:er|e|ent|ation)?\b"
-                    r"|\breserv(?:er|e|ent|ation)?\b"
-                    r"|\bbook(?:s|ed|ing)?\b",
-                    re.IGNORECASE,
-                ),
-                "réserver",
-            ),
-            (
-                re.compile(
-                    r"\bachet(?:er|e|ent)?\b"
-                    r"|\bbuy(?:s|ing)?\b"
-                    r"|\bbought\b",
-                    re.IGNORECASE,
-                ),
-                "acheter",
-            ),
-            (
-                re.compile(
-                    r"\bcommand(?:er|e|ent)?\b"
-                    r"|\border(?:s|ed|ing)?\b",
-                    re.IGNORECASE,
-                ),
-                "commander",
-            ),
-            (
-                re.compile(
-                    r"\bconclu(?:re|t|ent)?\b"
-                    r"|\bfinalis(?:er|e|ent)?\b"
-                    r"|\bcomplete(?:s|d|ing)?\b",
-                    re.IGNORECASE,
-                ),
-                "conclure la transaction",
-            ),
-            (
-                re.compile(
-                    r"\bvalid(?:er|e|ent)?\b"
-                    r"|\bapprouv(?:er|e|ent)?\b",
-                    re.IGNORECASE,
-                ),
-                "valider",
-            ),
-            (
-                re.compile(
-                    r"\bpay(?:er|e|ent)?\b"
-                    r"|\bpaie(?:nt)?\b"
-                    r"|\bpaiement\b"
-                    r"|\bpayment\b",
-                    re.IGNORECASE,
-                ),
-                "payer",
-            ),
-            (
-                re.compile(
-                    r"\blivr(?:er|e|ent|aison)?\b"
-                    r"|\bdeliver(?:s|ed|ing|y)?\b",
-                    re.IGNORECASE,
-                ),
-                "livrer",
-            ),
+        initiation_action = clean_text(
+            lifecycle_selection.get(
+                "initiation_action"
+            )
+            or ""
         )
 
-        initiation_action = ""
-        initiation_sentence = ""
-        initiation_match: re.Match[str] | None = None
+        completion_action = clean_text(
+            lifecycle_selection.get(
+                "completion_action"
+            )
+            or ""
+        )
 
-        completion_action = ""
-        completion_sentence = ""
+        initiation_sentence = clean_text(
+            lifecycle_selection.get(
+                "initiation_sentence"
+            )
+            or ""
+        )
 
-        for sentence in sentences:
-            for pattern, action in initiation_patterns:
-                match = (
-                    self._transaction_action_candidate(
-                        sentence,
-                        pattern,
-                    )
-                )
-
-                if not match:
-                    continue
-
-                initiation_action = action
-                initiation_sentence = sentence
-                initiation_match = match
-                break
-
-            if initiation_action:
-                break
-
-        for sentence in sentences:
-            for pattern, action in completion_patterns:
-                match = (
-                    self._transaction_action_candidate(
-                        sentence,
-                        pattern,
-                    )
-                )
-
-                if not match:
-                    continue
-
-                completion_action = action
-                completion_sentence = sentence
-                break
-
-            if completion_action:
-                break
+        initiation_match = (
+            lifecycle_selection.get(
+                "initiation_match"
+            )
+        )
 
         object_text = ""
 
@@ -7066,21 +12383,25 @@ class ProjectContextExtractor:
                 initiation_match,
             )
 
-        if not object_text:
+        # Workflow extraction is not transaction-lifecycle authority.
+        #
+        # A workflow may enrich the object of an already-established
+        # transaction initiation, but it must never manufacture a
+        # transaction start or a TransactionUnit on its own.
+        if (
+            not initiation_action
+            and not completion_action
+        ):
+            return TransactionUnitContext()
+
+        if (
+            not object_text
+            and initiation_action
+        ):
             for workflow in workflows:
                 if workflow.object:
                     object_text = workflow.object
                     break
-
-        if not initiation_action and workflows:
-            initiation_action = workflows[0].action
-
-        if (
-            not object_text
-            and not initiation_action
-            and not completion_action
-        ):
-            return TransactionUnitContext()
 
         parts: List[str] = []
 
@@ -7117,12 +12438,13 @@ class ProjectContextExtractor:
             object=object_text,
             supply_actor=supply_actor,
             demand_actor=demand_actor,
+            fulfillment_responsibility=fulfillment_responsibility,
             initiation_action=initiation_action,
             completion_action=completion_action,
             value_exchanged=object_text,
             is_explicit=bool(
                 initiation_sentence
-                or completion_sentence
+                or completion_action
             ),
             confidence=round(
                 min(
@@ -7173,10 +12495,203 @@ class ProjectContextExtractor:
             flags=re.IGNORECASE,
         )
 
+        # French explicit initiation wrapper normalization.
+        #
+        # "initie une demande d'intervention"
+        #                ->
+        # canonical transaction object: "d'intervention"
+        #
+        # The wrapper is removed only when the selected transaction
+        # action is an explicit initiation predicate. Direct request
+        # predicates keep their normal object extraction semantics.
+        #
+        # English remains untouched:
+        # "initiates a service request"
+        #                ->
+        # "service request"
+        action_key = comparison_key(
+            action_match.group(0)
+        )
+
+        if action_key.startswith(
+            "initi"
+        ):
+            tail = re.sub(
+                r"^demande\s+",
+                "",
+                tail,
+                count=1,
+                flags=re.IGNORECASE,
+            )
+
         return self._compact(
             tail,
             120,
         )
+
+    def _reconcile_workflow_actor_membership(
+        self,
+        *,
+        actors: Sequence[ActorContext],
+        workflows: Sequence[WorkflowContext],
+    ) -> List[ActorContext]:
+        """
+        U2 canonical workflow actor membership authority.
+
+        A non-technical actor explicitly owning a canonical workflow
+        action must not exist only inside WorkflowContext.actor.
+
+        The actor registry is reconciled before transaction projection,
+        so downstream authorities consume one coherent actor set.
+
+        Important boundaries:
+
+        - technical executors are never promoted to business actors;
+        - implicit workflows do not manufacture actors;
+        - existing canonical actors keep their existing role authority;
+        - request initiation establishes operational USER authority;
+        - other explicit business workflow owners are materialized
+          conservatively using existing actor-role authority.
+
+        No project, sector, region or archetype vocabulary is used.
+        """
+
+        output = list(
+            actors
+        )
+
+        seen = {
+            comparison_key(
+                actor.name
+            )
+            for actor in output
+            if comparison_key(
+                actor.name
+            )
+        }
+
+        technical_actor_keys = {
+            "system",
+            "systeme",
+            "platform",
+            "plateforme",
+            "application",
+            "software",
+            "logiciel",
+        }
+
+        request_actions = {
+            "demander",
+            "request",
+            "publier",
+            "post",
+            "submit",
+            "soumettre",
+        }
+
+        request_object_markers = (
+            "demande",
+            "request",
+        )
+
+        for workflow in workflows:
+
+            if not getattr(
+                workflow,
+                "is_explicit",
+                False,
+            ):
+                continue
+
+            name = clean_text(
+                workflow.actor
+            )
+
+            key = comparison_key(
+                name
+            )
+
+            if (
+                not name
+                or not key
+                or key in seen
+                or key in technical_actor_keys
+                or key in self.GENERIC_ACTORS
+                or self._is_actor_identity_pronoun(
+                    name
+                )
+            ):
+                continue
+
+            # Workflow actor extraction may identify a local subject,
+            # but only business-actor-shaped identities are admitted
+            # into ActorContext.
+            #
+            # This prevents sensors, products or arbitrary objects from
+            # becoming business actors merely because they execute a
+            # technical workflow predicate.
+            if not self._looks_like_actor_phrase(
+                name
+            ):
+                continue
+
+            action_key = comparison_key(
+                workflow.action
+            )
+
+            object_key = comparison_key(
+                workflow.object
+            )
+
+            role = self._actor_role(
+                name
+            )
+
+            # Explicit request initiation is operational USER authority.
+            #
+            # Examples:
+            #   responsable maintenance publie une demande
+            #   maintenance manager submits a request
+            #
+            # Publishing something else does not imply USER authority.
+            request_initiator = bool(
+                action_key
+                in request_actions
+                and (
+                    action_key
+                    in {
+                        "demander",
+                        "request",
+                    }
+                    or any(
+                        marker in object_key
+                        for marker
+                        in request_object_markers
+                    )
+                )
+            )
+
+            if request_initiator:
+                role = ActorRole.USER
+
+            seen.add(
+                key
+            )
+
+            output.append(
+                ActorContext(
+                    name=name,
+                    role=role,
+                    is_explicit=True,
+                )
+            )
+
+            # Preserve the existing canonical packet bound.
+            if len(output) >= 8:
+                break
+
+        return output[:8]
+
 
     def _preferred_actor(
         self,
@@ -7425,6 +12940,74 @@ class ProjectContextExtractor:
                 :purpose_connector.start()
             ]
 
+        # ----------------------------------------------------------
+        # Canonical coordinated-action boundary.
+        #
+        # The object of one workflow must stop before a later workflow
+        # predicate already recognized by the shared action authority:
+        #
+        #   "books a service and pays the fee"
+        #   "books a service and the company pays the fee"
+        #   "demande une intervention puis paie le service"
+        #
+        # Do NOT split merely because an object contains "and" / "et":
+        #
+        #   "books transport and accommodation"
+        #
+        # In that case there is no later canonical action, so the full
+        # coordinated object is preserved.
+        # ----------------------------------------------------------
+
+        later_actions = [
+            item
+            for item
+            in self._workflow_action_occurrences(
+                sentence
+            )
+            if (
+                item["match"].start()
+                >= action_match.end()
+            )
+        ]
+
+        if later_actions:
+            next_action = min(
+                later_actions,
+                key=lambda item: (
+                    item["match"].start(),
+                    item["match"].end(),
+                ),
+            )
+
+            between = sentence[
+                action_match.end():
+                next_action[
+                    "match"
+                ].start()
+            ]
+
+            boundaries = list(
+                re.finditer(
+                    r"[,;]"
+                    r"|\b(?:"
+                    r"and|et|"
+                    r"then|puis|ensuite"
+                    r")\b",
+                    between,
+                    flags=re.IGNORECASE,
+                )
+            )
+
+            if boundaries:
+                boundary = boundaries[-1]
+
+                tail = tail[
+                    :boundary.start()
+                ]
+
+        # Preserve the historical notification/output boundary for
+        # surfaces that may not be represented as an independent
+        # workflow occurrence.
         tail = re.split(
             r"\s+(?:et|and)\s+"
             r"(?:transmet|envoi|alert|notifi)",
@@ -7727,24 +13310,266 @@ class ProjectContextExtractor:
         self,
         sentence: str,
     ) -> bool:
+        """
+        Return True only when a sentence expresses an actual
+        problem, pain, friction or negative operational consequence.
+
+        Natural-language problem statements must not require an
+        artificial label such as "Le probleme principal est...".
+
+        At the same time, positive solution capabilities and MVP
+        scope declarations must never become problem authority.
+        """
+        text = clean_text(
+            sentence
+        )
+
+        if not text:
+            return False
+
+        # Existing explicit declarations remain authoritative.
         if self._contains_any(
-            sentence,
+            text,
             self.PROBLEM_MARKERS,
         ):
             return True
 
         key = comparison_key(
-            sentence
+            text
         )
 
-        return key.startswith(
-            (
-                "le probleme",
-                "la difficulte",
-                "the problem",
-                "the current process",
-            )
+        if not key:
+            return False
+
+        explicit_problem_prefixes = (
+            "le probleme",
+            "la difficulte",
+            "the problem",
+            "the current process",
         )
+
+        if key.startswith(
+            explicit_problem_prefixes
+        ):
+            return True
+
+        # Positive capability/scope declarations must not be
+        # reclassified merely because they mention an operational
+        # concept also present in a pain statement.
+        positive_capability_prefixes = (
+            "le mvp comprend",
+            "le mvp inclut",
+            "mvp comprend",
+            "mvp inclut",
+            "la plateforme permet",
+            "la plateforme affiche",
+            "l application permet",
+            "l application affiche",
+            "le service permet",
+            "la solution permet",
+            "les utilisateurs peuvent",
+            "the mvp includes",
+            "the mvp contains",
+            "the platform allows",
+            "the platform lets",
+            "the platform displays",
+            "the application allows",
+            "the application lets",
+            "the service allows",
+            "the solution allows",
+            "users can",
+        )
+
+        if key.startswith(
+            positive_capability_prefixes
+        ):
+            return False
+
+        # Signals describe semantics, not one specific product or
+        # industry. They cover common natural formulations of
+        # difficulty, friction, unreliability and operational harm.
+        difficulty_signals = (
+            "il est difficile de",
+            "il est souvent difficile de",
+            "est difficile de",
+            "sont difficiles a",
+            "a du mal a",
+            "ont du mal a",
+            "peine a",
+            "peinent a",
+            "reste lente",
+            "reste lent",
+            "reste difficile",
+            "is difficult to",
+            "is hard to",
+            "struggle to",
+            "struggles to",
+            "struggling to",
+            "is slow",
+            "remains slow",
+            "remains difficult",
+        )
+
+        harm_signals = (
+            "lent et incertain",
+            "lente et incertaine",
+            "lent et peu fiable",
+            "lente et peu fiable",
+            "source d erreur",
+            "sources d erreur",
+            "erreur prone",
+            "error prone",
+            "unreliable",
+            "incertain",
+            "incertaine",
+            "inefficace",
+            "inefficient",
+            "inconsistent",
+            "inconsistently",
+            "incoherent",
+            "breakdown",
+            "breakdowns",
+            "interruption",
+            "interruptions",
+            "repeated errors",
+            "friction",
+            "conflit",
+            "conflicts",
+
+            # Blind-B2 natural-language context authority.
+            #
+            # Generic negative-outcome morphology. These markers are
+            # intentionally combined with consequence authority below;
+            # none of them independently turns a capability sentence
+            # into a problem.
+            "conflicting",
+            "conflictuel",
+            "conflictuelle",
+            "long waiting",
+            "waiting time",
+            "temps d attente",
+            "poor ",
+            "mauvais",
+            "mauvaise",
+            "incomplete",
+            "incomplet",
+
+            "perte de temps",
+            "perdent du temps",
+            "temps perdu",
+            "wasted time",
+            "lose time",
+            "lost time",
+            "retard",
+            "delay",
+            "delays",
+            "downtime",
+        )
+
+        consequence_signals = (
+            "ce qui peut",
+            "ce qui provoque",
+            "ce qui entraine",
+            "ce qui entraine",
+            "cela provoque",
+            "cela entraine",
+            "cela entraine",
+            "provoque",
+            "entraine",
+            "entraine",
+            "retarde",
+            "retardent",
+            "prolonge",
+            "prolonger",
+            "perturbe",
+            "perturber",
+            "cause",
+            "causes",
+
+            # French and English creation/result predicates share
+            # the same semantic authority: they introduce an outcome.
+            "creer",
+            "cree",
+            "creent",
+            "create",
+            "creates",
+
+            "result in",
+            "results in",
+            "leads to",
+            "leading to",
+        )
+
+        strong_problem_signals = (
+            "impossible de",
+            "ne peut pas",
+            "ne peuvent pas",
+            "cannot",
+            "unable to",
+            "fails to",
+            "fail to",
+            "trop lent",
+            "trop lente",
+            "too slow",
+            "trop couteux",
+            "trop couteuse",
+            "too costly",
+            "too much time",
+            "too much effort",
+            "excessive time",
+            "excessive effort",
+            "excessive manual effort",
+            "time consuming",
+            "chronophage",
+            "manuellement",
+            "manually",
+        )
+
+        has_difficulty = any(
+            signal in key
+            for signal in difficulty_signals
+        )
+
+        has_harm = any(
+            signal in key
+            for signal in harm_signals
+        )
+
+        has_consequence = any(
+            signal in key
+            for signal in consequence_signals
+        )
+
+        has_strong_problem = any(
+            signal in key
+            for signal in strong_problem_signals
+        )
+
+        # A strong negative operational statement is independently
+        # sufficient.
+        if has_strong_problem:
+            return True
+
+        # Natural difficulty becomes problem authority when the
+        # sentence also carries harm or a consequence.
+        if (
+            has_difficulty
+            and (
+                has_harm
+                or has_consequence
+            )
+        ):
+            return True
+
+        # Declarative harm plus consequence is also explicit problem
+        # evidence even without the words "problem" or "difficulty".
+        if (
+            has_harm
+            and has_consequence
+        ):
+            return True
+
+        return False
 
     def _normalize_scope_item(
         self,
@@ -8737,7 +14562,21 @@ class ProjectContextExtractor:
     def _deployment_environment(
         self,
         sentences: Sequence[str],
+        *,
+        structured: Optional[
+            Dict[str, Any]
+        ] = None,
     ) -> List[str]:
+        explicit_environment = (
+            self._canonical_requirement_values(
+                structured or {},
+                "deployment_environment",
+            )
+        )
+
+        if explicit_environment:
+            return explicit_environment[:6]
+
         terms = (
             "serre",
             "greenhouse",
@@ -8745,9 +14584,9 @@ class ProjectContextExtractor:
             "field",
             "usine",
             "factory",
-            "hôpital",
+            "h?pital",
             "hospital",
-            "école",
+            "?cole",
             "school",
             "cloud",
             "offline",

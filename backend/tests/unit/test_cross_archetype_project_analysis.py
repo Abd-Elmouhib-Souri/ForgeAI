@@ -105,7 +105,9 @@ def test_taxi_query_plan_is_ride_hailing_specific_and_not_logistics_tms():
     planner = _intelligence("TaxiSmart", TAXI_DESCRIPTION, "transport")["query_planner"]
     joined = " | ".join(planner["queries"]).lower()
 
-    assert "application réservation taxi tunisie" in joined
+    # Planner authority is semantic plus canonical geography.
+    # Raw archetype search-query literals are metadata only.
+    assert "tunisie" in joined
     assert "ride hailing" in joined
     assert "transport management software" not in joined
     assert "tms software" not in joined
@@ -302,12 +304,16 @@ def test_simple_internship_idea_resolves_marketplace_without_inventing_actors():
     assert structured["target_users"] == []
     assert structured["priority_workflows"] == []
 
+    planner_queries = intelligence[
+        "query_planner"
+    ]["queries"]
+
+    # Preserve internship-market specificity and canonical geography
+    # without executing a raw archetype query literal.
     assert any(
-        "plateforme stages \u00e9tudiants tunisie"
-        in item.lower()
-        for item in intelligence[
-            "query_planner"
-        ]["queries"]
+        "internship platform" in item.lower()
+        and "tunisie" in item.lower()
+        for item in planner_queries
     )
 
 def test_hardware_idea_uses_field_operation_lens():

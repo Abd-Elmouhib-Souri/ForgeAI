@@ -51,9 +51,14 @@ def clean_text(value: Any) -> str:
     if value is None:
         return ""
 
+    text = unicodedata.normalize(
+        "NFC",
+        str(value).replace("\x00", " "),
+    )
+
     return _SPACE_RE.sub(
         " ",
-        str(value).replace("\x00", " "),
+        text,
     ).strip()
 
 
@@ -804,6 +809,23 @@ class ProjectContextPacketV3(BaseModel):
         default_factory=list,
     )
 
+    # U7-A canonical intelligence requirement fields.
+    #
+    # These concepts are already readiness requirements and therefore
+    # need a canonical structured home in ProjectContextPacketV3.
+    input_data: List[str] = Field(
+        default_factory=list
+    )
+    output_decision: List[str] = Field(
+        default_factory=list
+    )
+    human_oversight: List[str] = Field(
+        default_factory=list
+    )
+    maintenance_model: List[str] = Field(
+        default_factory=list
+    )
+
     deployment_environment: List[str] = Field(
         default_factory=list,
     )
@@ -846,6 +868,16 @@ class ProjectContextPacketV3(BaseModel):
 
     assumptions: List[str] = Field(
         default_factory=list,
+    )
+
+    # Explicit field-bound facts supplied by the user
+    # through the clarification workflow.
+    #
+    # These facts are distinct from assumptions: the user
+    # explicitly confirmed them. Dedicated canonical structures
+    # are updated when a safe structural projection exists.
+    clarification_facts: Dict[str, str] = Field(
+        default_factory=dict,
     )
 
     blocking_missing_fields: List[str] = Field(
@@ -1395,6 +1427,18 @@ class ProjectContextPacketV3(BaseModel):
             "mvp_scope_items": list(
                 self.mvp_scope
             ),
+            "input_data": list(
+                self.input_data
+            ),
+            "output_decision": list(
+                self.output_decision
+            ),
+            "human_oversight": list(
+                self.human_oversight
+            ),
+            "maintenance_model": list(
+                self.maintenance_model
+            ),
             "deployment_environment": list(
                 self.deployment_environment
             ),
@@ -1448,5 +1492,8 @@ class ProjectContextPacketV3(BaseModel):
             ),
             "validation_warnings": list(
                 self.validation_warnings
+            ),
+            "clarification_facts": dict(
+                self.clarification_facts
             ),
         }

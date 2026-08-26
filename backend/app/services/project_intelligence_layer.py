@@ -1141,7 +1141,7 @@ class ProjectIntelligenceLayer:
             stop_labels=(),
         )
 
-        problem = self._first_available_text(
+        problem = self._first_available_problem_text(
             explicit_problem,
             project_context.get("problem"),
             project_context.get("core_problem"),
@@ -1179,6 +1179,169 @@ class ProjectIntelligenceLayer:
                     self.MVP_HINTS(),
                 ),
             )
+        )
+
+        locked_planning_context = bool(
+            project_context.get(
+                "context_locked"
+            )
+            is True
+        )
+
+        locked_workflow_authority = bool(
+            locked_planning_context
+            and (
+                "priority_workflows"
+                in project_context
+                or "priority_workflow"
+                in project_context
+            )
+        )
+
+        canonical_planning_workflows: List[str] = []
+
+        def _synchronize_locked_planning_authority(
+        ) -> List[str]:
+            """
+            Synchronize PIL local planning variables from the same
+            locked canonical projection authority used by QA9.2C.
+
+            This adapter creates no new field authority. For an unlocked
+            context it is a strict no-op.
+            """
+            nonlocal target_users
+            nonlocal problem
+            nonlocal solution
+            nonlocal business_model
+            nonlocal mvp_scope
+            nonlocal main_use_case
+
+            if not locked_planning_context:
+                return []
+
+            planning_projection = (
+                self._preserve_locked_canonical_projection(
+                    structured_project_context={
+                        "target_users":
+                            target_users,
+
+                        "problem":
+                            problem,
+
+                        "core_problem":
+                            problem,
+
+                        "solution":
+                            solution,
+
+                        "business_model":
+                            business_model,
+
+                        "mvp_scope":
+                            mvp_scope,
+
+                        "priority_workflow":
+                            main_use_case,
+
+                        "priority_workflows":
+                            (
+                                [
+                                    main_use_case
+                                ]
+                                if main_use_case
+                                else []
+                            ),
+                    },
+                    base_project_context=(
+                        project_context
+                    ),
+                )
+            )
+
+            target_users = (
+                self._safe_list(
+                    planning_projection.get(
+                        "target_users"
+                    )
+                )
+            )
+
+            problem = (
+                self._problem_text_value(
+                    planning_projection.get(
+                        "problem"
+                    )
+                )
+                or self._problem_text_value(
+                    planning_projection.get(
+                        "core_problem"
+                    )
+                )
+            )
+
+            solution = self._clean_text(
+                planning_projection.get(
+                    "solution"
+                )
+            )
+
+            business_model = self._clean_text(
+                planning_projection.get(
+                    "business_model"
+                )
+            )
+
+            mvp_scope = self._clean_text(
+                planning_projection.get(
+                    "mvp_scope"
+                )
+            )
+
+            if not locked_workflow_authority:
+                return []
+
+            workflows = self._safe_list(
+                planning_projection.get(
+                    "priority_workflows"
+                )
+            )
+
+            if not workflows:
+                primary_workflow = (
+                    self._clean_text(
+                        planning_projection.get(
+                            "priority_workflow"
+                        )
+                    )
+                )
+
+                if primary_workflow:
+                    workflows = [
+                        primary_workflow
+                    ]
+
+            # Explicitly empty locked workflow authority remains empty.
+            main_use_case = (
+                workflows[0]
+                if workflows
+                else ""
+            )
+
+            return self._unique(
+                workflows
+            )[:8]
+
+
+        # ----------------------------------------------------------
+        # First synchronization:
+        #
+        # the ArchetypeResolver must receive already-canonical facts.
+        # It may classify/enrich them, but must never be asked to
+        # classify a contradictory downstream re-extraction instead.
+        # ----------------------------------------------------------
+
+        canonical_planning_workflows = (
+            _synchronize_locked_planning_authority()
         )
 
         explicit_workflows = self._extract_explicit_workflows(
@@ -1255,6 +1418,18 @@ class ProjectIntelligenceLayer:
         #
         # Keep an absent MVP absent. Readiness may surface it as an
         # unknown/ambiguous field without inventing product scope.
+        # ----------------------------------------------------------
+        # Re-apply upstream authority after archetype enrichment.
+        #
+        # This prevents inferred actor/workflow/business-model values
+        # from replacing locked facts before concepts and queries are
+        # constructed.
+        # ----------------------------------------------------------
+
+        canonical_planning_workflows = (
+            _synchronize_locked_planning_authority()
+        )
+
         sector_tags = self._sector_tags(industry)
         sector_profile = self._sector_profile(sector_tags)
 
@@ -1460,6 +1635,15 @@ class ProjectIntelligenceLayer:
             "context_locked": True,
         }
 
+        structured_project_context = (
+            self._preserve_locked_canonical_projection(
+                structured_project_context=(
+                    structured_project_context
+                ),
+                base_project_context=project_context,
+            )
+        )
+
         source_acceptance_rules = self._source_acceptance_rules(
             language=language,
             target_region=target_region,
@@ -1478,7 +1662,11 @@ class ProjectIntelligenceLayer:
             language=language,
             search_concepts=search_concepts,
             domain_concepts=domain_concepts,
-            use_case_terms=search_workflows + use_case_terms,
+            use_case_terms=self._unique(
+                canonical_planning_workflows
+                + search_workflows
+                + use_case_terms
+            ),
             solution_terms=solution_terms,
             target_terms=target_terms,
             archetype_context=archetype_context,
@@ -1541,20 +1729,181 @@ class ProjectIntelligenceLayer:
             "agent_context_packet": agent_context_packet,
         }
 
+    def _preserve_locked_canonical_projection(
+        self,
+        *,
+        structured_project_context: Dict[str, Any],
+        base_project_context: Dict[str, Any] | None,
+    ) -> Dict[str, Any]:
+        """
+        Preserve upstream canonical facts inside a locked downstream
+        structured projection.
+
+        ProjectIntelligenceLayer may enrich search/discovery metadata,
+        but it is not allowed to replace or manufacture canonical
+        project facts once the upstream context is locked.
+
+        Key presence is authoritative even when the canonical value is
+        empty. An empty canonical field means "not established", not
+        permission for a downstream layer to invent a replacement.
+        """
+        structured = dict(
+            structured_project_context
+            or {}
+        )
+
+        base = dict(
+            base_project_context
+            or {}
+        )
+
+        if (
+            base.get(
+                "context_locked"
+            )
+            is not True
+        ):
+            return structured
+
+        canonical_fields = (
+            "project_name",
+            "title",
+            "description",
+            "sector",
+            "industry",
+            "target_region",
+            "market_region",
+            "target_users",
+            "primary_target",
+            "secondary_targets",
+            "problem",
+            "core_problem",
+            "solution",
+            "project_archetype",
+            "vertical",
+            "business_motion",
+            "interaction_model",
+            "validation_unit",
+            "actors",
+            "payer",
+            "payer_actor_names",
+            "economic_buyer",
+            "decision_makers",
+            "decision_maker_actor_names",
+            "transaction_unit",
+            "priority_workflow",
+            "priority_workflows",
+            "business_model",
+            "business_model_hypotheses",
+            "mvp_scope",
+            "constraints",
+            "success_metrics",
+            "scope_exclusions",
+            "excluded_scope",
+            "output_language",
+        )
+
+        for field in canonical_fields:
+            if field in base:
+                structured[
+                    field
+                ] = base[
+                    field
+                ]
+
+        # Blind-B2.8 locked problem alias authority.
+        #
+        # `problem` is the canonical modern representation while
+        # `core_problem` is a historical textual compatibility alias.
+        #
+        # If upstream explicitly owns `problem` but did not explicitly
+        # provide `core_problem`, the alias may only be projected from
+        # that same canonical authority. A downstream heuristic must not
+        # manufacture a replacement when canonical pain is empty.
+        #
+        # Explicit upstream `core_problem` remains untouched because the
+        # normal key-preservation loop above already made it authoritative.
+        if (
+            "problem"
+            in base
+            and "core_problem"
+            not in base
+        ):
+            structured[
+                "core_problem"
+            ] = self._problem_text_value(
+                base.get(
+                    "problem"
+                )
+            )
+
+        structured[
+            "context_locked"
+        ] = True
+
+        return structured
+
+
     def merge_into_project_context(
         self,
         *,
         base_project_context: Dict[str, Any] | None,
         intelligence: Dict[str, Any],
     ) -> Dict[str, Any]:
-        base_project_context = dict(base_project_context or {})
-        structured = intelligence.get("structured_project_context") or {}
+        base_project_context = dict(
+            base_project_context
+            or {}
+        )
+
+        raw_structured = (
+            intelligence.get(
+                "structured_project_context"
+            )
+            or {}
+        )
+
+        structured = (
+            self._preserve_locked_canonical_projection(
+                structured_project_context=raw_structured,
+                base_project_context=(
+                    base_project_context
+                ),
+            )
+        )
+
+        normalized_intelligence = dict(
+            intelligence
+            or {}
+        )
+
+        normalized_intelligence[
+            "structured_project_context"
+        ] = structured
+
+        normalized_agent_packet = dict(
+            normalized_intelligence.get(
+                "agent_context_packet"
+            )
+            or {}
+        )
+
+        normalized_agent_packet[
+            "structured_project_context"
+        ] = structured
+
+        normalized_intelligence[
+            "agent_context_packet"
+        ] = normalized_agent_packet
 
         merged = {
             **base_project_context,
             **structured,
-            "project_intelligence": intelligence,
-            "agent_context_packet": intelligence.get("agent_context_packet") or {},
+            "project_intelligence": (
+                normalized_intelligence
+            ),
+            "agent_context_packet": (
+                normalized_agent_packet
+            ),
             "strong_keywords": intelligence.get("strong_keywords") or [],
             "must_match_terms": intelligence.get("must_match_terms") or [],
             "domain_concepts": intelligence.get("domain_concepts") or [],
@@ -2660,23 +3009,23 @@ class ProjectIntelligenceLayer:
         primary_workflow = workflows[0] if workflows else (solutions[0] if solutions else domain)
         secondary_workflow = workflows[1] if len(workflows) > 1 else (solutions[1] if len(solutions) > 1 else domain)
 
-        archetype_queries = archetype_context.get("search_queries") or {}
-        direct = (
-            self._safe_list(archetype_queries.get("local_fr"))[:3]
-            + self._safe_list(archetype_queries.get("local_en"))[:3]
-            + [
-                f"{domain} management software {region}",
-                f"{target} {domain} application {region}" if target else f"{domain} application {region}",
-                f"{primary_workflow} software {region}",
-            ]
-        )
-        local_solutions = (
-            self._safe_list(archetype_queries.get("all"))[:3]
-            + [
-                f"{region} {domain} application platform",
-                f"{region} {target} digital platform" if target else f"{region} {domain} startup",
-            ]
-        )
+        # Archetype search-query strings are non-authoritative metadata.
+        #
+        # They may have been authored for a historical/default market and
+        # therefore must never become executable requests directly.
+        #
+        # Archetype search_terms remain valid semantic hints above, while
+        # executable queries are synthesized here from canonical domain,
+        # target, workflow and target_region.
+        direct = [
+            f"{domain} management software {region}",
+            f"{target} {domain} application {region}" if target else f"{domain} application {region}",
+            f"{primary_workflow} software {region}",
+        ]
+        local_solutions = [
+            f"{region} {domain} application platform",
+            f"{region} {target} digital platform" if target else f"{region} {domain} startup",
+        ]
         adjacent = [
             f"{domain} workflow software",
             f"{secondary_workflow} platform",
@@ -2700,19 +3049,19 @@ class ProjectIntelligenceLayer:
             f"{region} {domain} adoption barriers",
         ]
 
-        profile_queries = sector_profile.get("queries") or {}
-        direct.extend(self._relevant_profile_queries(
-            profile_queries.get("direct_competitors", []), search_concepts, 2
-        ))
-        adjacent.extend(self._relevant_profile_queries(
-            profile_queries.get("adjacent_solutions", []), search_concepts, 2
-        ))
-        market.extend(self._relevant_profile_queries(
-            profile_queries.get("market_sources", []), domain_concepts, 2
-        ))
-        pricing.extend(self._relevant_profile_queries(
-            profile_queries.get("pricing", []), search_concepts, 1
-        ))
+        # Sector-profile query strings are profile authoring
+        # artifacts, not executable query authority.
+        #
+        # A profile can legitimately have been authored for a
+        # different market and therefore its stored query strings may
+        # contain stale geography. Promoting those strings directly to
+        # queries_by_intent would bypass canonical target_region.
+        #
+        # Executable queries are synthesized above from canonical
+        # domain, target, workflow and region inputs. Sector-profile
+        # metadata may still participate in upstream classification,
+        # but raw profile query strings must never become search
+        # requests here.
 
         if language == "fr":
             direct.append(f"logiciel {domain} {region}")
@@ -3432,6 +3781,54 @@ class ProjectIntelligenceLayer:
     def _first_available_text(self, *values: Any) -> str:
         for value in values:
             clean = self._clean_text(value)
+
+            if clean:
+                return clean
+
+        return ""
+
+    def _problem_text_value(
+        self,
+        value: Any,
+    ) -> str:
+        """
+        Blind-B2.7 semantic problem text boundary.
+
+        Canonical problem objects remain structured data.
+
+        Planning/search consumers may read only their semantic `pain`
+        value. They must never stringify the complete canonical mapping.
+
+        Plain historical string values remain supported.
+        """
+        if isinstance(
+            value,
+            dict,
+        ):
+            return self._clean_text(
+                value.get(
+                    "pain"
+                )
+            )
+
+        if isinstance(
+            value,
+            str,
+        ):
+            return self._clean_text(
+                value
+            )
+
+        return ""
+
+    def _first_available_problem_text(
+        self,
+        *values: Any,
+    ) -> str:
+        for value in values:
+            clean = self._problem_text_value(
+                value
+            )
 
             if clean:
                 return clean

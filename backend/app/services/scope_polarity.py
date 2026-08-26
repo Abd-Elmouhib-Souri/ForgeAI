@@ -15,6 +15,8 @@ _SCOPE_REFERENCE_PATTERN = re.compile(
     r"|minimum viable product"
     r"|first version"
     r"|initial version"
+    r"|first release"
+    r"|initial release"
     r"|premiere version"
     r"|version initiale"
     r"|first pilot"
@@ -118,6 +120,43 @@ def is_scope_exclusion_statement(
     ):
         return True
 
+
+    # --------------------------------------------------------
+    # QA8.7B3B direct passive exclusions.
+    #
+    # These formulations already express exclusion directly
+    # and therefore do not need an additional MVP/scope noun:
+    #
+    #   "Marketplace features are not included."
+    #   "The marketplace is not included."
+    #
+    # Positive declarations remain unaffected.
+    # --------------------------------------------------------
+
+    direct_passive_exclusions = (
+        r"\b(?:is|are|was|were|will\s+be)\s+"
+        r"not\s+included\b",
+
+        r"\b(?:isnt|arent|wasnt|werent)\s+"
+        r"included\b",
+
+        r"\b(?:n|ne)\s+"
+        r"(?:est|sont|sera|seront)\s+"
+        r"pas\s+"
+        r"inclu(?:e|es|s)?\b",
+    )
+
+    if any(
+        re.search(
+            pattern,
+            key,
+            flags=re.IGNORECASE,
+        )
+        is not None
+        for pattern in direct_passive_exclusions
+    ):
+        return True
+
     has_scope_reference = bool(
         _SCOPE_REFERENCE_PATTERN.search(
             key
@@ -126,6 +165,55 @@ def is_scope_exclusion_statement(
 
     if not has_scope_reference:
         return False
+
+
+    # --------------------------------------------------------
+    # Scope-qualified delivery without a capability.
+    #
+    #   "The first release is delivered without X."
+    #   "La premiere version est livree sans X."
+    #
+    # A plain operational "works without X" is deliberately
+    # not classified as an exclusion.
+    # --------------------------------------------------------
+
+    scoped_without_exclusions = (
+        r"\b(?:"
+        r"mvp|first version|initial version|"
+        r"first release|initial release|"
+        r"prototype|pilot"
+        r")\b"
+        r".{0,60}\b"
+        r"(?:"
+        r"is|will\s+be|"
+        r"is\s+delivered|will\s+be\s+delivered|"
+        r"ships?|launch(?:es|ed)?"
+        r")\b"
+        r".{0,30}\bwithout\b",
+
+        r"\b(?:"
+        r"mvp|premiere version|version initiale|"
+        r"prototype|pilote"
+        r")\b"
+        r".{0,60}\b"
+        r"(?:"
+        r"est|sera|"
+        r"est\s+livree|sera\s+livree|"
+        r"livree|lancee"
+        r")\b"
+        r".{0,30}\bsans\b",
+    )
+
+    if any(
+        re.search(
+            pattern,
+            key,
+            flags=re.IGNORECASE,
+        )
+        is not None
+        for pattern in scoped_without_exclusions
+    ):
+        return True
 
     # --------------------------------------------------------
     # Scope-linked French exclusions.

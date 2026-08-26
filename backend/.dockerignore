@@ -1,0 +1,30 @@
+﻿# ForgeAI backend Docker build exclusions
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Test / QA caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+
+# Runtime artifacts
+*.log
+
+# Git
+.git/
+.gitignore
