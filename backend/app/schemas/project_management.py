@@ -404,3 +404,537 @@ class ProjectManagementDecisionProjectionV1(BaseModel):
             for item in values
             if clean_text(item)
         )
+
+
+# =====================================================================
+# Sprint 4 ? Product Owner candidate backlog contracts
+# =====================================================================
+#
+# These models describe advisory Product Owner proposals only.
+#
+# They deliberately do NOT own:
+#   - canonical backlog IDs,
+#   - final MoSCoW priority,
+#   - Story Points,
+#   - sprint assignment,
+#   - lock state,
+#   - architecture or technology decisions.
+#
+# Canonicalization belongs to the deterministic BacklogPolicyEngine
+# and later planning policies.
+# =====================================================================
+
+
+def _candidate_required_text(
+    value,
+    *,
+    field_name: str,
+) -> str:
+    text = clean_text(
+        value
+    )
+
+    if not text:
+        raise ValueError(
+            f"{field_name} must not be empty"
+        )
+
+    return text
+
+
+def _candidate_optional_texts(
+    value,
+) -> list[str]:
+    if value is None:
+        return []
+
+    if isinstance(
+        value,
+        str,
+    ):
+        values = [
+            value
+        ]
+
+    elif isinstance(
+        value,
+        (
+            list,
+            tuple,
+        ),
+    ):
+        values = list(
+            value
+        )
+
+    else:
+        raise ValueError(
+            "value must be a string or list of strings"
+        )
+
+    return unique_texts(
+        clean_text(item)
+        for item in values
+        if clean_text(item)
+    )
+
+
+def _candidate_required_refs(
+    value,
+) -> list[str]:
+    refs = _candidate_optional_texts(
+        value
+    )
+
+    if not refs:
+        raise ValueError(
+            "provenance_refs must contain "
+            "at least one canonical reference"
+        )
+
+    return refs
+
+
+def _candidate_sha256_hex(
+    value,
+) -> str:
+    text = clean_text(
+        value
+    )
+
+    if (
+        len(text) != 64
+        or any(
+            character
+            not in
+            "0123456789abcdefABCDEF"
+            for character in text
+        )
+    ):
+        raise ValueError(
+            "value must be a 64-character "
+            "SHA-256 hexadecimal digest"
+        )
+
+    return text.lower()
+
+
+class CandidateAcceptanceCriterionV1(BaseModel):
+    """
+    Advisory acceptance criterion proposed by the Product Owner.
+
+    It intentionally has no canonical AC identifier.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        validate_assignment=True,
+    )
+
+    statement: str
+
+    candidate_testable: bool = True
+
+    source_ref: str
+
+    @field_validator(
+        "statement",
+        mode="before",
+    )
+    @classmethod
+    def normalize_statement(
+        cls,
+        value,
+    ):
+        return _candidate_required_text(
+            value,
+            field_name="statement",
+        )
+
+    @field_validator(
+        "source_ref",
+        mode="before",
+    )
+    @classmethod
+    def normalize_source_ref(
+        cls,
+        value,
+    ):
+        return _candidate_required_text(
+            value,
+            field_name="source_ref",
+        )
+
+
+class CandidateEpicV1(BaseModel):
+    """
+    Product Owner epic proposal.
+
+    candidate_key is local to the candidate graph and is not a
+    canonical EP-xxx identifier.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        validate_assignment=True,
+    )
+
+    candidate_key: str
+
+    title: str
+
+    description: str
+
+    business_goal: str
+
+    # Required intentionally.
+    # Missing provenance must fail validation.
+    provenance_refs: list[str]
+
+    @field_validator(
+        "candidate_key",
+        "title",
+        "description",
+        "business_goal",
+        mode="before",
+    )
+    @classmethod
+    def normalize_required_strings(
+        cls,
+        value,
+        info,
+    ):
+        return _candidate_required_text(
+            value,
+            field_name=info.field_name,
+        )
+
+    @field_validator(
+        "provenance_refs",
+        mode="before",
+    )
+    @classmethod
+    def normalize_provenance_refs(
+        cls,
+        value,
+    ):
+        return _candidate_required_refs(
+            value
+        )
+
+
+class CandidateFeatureV1(BaseModel):
+    """
+    Product Owner feature proposal.
+
+    epic_key references a candidate epic, never a canonical epic ID.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        validate_assignment=True,
+    )
+
+    candidate_key: str
+
+    epic_key: str
+
+    title: str
+
+    description: str
+
+    business_value: str
+
+    # Required intentionally.
+    provenance_refs: list[str]
+
+    @field_validator(
+        "candidate_key",
+        "epic_key",
+        "title",
+        "description",
+        "business_value",
+        mode="before",
+    )
+    @classmethod
+    def normalize_required_strings(
+        cls,
+        value,
+        info,
+    ):
+        return _candidate_required_text(
+            value,
+            field_name=info.field_name,
+        )
+
+    @field_validator(
+        "provenance_refs",
+        mode="before",
+    )
+    @classmethod
+    def normalize_provenance_refs(
+        cls,
+        value,
+    ):
+        return _candidate_required_refs(
+            value
+        )
+
+
+class CandidateUserStoryV1(BaseModel):
+    """
+    Advisory Product Owner story proposal.
+
+    Priority, complexity and dependencies are candidate suggestions.
+
+    Final priority, Story Points, dependency authority, canonical IDs
+    and sprint assignment belong to deterministic Sprint 4 policies.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        validate_assignment=True,
+    )
+
+    candidate_key: str
+
+    epic_key: str
+
+    feature_key: str
+
+    actor_ref: str
+
+    title: str
+
+    capability: str
+
+    benefit: str
+
+    story: str
+
+    business_value: str
+
+    # Required intentionally.
+    # A story without acceptance criteria is not a valid candidate.
+    acceptance_criteria: list[
+        CandidateAcceptanceCriterionV1
+    ]
+
+    candidate_priority: str
+
+    candidate_priority_rationale: str
+
+    candidate_complexity: str
+
+    candidate_complexity_rationale: str
+
+    candidate_dependencies: list[str] = Field(
+        default_factory=list,
+    )
+
+    # Required intentionally.
+    provenance_refs: list[str]
+
+    source_context_hash: str
+
+    warnings: list[str] = Field(
+        default_factory=list,
+    )
+
+    @field_validator(
+        "candidate_key",
+        "epic_key",
+        "feature_key",
+        "actor_ref",
+        "title",
+        "capability",
+        "benefit",
+        "story",
+        "business_value",
+        "candidate_priority_rationale",
+        "candidate_complexity_rationale",
+        mode="before",
+    )
+    @classmethod
+    def normalize_required_strings(
+        cls,
+        value,
+        info,
+    ):
+        return _candidate_required_text(
+            value,
+            field_name=info.field_name,
+        )
+
+    @field_validator(
+        "candidate_priority",
+        "candidate_complexity",
+        mode="before",
+    )
+    @classmethod
+    def normalize_candidate_labels(
+        cls,
+        value,
+        info,
+    ):
+        text = _candidate_required_text(
+            value,
+            field_name=info.field_name,
+        )
+
+        return text.casefold()
+
+    @field_validator(
+        "acceptance_criteria",
+        mode="before",
+    )
+    @classmethod
+    def require_acceptance_criteria(
+        cls,
+        value,
+    ):
+        if value is None:
+            raise ValueError(
+                "acceptance_criteria must contain "
+                "at least one criterion"
+            )
+
+        if isinstance(
+            value,
+            (
+                str,
+                bytes,
+                dict,
+            ),
+        ):
+            raise ValueError(
+                "acceptance_criteria must be a list"
+            )
+
+        values = list(
+            value
+        )
+
+        if not values:
+            raise ValueError(
+                "acceptance_criteria must contain "
+                "at least one criterion"
+            )
+
+        return values
+
+    @field_validator(
+        "candidate_dependencies",
+        "warnings",
+        mode="before",
+    )
+    @classmethod
+    def normalize_optional_lists(
+        cls,
+        value,
+    ):
+        return _candidate_optional_texts(
+            value
+        )
+
+    @field_validator(
+        "provenance_refs",
+        mode="before",
+    )
+    @classmethod
+    def normalize_provenance_refs(
+        cls,
+        value,
+    ):
+        return _candidate_required_refs(
+            value
+        )
+
+    @field_validator(
+        "source_context_hash",
+        mode="before",
+    )
+    @classmethod
+    def normalize_source_context_hash(
+        cls,
+        value,
+    ):
+        return _candidate_sha256_hex(
+            value
+        )
+
+
+class CandidateBacklogV1(BaseModel):
+    """
+    Strict structured-output contract for the AI Product Owner.
+
+    This object remains candidate-only until the deterministic
+    BacklogPolicyEngine validates and canonicalizes it.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        validate_assignment=True,
+    )
+
+    schema_version: Literal[
+        "candidate_backlog_v1"
+    ] = "candidate_backlog_v1"
+
+    source_context_hash: str
+
+    context_hash: str
+
+    epics: list[
+        CandidateEpicV1
+    ] = Field(
+        default_factory=list,
+    )
+
+    features: list[
+        CandidateFeatureV1
+    ] = Field(
+        default_factory=list,
+    )
+
+    stories: list[
+        CandidateUserStoryV1
+    ] = Field(
+        default_factory=list,
+    )
+
+    warnings: list[str] = Field(
+        default_factory=list,
+    )
+
+    @field_validator(
+        "source_context_hash",
+        "context_hash",
+        mode="before",
+    )
+    @classmethod
+    def normalize_hashes(
+        cls,
+        value,
+    ):
+        return _candidate_sha256_hex(
+            value
+        )
+
+    @field_validator(
+        "warnings",
+        mode="before",
+    )
+    @classmethod
+    def normalize_warnings(
+        cls,
+        value,
+    ):
+        return _candidate_optional_texts(
+            value
+        )
