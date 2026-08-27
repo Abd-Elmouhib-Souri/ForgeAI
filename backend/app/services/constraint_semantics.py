@@ -45,6 +45,76 @@ _SCOPE_INCLUSION = re.compile(
 )
 
 
+def is_negative_control_statement(
+    value: Any,
+) -> bool:
+    """
+    Detect an explicit strong prohibition/control requirement.
+
+    This authority is intentionally domain-independent.
+
+    It classifies grammatical prohibitions such as:
+
+        "The system must not ..."
+        "The service shall not ..."
+        "Le systeme ne doit pas ..."
+        "Le MVP ne devra jamais ..."
+
+    It does not classify positive obligations and deliberately protects
+    additive formulations such as "must not only" / "ne doit pas
+    seulement".
+
+    Scope exclusion remains a separate authority owned by
+    scope_polarity.py.
+    """
+    text = clean_text(
+        value
+    )
+
+    if not text:
+        return False
+
+    key = comparison_key(
+        text
+    )
+
+    if not key:
+        return False
+
+    english_negative_control = re.search(
+        r"\b(?:must|shall)\s+"
+        r"(?:"
+        r"not\b(?!\s+(?:only|necessarily)\b)"
+        r"|never\b"
+        r")",
+        key,
+        flags=re.IGNORECASE,
+    )
+
+    if english_negative_control is not None:
+        return True
+
+    french_negative_control = re.search(
+        r"\b(?:ne|n)\s+"
+        r"(?:"
+        r"doit|doivent|"
+        r"devra|devront|"
+        r"devrait|devraient"
+        r")\s+"
+        r"(?:"
+        r"pas\b(?!\s+(?:seulement|necessairement)\b)"
+        r"|jamais\b"
+        r")",
+        key,
+        flags=re.IGNORECASE,
+    )
+
+    return (
+        french_negative_control
+        is not None
+    )
+
+
 def is_constraint_statement(
     value: Any,
 ) -> bool:
@@ -72,6 +142,15 @@ def is_constraint_statement(
     # Explicitly labelled constraint sections remain authoritative.
     if _EXPLICIT_CONSTRAINT_LABEL.match(
         key
+    ):
+        return True
+
+    # A strong negative modal requirement is a control/constraint.
+    #
+    # It is deliberately not treated as a scope exclusion here.
+    # Scope exclusion remains owned by scope_polarity.py.
+    if is_negative_control_statement(
+        text
     ):
         return True
 

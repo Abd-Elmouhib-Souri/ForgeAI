@@ -21,6 +21,7 @@ from app.services.scope_polarity import is_scope_exclusion_statement
 from app.services.constraint_semantics import (
     has_explicit_scope_reference,
     is_constraint_statement,
+    is_negative_control_statement,
 )
 from app.services.project_intelligence_layer import project_intelligence_layer
 
@@ -703,6 +704,13 @@ class ProjectContextExtractor:
             analysis_data=analysis_data,
         )
 
+        scope_exclusions = self._extract_scope_exclusions(
+            sentences=sentences,
+            structured=structured,
+            project_context=project_context,
+            analysis_data=analysis_data,
+        )
+
         workflows = self._extract_workflows(
             sentences=sentences,
             actors=actors,
@@ -887,6 +895,7 @@ class ProjectContextExtractor:
             priority_workflows=workflows,
             transaction_unit=transaction_unit,
             mvp_scope=mvp_scope,
+            scope_exclusions=scope_exclusions,
             input_data=(
                 self._canonical_requirement_values(
                     structured,
@@ -4434,17 +4443,107 @@ class ProjectContextExtractor:
                 "responsable",
             )
 
+            explicit_human_responsibility = any(
+                re.search(
+                    pattern,
+                    key,
+                    flags=re.IGNORECASE,
+                )
+                is not None
+                for pattern in (
+                    # English:
+                    #
+                    # "A qualified professional must review ..."
+                    # "The operators shall validate ..."
+                    #
+                    # The role vocabulary is deliberately generic and
+                    # cross-domain. Domain-specific professions are not
+                    # hardcoded here.
+                    r"\b"
+                    r"(?:(?:a|an|the)\s+)?"
+                    r"(?:"
+                    r"(?:qualified|licensed|authorized|designated|"
+                    r"responsible)\s+"
+                    r"){0,2}"
+                    r"(?:"
+                    r"professionals?"
+                    r"|persons?"
+                    r"|people"
+                    r"|operators?"
+                    r"|reviewers?"
+                    r"|supervisors?"
+                    r"|managers?"
+                    r"|users?"
+                    r"|staff(?:\s+members?)?"
+                    r"|employees?"
+                    r"|experts?"
+                    r"|specialists?"
+                    r"|officers?"
+                    r"|administrators?"
+                    r"|decision\s+makers?"
+                    r")\b"
+                    r"(?:\s+[a-z0-9_-]+){0,4}\s+"
+                    r"(?:"
+                    r"must|shall|has\s+to|"
+                    r"is\s+required\s+to|"
+                    r"are\s+required\s+to"
+                    r")\s+"
+                    r"(?:"
+                    r"review|validate|verify|approve|"
+                    r"authorize|confirm|sign\s+off"
+                    r")\b",
+
+                    # French, evaluated on comparison_key():
+                    #
+                    # "Un professionnel qualifie doit valider ..."
+                    # "Les operateurs doivent verifier ..."
+                    r"\b"
+                    r"(?:(?:un|une|le|la|les)\s+)?"
+                    r"(?:"
+                    r"professionnel(?:le)?s?"
+                    r"|personnes?"
+                    r"|operat(?:eur|rice)s?"
+                    r"|reviseurs?"
+                    r"|reviseuses?"
+                    r"|superviseurs?"
+                    r"|superviseuses?"
+                    r"|responsables?"
+                    r"|gestionnaires?"
+                    r"|utilisat(?:eur|rice)s?"
+                    r"|employe(?:e)?s?"
+                    r"|experts?"
+                    r"|expertes?"
+                    r"|specialistes?"
+                    r"|agents?"
+                    r"|administrat(?:eur|rice)s?"
+                    r"|decideurs?"
+                    r"|decideuses?"
+                    r")\b"
+                    r"(?:\s+[a-z0-9_-]+){0,4}\s+"
+                    r"(?:"
+                    r"doit|doivent|devra|devront"
+                    r")\s+"
+                    r"(?:"
+                    r"revoir|examiner|valider|verifier|"
+                    r"approuver|autoriser|confirmer"
+                    r")\b",
+                )
+            )
+
             if (
-                any(
-                    marker in key
-                    for marker
-                    in human_markers
+                (
+                    any(
+                        marker in key
+                        for marker
+                        in human_markers
+                    )
+                    and any(
+                        marker in key
+                        for marker
+                        in human_action_markers
+                    )
                 )
-                and any(
-                    marker in key
-                    for marker
-                    in human_action_markers
-                )
+                or explicit_human_responsibility
             ):
                 output[
                     "human_oversight"
@@ -5309,6 +5408,90 @@ class ProjectContextExtractor:
 
         return structured_solution
 
+    def _extract_scope_exclusions(
+        self,
+        *,
+        sentences: Sequence[str],
+        structured: Dict[str, Any],
+        project_context: Dict[str, Any],
+        analysis_data: Dict[str, Any],
+    ) -> List[str]:
+        """
+        Collect explicit negative product/MVP scope without creating
+        a second polarity authority.
+
+        Classification remains owned exclusively by
+        is_scope_exclusion_statement().
+
+        Authority order:
+        1. already-canonical structured/project context;
+        2. persisted canonical analysis projections;
+        3. explicit user sentences classified as scope exclusions.
+
+        No archetype default and no inferred capability may create an
+        exclusion here.
+        """
+
+        values: List[str] = []
+
+        sources: List[Dict[str, Any]] = []
+
+        for candidate in (
+            structured,
+            project_context,
+            analysis_data,
+        ):
+            if isinstance(
+                candidate,
+                dict,
+            ):
+                sources.append(
+                    candidate
+                )
+
+        # Persisted canonical containers used by the existing pipeline.
+        for container_name in (
+            "project_context_packet",
+            "canonical_context",
+            "structured_project_context",
+        ):
+            candidate = analysis_data.get(
+                container_name
+            )
+
+            if isinstance(
+                candidate,
+                dict,
+            ):
+                sources.append(
+                    candidate
+                )
+
+        for source in sources:
+            for field in (
+                "scope_exclusions",
+                "excluded_scope",
+            ):
+                values.extend(
+                    self._listify(
+                        source.get(
+                            field
+                        )
+                    )
+                )
+
+        values.extend(
+            sentence
+            for sentence in sentences
+            if is_scope_exclusion_statement(
+                sentence
+            )
+        )
+
+        return unique_texts(
+            values
+        )
+
     def _extract_mvp_scope(
         self,
         *,
@@ -5374,8 +5557,13 @@ class ProjectContextExtractor:
         normalized_values: List[str] = []
 
         for raw_value in raw_values:
-            if is_scope_exclusion_statement(
-                raw_value
+            if (
+                is_scope_exclusion_statement(
+                    raw_value
+                )
+                or is_negative_control_statement(
+                    raw_value
+                )
             ):
                 continue
 
@@ -14426,6 +14614,14 @@ class ProjectContextExtractor:
                 )
                 is not None
             )
+
+            if (
+                not explicitly_labeled
+                and is_scope_exclusion_statement(
+                    text
+                )
+            ):
+                continue
 
             if not (
                 explicitly_labeled
