@@ -813,6 +813,14 @@ class ProjectContextPacketV3(BaseModel):
     #
     # These concepts are already readiness requirements and therefore
     # need a canonical structured home in ProjectContextPacketV3.
+    scope_exclusions: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Explicit product, MVP, workflow, actor, or capability "
+            "statements that the user declared out of scope."
+        ),
+    )
+
     input_data: List[str] = Field(
         default_factory=list
     )
@@ -928,6 +936,7 @@ class ProjectContextPacketV3(BaseModel):
         "partner_actor_names",
         "blocker_actor_names",
         "mvp_scope",
+        "scope_exclusions",
         "deployment_environment",
         "success_metrics",
         "business_model_hypotheses",
@@ -1426,6 +1435,9 @@ class ProjectContextPacketV3(BaseModel):
             ),
             "mvp_scope_items": list(
                 self.mvp_scope
+            ),
+            "scope_exclusions": list(
+                self.scope_exclusions
             ),
             "input_data": list(
                 self.input_data
