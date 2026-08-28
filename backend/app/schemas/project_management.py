@@ -938,3 +938,166 @@ class CandidateBacklogV1(BaseModel):
         return _candidate_optional_texts(
             value
         )
+
+# =====================================================================
+# Sprint 4 ? Canonical Product Backlog
+# =====================================================================
+#
+# BacklogPolicyEngine is the sole canonical backlog authority.
+#
+# Candidate Product Owner values remain advisory where explicitly
+# represented below. Later deterministic policies own final priority,
+# Story Points and dependency-graph decisions.
+# =====================================================================
+
+
+class CanonicalAcceptanceCriterionV1(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        validate_assignment=True,
+    )
+
+    acceptance_criterion_id: str
+    story_id: str
+    statement: str
+    is_testable: bool
+    source_ref: str
+
+
+class CanonicalEpicV1(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        validate_assignment=True,
+    )
+
+    epic_id: str
+    candidate_key: str
+
+    title: str
+    description: str
+    business_goal: str
+
+    provenance_refs: list[str]
+
+
+class CanonicalFeatureV1(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        validate_assignment=True,
+    )
+
+    feature_id: str
+    candidate_key: str
+
+    epic_id: str
+
+    title: str
+    description: str
+    business_value: str
+
+    provenance_refs: list[str]
+
+
+class CanonicalUserStoryV1(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        validate_assignment=True,
+    )
+
+    story_id: str
+    candidate_key: str
+
+    epic_id: str
+    feature_id: str
+
+    actor_ref: str
+
+    title: str
+    capability: str
+    benefit: str
+    story: str
+    business_value: str
+
+    acceptance_criteria: list[
+        CanonicalAcceptanceCriterionV1
+    ]
+
+    # Product Owner advisory signal.
+    candidate_priority: str
+    candidate_priority_rationale: str
+
+    # Final MoSCoW authority belongs to the later MoSCoWPolicy.
+    priority: str | None = None
+
+    # Product Owner advisory signal.
+    candidate_complexity: str
+    candidate_complexity_rationale: str
+
+    # Final Fibonacci authority belongs to StoryPointPolicy.
+    story_points: int | None = None
+
+    # Final dependency graph remains empty until
+    # DependencyGraphBuilder establishes canonical graph semantics.
+    dependencies: list[str] = Field(
+        default_factory=list,
+    )
+
+    # Candidate dependencies may be preserved only as canonical-ID
+    # hints. They are NOT yet hard/soft canonical dependencies.
+    dependency_hint_ids: list[str] = Field(
+        default_factory=list,
+    )
+
+    scope_status: Literal[
+        "in_scope"
+    ] = "in_scope"
+
+    locked: bool = False
+
+    provenance_refs: list[str]
+    source_context_hash: str
+
+    warnings: list[str] = Field(
+        default_factory=list,
+    )
+
+
+class CanonicalBacklogV1(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        validate_assignment=True,
+    )
+
+    schema_version: Literal[
+        "canonical_backlog_v1"
+    ] = "canonical_backlog_v1"
+
+    source_context_hash: str
+    context_hash: str
+
+    epics: list[
+        CanonicalEpicV1
+    ] = Field(
+        default_factory=list,
+    )
+
+    features: list[
+        CanonicalFeatureV1
+    ] = Field(
+        default_factory=list,
+    )
+
+    stories: list[
+        CanonicalUserStoryV1
+    ] = Field(
+        default_factory=list,
+    )
+
+    warnings: list[str] = Field(
+        default_factory=list,
+    )
