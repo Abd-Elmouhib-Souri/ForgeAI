@@ -12,6 +12,11 @@ from pydantic import (
 
 from app.schemas.project_management import (
     CandidateBacklogV1,
+    CanonicalAcceptanceCriterionV1,
+    CanonicalBacklogV1,
+    CanonicalEpicV1,
+    CanonicalFeatureV1,
+    CanonicalUserStoryV1,
     ProjectManagementContextV1,
 )
 from app.services.candidate_backlog_authority import (
@@ -57,6 +62,47 @@ class BacklogPolicyResultV1(BaseModel):
     warnings: list[str] = Field(
         default_factory=list,
     )
+
+
+class BacklogPolicyCanonicalizationError(ValueError):
+    """
+    Typed failure emitted when a candidate backlog cannot cross the
+    already-certified BacklogPolicyEngine gate.
+
+    This exception does not create fallback work items.
+    """
+
+    def __init__(
+        self,
+        *,
+        code: str,
+        errors: list[str] | None = None,
+    ) -> None:
+
+        self.code = str(
+            code
+            or ""
+        ).strip()
+
+        self.errors = list(
+            errors
+            or []
+        )
+
+        message = self.code
+
+        if self.errors:
+            message = (
+                f"{message}: "
+                +
+                "; ".join(
+                    self.errors
+                )
+            )
+
+        super().__init__(
+            message
+        )
 
 
 class BacklogPolicyEngine:
@@ -471,6 +517,324 @@ class BacklogPolicyEngine:
             error_codes=error_codes,
             errors=errors,
             warnings=warnings,
+        )
+
+
+    def canonicalize(
+        self,
+        context: ProjectManagementContextV1,
+        candidate: CandidateBacklogV1,
+    ) -> CanonicalBacklogV1:
+        """
+        Project one already-admissible CandidateBacklogV1 into the
+        sole canonical backlog representation.
+
+        Identity rule for this Sprint 4 stage:
+        - deterministic for the same admitted backlog and structural
+          order;
+        - backend-controlled;
+        - independent from candidate_key text as canonical identity.
+
+        Persistent identity across future backlog revisions belongs to
+        persistence/versioning/replanning and is not claimed here.
+        """
+
+        policy_result = self.evaluate(
+            context=context,
+            candidate=candidate,
+        )
+
+        if not policy_result.is_valid:
+
+            raise BacklogPolicyCanonicalizationError(
+                code="backlog_policy_rejected",
+                errors=list(
+                    policy_result.errors
+                ),
+            )
+
+        # --------------------------------------------------------
+        # Canonical deterministic identities.
+        #
+        # The input order is meaningful candidate backlog structure.
+        # candidate_key is used only to resolve relationships while
+        # projecting; it is never published as canonical identity.
+        # --------------------------------------------------------
+
+        epic_id_by_candidate_key = {
+            epic.candidate_key:
+                f"EP-{index:03d}"
+            for index, epic
+            in enumerate(
+                candidate.epics,
+                start=1,
+            )
+        }
+
+        feature_id_by_candidate_key = {
+            feature.candidate_key:
+                f"FE-{index:03d}"
+            for index, feature
+            in enumerate(
+                candidate.features,
+                start=1,
+            )
+        }
+
+        story_id_by_candidate_key = {
+            story.candidate_key:
+                f"US-{index:03d}"
+            for index, story
+            in enumerate(
+                candidate.stories,
+                start=1,
+            )
+        }
+
+        canonical_epics = [
+            CanonicalEpicV1(
+                epic_id=(
+                    epic_id_by_candidate_key[
+                        epic.candidate_key
+                    ]
+                ),
+
+                candidate_key=(
+                    epic.candidate_key
+                ),
+
+                title=(
+                    epic.title
+                ),
+
+                description=(
+                    epic.description
+                ),
+
+                business_goal=(
+                    epic.business_goal
+                ),
+
+                provenance_refs=list(
+                    epic.provenance_refs
+                ),
+            )
+            for epic
+            in candidate.epics
+        ]
+
+        canonical_features = [
+            CanonicalFeatureV1(
+                feature_id=(
+                    feature_id_by_candidate_key[
+                        feature.candidate_key
+                    ]
+                ),
+
+                candidate_key=(
+                    feature.candidate_key
+                ),
+
+                epic_id=(
+                    epic_id_by_candidate_key[
+                        feature.epic_key
+                    ]
+                ),
+
+                title=(
+                    feature.title
+                ),
+
+                description=(
+                    feature.description
+                ),
+
+                business_value=(
+                    feature.business_value
+                ),
+
+                provenance_refs=list(
+                    feature.provenance_refs
+                ),
+            )
+            for feature
+            in candidate.features
+        ]
+
+        acceptance_index = 1
+
+        canonical_stories: list[
+            CanonicalUserStoryV1
+        ] = []
+
+        for story in candidate.stories:
+
+            canonical_story_id = (
+                story_id_by_candidate_key[
+                    story.candidate_key
+                ]
+            )
+
+            canonical_acceptance: list[
+                CanonicalAcceptanceCriterionV1
+            ] = []
+
+            for criterion in (
+                story.acceptance_criteria
+            ):
+
+                canonical_acceptance.append(
+                    CanonicalAcceptanceCriterionV1(
+                        acceptance_criterion_id=(
+                            f"AC-{acceptance_index:03d}"
+                        ),
+
+                        story_id=(
+                            canonical_story_id
+                        ),
+
+                        statement=(
+                            criterion.statement
+                        ),
+
+                        is_testable=(
+                            criterion.candidate_testable
+                        ),
+
+                        source_ref=(
+                            criterion.source_ref
+                        ),
+                    )
+                )
+
+                acceptance_index += 1
+
+            dependency_hint_ids = [
+                story_id_by_candidate_key[
+                    dependency_key
+                ]
+                for dependency_key
+                in story.candidate_dependencies
+            ]
+
+            canonical_stories.append(
+                CanonicalUserStoryV1(
+                    story_id=(
+                        canonical_story_id
+                    ),
+
+                    candidate_key=(
+                        story.candidate_key
+                    ),
+
+                    epic_id=(
+                        epic_id_by_candidate_key[
+                            story.epic_key
+                        ]
+                    ),
+
+                    feature_id=(
+                        feature_id_by_candidate_key[
+                            story.feature_key
+                        ]
+                    ),
+
+                    actor_ref=(
+                        story.actor_ref
+                    ),
+
+                    title=(
+                        story.title
+                    ),
+
+                    capability=(
+                        story.capability
+                    ),
+
+                    benefit=(
+                        story.benefit
+                    ),
+
+                    story=(
+                        story.story
+                    ),
+
+                    business_value=(
+                        story.business_value
+                    ),
+
+                    acceptance_criteria=(
+                        canonical_acceptance
+                    ),
+
+                    candidate_priority=(
+                        story.candidate_priority
+                    ),
+
+                    candidate_priority_rationale=(
+                        story.candidate_priority_rationale
+                    ),
+
+                    priority=None,
+
+                    candidate_complexity=(
+                        story.candidate_complexity
+                    ),
+
+                    candidate_complexity_rationale=(
+                        story.candidate_complexity_rationale
+                    ),
+
+                    story_points=None,
+
+                    dependencies=[],
+
+                    dependency_hint_ids=(
+                        dependency_hint_ids
+                    ),
+
+                    scope_status="in_scope",
+
+                    locked=False,
+
+                    provenance_refs=list(
+                        story.provenance_refs
+                    ),
+
+                    source_context_hash=(
+                        story.source_context_hash
+                    ),
+
+                    warnings=list(
+                        story.warnings
+                    ),
+                )
+            )
+
+        return CanonicalBacklogV1(
+            source_context_hash=(
+                candidate.source_context_hash
+            ),
+
+            context_hash=(
+                candidate.context_hash
+            ),
+
+            epics=(
+                canonical_epics
+            ),
+
+            features=(
+                canonical_features
+            ),
+
+            stories=(
+                canonical_stories
+            ),
+
+            warnings=list(
+                candidate.warnings
+            ),
         )
 
     def _validate_unique_keys(
