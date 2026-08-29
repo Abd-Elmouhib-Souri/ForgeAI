@@ -684,6 +684,110 @@ class CandidateFeatureV1(BaseModel):
         )
 
 
+class CandidateComplexityFactorsV1(BaseModel):
+    """
+    Structured advisory complexity input proposed by the AI Product Owner.
+
+    These factors describe candidate complexity only.
+
+    They do NOT own:
+    - final Story Points,
+    - split decisions,
+    - final priority,
+    - sprint assignment,
+    - dependencies,
+    - architecture decisions.
+
+    Final Fibonacci authority belongs to StoryPointPolicy.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        validate_assignment=True,
+    )
+
+    business_logic: Literal[
+        "none",
+        "low",
+        "medium",
+        "high",
+        "unknown",
+    ]
+
+    integration_complexity: Literal[
+        "none",
+        "low",
+        "medium",
+        "high",
+        "unknown",
+    ]
+
+    data_complexity: Literal[
+        "none",
+        "low",
+        "medium",
+        "high",
+        "unknown",
+    ]
+
+    ui_complexity: Literal[
+        "none",
+        "low",
+        "medium",
+        "high",
+        "unknown",
+    ]
+
+    security: Literal[
+        "none",
+        "low",
+        "medium",
+        "high",
+        "unknown",
+    ]
+
+    external_dependency: Literal[
+        "none",
+        "low",
+        "medium",
+        "high",
+        "unknown",
+    ]
+
+    uncertainty: Literal[
+        "none",
+        "low",
+        "medium",
+        "high",
+        "unknown",
+    ]
+
+    testing_burden: Literal[
+        "none",
+        "low",
+        "medium",
+        "high",
+        "unknown",
+    ]
+
+    regulatory_risk: Literal[
+        "none",
+        "low",
+        "medium",
+        "high",
+        "unknown",
+    ]
+
+    hardware_dependency: Literal[
+        "none",
+        "low",
+        "medium",
+        "high",
+        "unknown",
+    ]
+
+
 class CandidateUserStoryV1(BaseModel):
     """
     Advisory Product Owner story proposal.
@@ -731,6 +835,10 @@ class CandidateUserStoryV1(BaseModel):
     candidate_complexity: str
 
     candidate_complexity_rationale: str
+
+    # Required structured advisory input for the future
+    # deterministic StoryPointPolicy.
+    candidate_complexity_factors: CandidateComplexityFactorsV1
 
     candidate_dependencies: list[str] = Field(
         default_factory=list,
@@ -1036,6 +1144,10 @@ class CanonicalUserStoryV1(BaseModel):
     # Product Owner advisory signal.
     candidate_complexity: str
     candidate_complexity_rationale: str
+
+    # Required structured advisory input for the future
+    # deterministic StoryPointPolicy.
+    candidate_complexity_factors: CandidateComplexityFactorsV1
 
     # Final Fibonacci authority belongs to StoryPointPolicy.
     story_points: int | None = None

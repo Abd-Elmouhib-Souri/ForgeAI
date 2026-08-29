@@ -319,6 +319,18 @@ def make_story(
             "Advisory Product Owner input."
         ),
 
+        candidate_complexity_factors={
+            'business_logic': 'unknown',
+            'integration_complexity': 'unknown',
+            'data_complexity': 'unknown',
+            'ui_complexity': 'unknown',
+            'security': 'unknown',
+            'external_dependency': 'unknown',
+            'uncertainty': 'unknown',
+            'testing_burden': 'unknown',
+            'regulatory_risk': 'unknown',
+            'hardware_dependency': 'unknown',
+        },
         candidate_dependencies=(
             dependencies
             if dependencies is not None
@@ -618,6 +630,7 @@ def test_canonical_story_shape_is_future_policy_ready() -> None:
         "priority",
         "candidate_complexity",
         "candidate_complexity_rationale",
+        "candidate_complexity_factors",
         "story_points",
         "dependencies",
         "dependency_hint_ids",

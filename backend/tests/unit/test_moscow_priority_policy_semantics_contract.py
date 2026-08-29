@@ -203,6 +203,18 @@ def make_story(
             "Advisory Product Owner estimate."
         ),
 
+        candidate_complexity_factors={
+            'business_logic': 'unknown',
+            'integration_complexity': 'unknown',
+            'data_complexity': 'unknown',
+            'ui_complexity': 'unknown',
+            'security': 'unknown',
+            'external_dependency': 'unknown',
+            'uncertainty': 'unknown',
+            'testing_burden': 'unknown',
+            'regulatory_risk': 'unknown',
+            'hardware_dependency': 'unknown',
+        },
         story_points=None,
 
         dependencies=[],
