@@ -1213,3 +1213,124 @@ class CanonicalBacklogV1(BaseModel):
     warnings: list[str] = Field(
         default_factory=list,
     )
+class PlanningSettingsV1(BaseModel):
+    """
+    Shared Sprint 4 planning configuration input.
+
+    This model carries configuration only.
+
+    It does not own:
+    - final sprint assignments;
+    - backlog priority;
+    - Story Points;
+    - dependency decisions;
+    - Velocity calculation;
+    - Burndown calculation;
+    - planner output;
+    - execution metrics.
+
+    Detailed value-policy validation belongs to the dedicated
+    PlanningSettings / SprintPlanningEngine authority layers.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        validate_assignment=True,
+    )
+
+    sprint_count: int
+
+    sprint_duration_days: int = 14
+
+    planned_velocity: float
+
+    team_size: int
+
+    capacity_adjustment: float
+
+    # ISO-compatible date representation.
+    # Detailed date semantics are intentionally deferred to the
+    # dedicated PlanningSettings validation layer.
+    start_date: str
+
+    # Configurable working-day identifiers.
+    # Detailed allowed-value semantics are intentionally deferred.
+    working_days: list[int]
+class ScrumMasterRecommendationV1(BaseModel):
+    """
+    One structured AI Scrum Master recommendation.
+
+    This object is advisory only.
+
+    It may identify:
+    - split opportunities;
+    - sequencing concerns;
+    - delivery risks;
+    - overload risks;
+    - parallelization opportunities;
+    - critical dependencies.
+
+    It does not own:
+    - final priority;
+    - Story Points;
+    - dependency mutations;
+    - sprint assignment;
+    - backlog capabilities;
+    - architecture;
+    - Velocity;
+    - Burndown.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        validate_assignment=True,
+    )
+
+    recommendation_type: Literal[
+        "split",
+        "sequencing",
+        "risk",
+        "overload",
+        "parallelization",
+        "critical_dependency",
+    ]
+
+    story_ids: list[str]
+
+    rationale: str
+
+
+class ScrumMasterAdviceV1(BaseModel):
+    """
+    Canonically-bound advisory output from the AI Scrum Master.
+
+    This envelope contains recommendations only.
+
+    SprintPlanningEngine remains the deterministic authority for
+    final sprint placement and planning decisions.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        str_strip_whitespace=True,
+        validate_assignment=True,
+    )
+
+    schema_version: Literal[
+        "scrum_master_advice_v1"
+    ] = "scrum_master_advice_v1"
+
+    source_context_hash: str
+
+    context_hash: str
+
+    recommendations: list[
+        ScrumMasterRecommendationV1
+    ] = Field(
+        default_factory=list,
+    )
+
+    warnings: list[str] = Field(
+        default_factory=list,
+    )
