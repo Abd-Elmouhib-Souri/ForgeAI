@@ -565,6 +565,18 @@ def make_candidate(
             "Advisory Product Owner input."
         ),
 
+        candidate_complexity_factors={
+            'business_logic': 'unknown',
+            'integration_complexity': 'unknown',
+            'data_complexity': 'unknown',
+            'ui_complexity': 'unknown',
+            'security': 'unknown',
+            'external_dependency': 'unknown',
+            'uncertainty': 'unknown',
+            'testing_burden': 'unknown',
+            'regulatory_risk': 'unknown',
+            'hardware_dependency': 'unknown',
+        },
         candidate_dependencies=[],
 
         provenance_refs=[
@@ -674,6 +686,18 @@ def make_candidate(
             "Advisory Product Owner input."
         ),
 
+        candidate_complexity_factors={
+            'business_logic': 'unknown',
+            'integration_complexity': 'unknown',
+            'data_complexity': 'unknown',
+            'ui_complexity': 'unknown',
+            'security': 'unknown',
+            'external_dependency': 'unknown',
+            'uncertainty': 'unknown',
+            'testing_burden': 'unknown',
+            'regulatory_risk': 'unknown',
+            'hardware_dependency': 'unknown',
+        },
         candidate_dependencies=[
             story_a,
         ],
@@ -1036,6 +1060,18 @@ def test_advisory_priority_and_complexity_do_not_control_canonical_ids() -> None
 
                 "candidate_complexity_rationale":
                     "Different advisory estimate.",
+            "candidate_complexity_factors": {
+                'business_logic': 'unknown',
+                'integration_complexity': 'unknown',
+                'data_complexity': 'unknown',
+                'ui_complexity': 'unknown',
+                'security': 'unknown',
+                'external_dependency': 'unknown',
+                'uncertainty': 'unknown',
+                'testing_burden': 'unknown',
+                'regulatory_risk': 'unknown',
+                'hardware_dependency': 'unknown',
+            },
             },
 
             deep=True,

@@ -785,6 +785,9 @@ class BacklogPolicyEngine:
                         story.candidate_complexity_rationale
                     ),
 
+                    candidate_complexity_factors=(
+                        story.candidate_complexity_factors
+                    ),
                     story_points=None,
 
                     dependencies=[],
