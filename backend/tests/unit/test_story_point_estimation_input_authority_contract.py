@@ -437,22 +437,38 @@ def test_extra_factor_is_rejected() -> None:
 
 
 # ============================================================
-# STORY POINT POLICY MUST STILL NOT EXIST
+# STORY POINT POLICY MAY EXIST ONLY AFTER INPUT AUTHORITY
 # ============================================================
 
 
-def test_story_point_policy_is_not_used_to_hide_missing_input() -> None:
-
-    skip_until_factor_model_exists()
+def test_story_point_policy_cannot_replace_structured_input_authority() -> None:
 
     spec = importlib.util.find_spec(
         "app.services.story_point_policy"
     )
 
-    assert spec is None, (
-        "StoryPointPolicy must not be implemented "
-        "before structured estimation input "
-        "has its own GREEN authority contract."
+    if spec is None:
+        return
+
+    assert factor_model_exists(), (
+        "StoryPointPolicy cannot exist without "
+        "CandidateComplexityFactorsV1."
+    )
+
+    assert (
+        FACTOR_FIELD
+        in candidate_story_model().model_fields
+    ), (
+        "StoryPointPolicy cannot replace structured "
+        "candidate estimation input."
+    )
+
+    assert (
+        FACTOR_FIELD
+        in canonical_story_model().model_fields
+    ), (
+        "StoryPointPolicy must consume preserved "
+        "canonical structured estimation input."
     )
 
 
