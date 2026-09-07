@@ -1,3 +1,4 @@
+from app.security_policy import reveal_totp_secret, set_refresh_cookie
 # ============================================================
 # backend/app/routers/admin.py
 # ============================================================
@@ -124,10 +125,6 @@ def queue_verification_email(
         verification_link,
     )
 
-    print("\n" + "=" * 80, flush=True)
-    print(f"ADMIN_EMAIL_VERIFICATION_SENT_TO={email}", flush=True)
-    print(verification_link, flush=True)
-    print("=" * 80 + "\n", flush=True)
 
 
 # ============================================================
@@ -251,7 +248,7 @@ async def admin_login(
                 "requires_2fa": True,
             }
 
-        totp = pyotp.TOTP(user.two_factor_secret)
+        totp = pyotp.TOTP(reveal_totp_secret(user.two_factor_secret))
 
         if not totp.verify(user_in.two_factor_code, valid_window=1):
             raise HTTPException(
@@ -262,16 +259,9 @@ async def admin_login(
     access_token = create_access_token(data={"sub": user.email})
     refresh_token = create_refresh_token(data={"sub": user.email})
 
-    refresh_max_age = settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600
-
-    response.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        httponly=True,
-        max_age=refresh_max_age,
-        expires=refresh_max_age,
-        samesite="lax",
-        secure=False,
+    set_refresh_cookie(
+        response,
+        refresh_token,
     )
 
     return {

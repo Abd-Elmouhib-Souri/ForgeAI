@@ -71,7 +71,7 @@ Secteur :
 {state.get("industry") or "Non spécifié"}
 
 Région cible :
-{state.get("region") or "Tunisie"}
+{state.get("region") or "Non spécifiée"}
 
 Contexte dynamique verrouillé :
 {project_context.get("domain_instruction", "")}

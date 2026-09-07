@@ -56,7 +56,7 @@ class JudgeAgent:
             title=str(state.get("title") or ""),
             description=str(state.get("description") or ""),
             industry=str(state.get("industry") or ""),
-            market_region=str(state.get("region") or "Tunisie"),
+            market_region=str(state.get("region") or ""),
             output_language=str(state.get("output_language") or "fr"),
             analysis_data=state.get("analysis_data") or {},
         )
@@ -80,7 +80,7 @@ class JudgeAgent:
         title = str(project_context.get("title") or state.get("title") or "Projet")
         description = str(project_context.get("description") or state.get("description") or "")
         industry = str(project_context.get("industry") or state.get("industry") or "")
-        region = str(project_context.get("market_region") or state.get("region") or "Tunisie")
+        region = str(project_context.get("market_region") or state.get("region") or "")
 
         problem = self._first_non_empty(
             analysis_data.get("problem"),

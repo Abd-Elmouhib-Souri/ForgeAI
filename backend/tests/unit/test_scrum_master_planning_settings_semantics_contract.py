@@ -41,8 +41,8 @@ FORBIDDEN_OUTPUT_AUTHORITY_FIELDS = {
 
 # The SprintPlanningEngine owns this deterministic constraint.
 # PlanningSettings carries the user/configuration value.
-SPRINT_COUNT_MIN = 4
-SPRINT_COUNT_MAX = 8
+SPRINT_COUNT_MIN = 1
+SPRINT_COUNT_MAX = None
 
 
 # The official plan allows 14 days as a possible default,
@@ -87,8 +87,8 @@ def test_00_planning_settings_semantics_are_input_only():
         FORBIDDEN_OUTPUT_AUTHORITY_FIELDS
     ) == set()
 
-    assert SPRINT_COUNT_MIN == 4
-    assert SPRINT_COUNT_MAX == 8
+    assert SPRINT_COUNT_MIN == 1
+    assert SPRINT_COUNT_MAX is None
 
     assert (
         ALLOWED_SPRINT_DURATION_DEFAULT

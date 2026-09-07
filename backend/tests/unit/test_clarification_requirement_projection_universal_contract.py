@@ -48,8 +48,11 @@ EXPECTED_REQUIREMENTS = {
 }
 
 
+ROOT = Path(__file__).resolve().parents[2]
+
+
 PROJECTOR_PATH = (
-    Path("/app")
+    ROOT
     / "app/services/"
     "clarification_answer_projector.py"
 )

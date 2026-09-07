@@ -315,3 +315,69 @@ def test_project_intelligence_never_promotes_scope_exclusion(
     assert not structured.get(
         "mvp_scope"
     )
+
+
+def test_scope_section_heading_supports_accented_and_ascii_perimetre(
+) -> None:
+    """
+    Universal linguistic invariant:
+
+    French scope-section polarity must not depend on whether the user
+    writes the canonical accented spelling "périmètre" or its common
+    ASCII form "perimetre".
+
+    Both forms must create the same positive/negative section boundary.
+    """
+    from app.services.scope_polarity import (
+        partition_scope_sections,
+    )
+
+    cases = (
+        "Hors du périmètre :",
+        "Hors du perimetre :",
+    )
+
+    for heading in cases:
+        positive, excluded = (
+            partition_scope_sections(
+                (
+                    "MVP: capability alpha. "
+                    f"{heading} capability beta."
+                )
+            )
+        )
+
+        positive_key = (
+            positive.casefold()
+        )
+
+        excluded_key = (
+            excluded.casefold()
+        )
+
+        assert (
+            "capability alpha"
+            in positive_key
+        ), (
+            heading,
+            positive,
+            excluded,
+        )
+
+        assert (
+            "capability beta"
+            not in positive_key
+        ), (
+            heading,
+            positive,
+            excluded,
+        )
+
+        assert (
+            "capability beta"
+            in excluded_key
+        ), (
+            heading,
+            positive,
+            excluded,
+        )

@@ -1,36 +1,100 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ForgeAI Frontend
 
-## Getting Started
+ForgeAI's frontend is the web interface for project analysis, clarification, reporting and the Sprint 4 Product Manager AI workflow.
 
-First, run the development server:
+## Runtime
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+The certified Sprint 4 frontend runtime uses Next.js 16.3.1.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Install dependencies:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+    npm ci
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Run the development server:
 
-## Learn More
+    npm run dev
 
-To learn more about Next.js, take a look at the following resources:
+## Project workflow
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+The project interface exposes the canonical analysis journey, including:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- project creation and editing;
+- context validation;
+- direct clarification answers;
+- canonical context revalidation;
+- analysis launch when `ready_for_agents` is satisfied;
+- report and debate-room views;
+- Product Manager AI planning.
 
-## Deploy on Vercel
+The Product Manager section consumes backend project-management authority rather than recreating planning decisions in the UI.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Sprint 4 functionality includes backlog presentation, priorities, Story Points, dependencies, sprint assignments, settings, story locks, deterministic replan, velocity, burndown and project-management metrics.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Clarification authority
+
+When a project needs clarification, the frontend allows the user to answer each clarification item directly.
+
+The flow is:
+
+    needs_clarification
+    -> answer clarification items
+    -> persist canonical answers
+    -> consume backend revalidation
+    -> ready_for_agents
+
+Saving clarification answers does not implicitly launch agents.
+
+## Authentication and security
+
+The browser does not consume bearer access tokens from OAuth URL parameters.
+
+OAuth completion uses the refresh-token cookie and calls:
+
+    POST /auth/refresh
+
+Refresh-token lifecycle behavior is controlled by the backend security policy.
+
+## Certification commands
+
+Run frontend Node contracts:
+
+    node --test tests/*.test.mjs
+
+Run the standalone clarification authority contract:
+
+    node tests/clarification-authority.contract.mjs
+
+Run the UTF-8 contract:
+
+    node --test tests/utf8-display.contract.test.mjs
+
+Run TypeScript validation:
+
+    npx tsc --noEmit
+
+Run ESLint:
+
+    npm run lint
+
+Run the production build:
+
+    npm run build
+
+Sprint 4 certification produced:
+
+- frontend Node contracts: 14 passed;
+- UTF-8 production-source contract: GREEN;
+- TypeScript: GREEN;
+- ESLint: 0 errors, 13 pre-existing warnings;
+- Next.js production build: GREEN, 21/21 routes generated;
+- frontend Security P1 contract: GREEN.
+
+## Project documentation
+
+Project-level setup, architecture and operational status:
+
+- `../README.md`
+
+Sprint 4 certification and handoff:
+
+- `../docs/SPRINT4_CERTIFICATION.md`

@@ -163,6 +163,11 @@ class LLMProvider:
                     google_api_key=config.api_key,
                     temperature=0.2,
                     timeout=timeout,
+                    max_tokens=1600,
+                    # Both Sprint 4 agents have a strict JSON contract.  Ask
+                    # Gemini to enforce it at the provider boundary rather
+                    # than spending a second free request repairing prose.
+                    response_mime_type="application/json",
                     max_retries=0,
                 )
             elif config.provider == "groq":
@@ -171,6 +176,12 @@ class LLMProvider:
                     groq_api_key=config.api_key,
                     temperature=0.2,
                     timeout=timeout,
+                    max_tokens=1600,
+                    # Groq's JSON object mode is supported by the selected
+                    # free models and avoids Markdown/prose wrappers.
+                    model_kwargs={
+                        "response_format": {"type": "json_object"},
+                    },
                     max_retries=0,
                 )
             else:
@@ -209,6 +220,17 @@ class LLMProvider:
         health.open_until = 0.0
 
     def _record_failure(self, config: LLMModelConfig, kind: str) -> None:
+        # "unknown" means ForgeAI has not established that the model or
+        # provider itself is unhealthy.  The failure may be scoped only to
+        # the current request, prompt, structured-output mode or task.
+        #
+        # Never promote an unscoped failure into shared model-global health.
+        # The current invocation still fails normally and may continue
+        # through the fallback chain; only proven provider/model-scoped
+        # failures are eligible to poison the shared circuit.
+        if kind == "unknown":
+            return
+
         health = self._shared_health.setdefault(
             self._model_key(config), ProviderHealth()
         )
@@ -265,10 +287,11 @@ class LLMProvider:
                 kind = self._error_kind(exc)
                 self._record_failure(config, kind)
                 logger.warning(
-                    "[LLMProvider] failed model=%s task_type=%s kind=%s error=%s",
+                    "[LLMProvider] failed model=%s task_type=%s kind=%s error_type=%s error=%s",
                     key,
                     task_type,
                     kind,
+                    type(exc).__name__,
                     str(exc)[:1000],
                 )
                 # Always continue to the next configured provider. A configuration

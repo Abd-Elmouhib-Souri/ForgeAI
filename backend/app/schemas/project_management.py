@@ -4,6 +4,7 @@ from typing import (
     Dict,
     List,
     Literal,
+    Optional,
 )
 
 from pydantic import (
@@ -1238,7 +1239,17 @@ class PlanningSettingsV1(BaseModel):
         validate_assignment=True,
     )
 
+    # Release sizing ownership.
+    # auto   -> ForgeAI recalculates the required Sprint count.
+    # manual -> the explicit user count is preserved.
+    sprint_count_mode: Literal["auto", "manual"] = "auto"
+
     sprint_count: int
+
+    # Release cadence ownership.
+    # auto   -> SprintCadenceAdvisor resolves one release-level cadence.
+    # manual -> the explicit user duration is preserved.
+    sprint_duration_mode: Literal["auto", "manual"] = "auto"
 
     sprint_duration_days: int = 14
 
@@ -1334,3 +1345,223 @@ class ScrumMasterAdviceV1(BaseModel):
     warnings: list[str] = Field(
         default_factory=list,
     )
+
+
+# =====================================================================
+# Sprint 4 - Durable plan, metrics and public API contracts
+# =====================================================================
+
+
+class SprintMetricV1(BaseModel):
+    """Read-only planned metrics for one Sprint.
+
+    ``actual_velocity`` deliberately remains unknown until delivery data is
+    explicitly recorded by a future execution authority.
+    """
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    sprint_number: int
+    planned_story_points: int = 0
+    planned_story_count: int = 0
+    actual_velocity: Optional[float] = None
+
+
+class ProjectManagementMetricsV1(BaseModel):
+    """Deterministic planning metrics; no execution facts are inferred."""
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    schema_version: Literal["project_management_metrics_v1"] = (
+        "project_management_metrics_v1"
+    )
+
+    planned_velocity: float
+    projected_velocity: float
+    actual_velocity: Optional[float] = None
+    total_story_points: int = 0
+    assigned_story_points: int = 0
+    overflow_story_points: int = 0
+    sprint_metrics: list[SprintMetricV1] = Field(default_factory=list)
+    ideal_burndown: list[float] = Field(default_factory=list)
+    planned_burndown: list[float] = Field(default_factory=list)
+    actual_burndown: Optional[list[float]] = None
+
+
+class ReleasePlanningMetadataV1(BaseModel):
+    """
+    Durable projection of release-level planning decisions.
+
+    This object does not own Story Point accounting.
+    ProjectManagementMetricsV1 remains authoritative for total,
+    assigned and overflow Story Points.
+
+    Recommendation fields are optional because manual modes and
+    deterministic replans must never fabricate recommendation
+    provenance that was not actually produced by its authority.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+        validate_assignment=True,
+    )
+
+    schema_version: Literal[
+        "release_planning_metadata_v1"
+    ] = "release_planning_metadata_v1"
+
+    sprint_count_mode: Literal[
+        "auto",
+        "manual",
+    ]
+
+    effective_sprint_count: int = Field(
+        ge=1,
+    )
+
+    recommended_sprint_count: Optional[
+        int
+    ] = Field(
+        default=None,
+        ge=1,
+    )
+
+    sprint_count_reason: Optional[
+        str
+    ] = None
+
+    evaluated_sprint_counts: list[
+        int
+    ] = Field(
+        default_factory=list
+    )
+
+    sprint_duration_mode: Literal[
+        "auto",
+        "manual",
+    ]
+
+    effective_sprint_duration_days: int = Field(
+        ge=1,
+        le=31,
+    )
+
+    recommended_sprint_duration_days: Optional[
+        int
+    ] = Field(
+        default=None,
+        ge=1,
+        le=31,
+    )
+
+    cadence_band: Optional[
+        Literal[
+            "short",
+            "standard",
+            "extended",
+            "long",
+        ]
+    ] = None
+
+    cadence_confidence: Optional[
+        Literal[
+            "low",
+            "medium",
+            "high",
+        ]
+    ] = None
+
+    cadence_reason_codes: list[
+        str
+    ] = Field(
+        default_factory=list
+    )
+
+    cadence_evaluated_story_count: Optional[
+        int
+    ] = Field(
+        default=None,
+        ge=0,
+    )
+
+    effective_sprint_capacity_story_points: float = Field(
+        ge=0,
+    )
+
+    release_capacity_story_points: float = Field(
+        ge=0,
+    )
+
+    capacity_utilization_ratio: float = Field(
+        default=0.0,
+        ge=0,
+    )
+
+    release_duration_days: int = Field(
+        ge=1,
+    )
+
+
+class ProjectManagementPlanV1(BaseModel):
+    """Versioned aggregate of certified Sprint 4 outputs.
+
+    This envelope assembles outputs from their existing authorities.  It
+    never recalculates priority, Story Points, dependencies or assignments.
+    """
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    schema_version: Literal["project_management_plan_v1"] = (
+        "project_management_plan_v1"
+    )
+    generation_id: str
+    revision: int = 1
+    context_hash: str
+    source_context_hash: str
+    planner_version: str = "sprint4-v1"
+    generated_at: str
+    settings: PlanningSettingsV1
+    release_planning: Optional[ReleasePlanningMetadataV1] = None
+    epics: list[CanonicalEpicV1] = Field(default_factory=list)
+    features: list[CanonicalFeatureV1] = Field(default_factory=list)
+    stories: list[CanonicalUserStoryV1] = Field(default_factory=list)
+    dependencies: list[dict] = Field(default_factory=list)
+    sprints: list[dict] = Field(default_factory=list)
+    overflow_story_ids: list[str] = Field(default_factory=list)
+    metrics: ProjectManagementMetricsV1
+    assumptions: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    validation_status: Literal["valid"] = "valid"
+    scrum_master_advice: list[ScrumMasterRecommendationV1] = Field(
+        default_factory=list
+    )
+
+
+class PlanningSettingsUpdateV1(BaseModel):
+    """Partial, user-owned planning configuration update."""
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    sprint_count_mode: Optional[
+        Literal["auto", "manual"]
+    ] = None
+
+    sprint_count: Optional[int] = None
+    sprint_duration_mode: Optional[
+        Literal["auto", "manual"]
+    ] = None
+
+    sprint_duration_days: Optional[int] = None
+    planned_velocity: Optional[float] = None
+    team_size: Optional[int] = None
+    capacity_adjustment: Optional[float] = None
+    start_date: Optional[str] = None
+    working_days: Optional[list[int]] = None
+
+
+class BacklogLocksUpdateV1(BaseModel):
+    """The UI may change only explicit lock state, never policy outputs."""
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    locked_story_ids: list[str] = Field(default_factory=list)

@@ -1,3 +1,4 @@
+from app.security_policy import delete_refresh_cookie, protect_totp_secret, reveal_totp_secret, set_refresh_cookie
 import datetime
 import hashlib
 import secrets
@@ -81,10 +82,6 @@ def queue_verification_email(
         verification_link,
     )
 
-    print("\n" + "=" * 80, flush=True)
-    print(f"EMAIL_VERIFICATION_SENT_TO={email}", flush=True)
-    print(verification_link, flush=True)
-    print("=" * 80 + "\n", flush=True)
 
 
 def create_password_reset_token() -> str:
@@ -120,10 +117,6 @@ def queue_password_reset_email(
         reset_link,
     )
 
-    print("\n" + "=" * 80, flush=True)
-    print(f"PASSWORD_RESET_SENT_TO={email}", flush=True)
-    print(reset_link, flush=True)
-    print("=" * 80 + "\n", flush=True)
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
@@ -300,7 +293,7 @@ async def login(
                 "requires_2fa": True,
             }
 
-        totp = pyotp.TOTP(user.two_factor_secret)
+        totp = pyotp.TOTP(reveal_totp_secret(user.two_factor_secret))
 
         if not totp.verify(user_in.two_factor_code, valid_window=1):
             raise HTTPException(
@@ -311,16 +304,9 @@ async def login(
     access_token = create_access_token(data={"sub": user.email})
     refresh_token = create_refresh_token(data={"sub": user.email})
 
-    refresh_max_age = settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600
-
-    response.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        httponly=True,
-        max_age=refresh_max_age,
-        expires=refresh_max_age,
-        samesite="lax",
-        secure=False,
+    set_refresh_cookie(
+        response,
+        refresh_token,
     )
 
     return {
@@ -348,7 +334,7 @@ async def setup_two_factor(
         issuer_name=settings.APP_NAME,
     )
 
-    current_user.two_factor_secret = secret
+    current_user.two_factor_secret = protect_totp_secret(secret)
 
     await db.commit()
     await db.refresh(current_user)
@@ -377,7 +363,7 @@ async def enable_two_factor(
             detail="Veuillez initialiser la procédure via /2fa/setup au préalable.",
         )
 
-    totp = pyotp.TOTP(current_user.two_factor_secret)
+    totp = pyotp.TOTP(reveal_totp_secret(current_user.two_factor_secret))
 
     if not totp.verify(payload.code, valid_window=1):
         raise HTTPException(
@@ -539,20 +525,13 @@ async def google_callback(
     access_token = create_access_token(data={"sub": user.email})
     refresh_token = create_refresh_token(data={"sub": user.email})
 
-    refresh_max_age = settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 3600
-
     frontend_redirect = RedirectResponse(
-        url=f"{settings.FRONTEND_URL}/oauth/callback?access_token={access_token}"
+        url=f"{settings.FRONTEND_URL}/oauth/callback"
     )
 
-    frontend_redirect.set_cookie(
-        key="refresh_token",
-        value=refresh_token,
-        httponly=True,
-        max_age=refresh_max_age,
-        expires=refresh_max_age,
-        samesite="lax",
-        secure=False,
+    set_refresh_cookie(
+        frontend_redirect,
+        refresh_token,
     )
 
     return frontend_redirect
@@ -632,12 +611,8 @@ async def resend_verification(
 
 @router.post("/logout")
 async def logout(response: Response):
-    response.delete_cookie(
-        key="refresh_token",
-        path="/",
-        httponly=True,
-        samesite="lax",
-        secure=False,
+    delete_refresh_cookie(
+        response,
     )
 
     return {"message": "Déconnexion réussie."}

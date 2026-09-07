@@ -330,6 +330,7 @@ export function getPublicDisplaySources(sources: SourceItem[]): SourceItem[] {
     const url = String(source.url || "").trim();
     const type = String(source.source_type || "").trim();
     const snippet = String(source.snippet || "").trim();
+    const normalizedSnippet = normalizeSourceText(snippet);
 
     if (!title && !url) return false;
     if (type === "irrelevant") return false;
@@ -339,7 +340,7 @@ export function getPublicDisplaySources(sources: SourceItem[]): SourceItem[] {
 
     if (
       url.includes("youtube.com") &&
-      (snippet.includes("Ðž ÑÐµÑ€Ð²Ð¸ÑÐµ") || snippet.length < 40)
+      (isBadCollapsedSourceText(normalizedSnippet) || snippet.length < 40)
     ) {
       return false;
     }

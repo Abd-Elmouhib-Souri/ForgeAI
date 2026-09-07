@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from pydantic import ValidationError
@@ -18,6 +19,9 @@ from app.schemas.project_management import (
 from app.services.dependency_graph_builder import (
     DependencyGraphV1,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class ScrumMasterGenerationError(RuntimeError):
@@ -194,6 +198,23 @@ class AIScrumMasterAgent:
                 ":",
             ),
         )
+        output_shape_json = json.dumps(
+            {
+                "schema_version": "scrum_master_advice_v1",
+                "source_context_hash": backlog.source_context_hash,
+                "context_hash": backlog.context_hash,
+                "recommendations": [
+                    {
+                        "recommendation_type": "split|sequencing|risk|overload|parallelization|critical_dependency",
+                        "story_ids": ["canonical story ID from canonical_backlog"],
+                        "rationale": "advisory rationale only",
+                    }
+                ],
+                "warnings": [],
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
 
         return (
             "You are the AI Scrum Master advisory agent for ForgeAI.\n"
@@ -218,6 +239,7 @@ class AIScrumMasterAgent:
             "- overload\n"
             "- parallelization\n"
             "- critical_dependency\n"
+            "- Return at most five concise recommendations.\n"
             "\n"
             "CANONICAL BINDING\n"
             f"- source_context_hash: {backlog.source_context_hash}\n"
@@ -237,8 +259,14 @@ class AIScrumMasterAgent:
             "OUTPUT FORMAT\n"
             "- Return one JSON object compatible with ScrumMasterAdviceV1.\n"
             "- recommendations must contain only structured advisory items.\n"
+            "- The top-level keys must be exactly schema_version, source_context_hash, context_hash, recommendations, warnings.\n"
+            "- Each recommendation must have exactly recommendation_type, story_ids and rationale.\n"
+            "- An empty recommendations array is valid when no strictly supported advice exists.\n"
             "- Return JSON only.\n"
             "- Do not wrap the response in Markdown fences.\n"
+            "\n"
+            "EXACT OUTPUT SHAPE (replace values only; preserve all keys)\n"
+            f"{output_shape_json}\n"
             "\n"
             "CANONICAL SCRUM MASTER INPUT\n"
             f"{payload_json}\n"
@@ -391,5 +419,16 @@ class AIScrumMasterAgent:
                 ),
                 details=authority_details,
             )
+
+        advice = advice.model_copy(
+            update={
+                "recommendations": [
+                    item
+                    for item in advice.recommendations
+                    if "candidate_priority"
+                    not in item.rationale.casefold()
+                ]
+            }
+        )
 
         return advice

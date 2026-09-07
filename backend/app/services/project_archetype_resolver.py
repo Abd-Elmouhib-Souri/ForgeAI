@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Sequence
 
 from app.services.domain_integrity_guard import normalize_output_language
+from app.services.scope_polarity import partition_scope_sections
 
 
 @dataclass(frozen=True)
@@ -127,6 +128,15 @@ class ProjectArchetypeResolver:
                 "transport urbain", "urban mobility", "pickup", "prise en charge",
                 "destination", "trajet", "ride booking", "taxi booking",
             },
+            "identity_signals": {
+                'course taxi',
+                'e hailing',
+                'e-hailing',
+                'ride hailing',
+                'ride-hailing',
+                'taxi',
+                'taxi booking',
+            },
             "actors_en": ["Passenger seeking a ride", "Taxi driver", "Taxi fleet or platform operator"],
             "actors_fr": ["Passager cherchant un taxi", "Chauffeur de taxi", "Exploitant de flotte ou opérateur de plateforme"],
             "workflows_en": [
@@ -181,7 +191,7 @@ class ProjectArchetypeResolver:
             "risks_fr": ["offres faibles ou dupliquées", "offre insuffisante d’entreprises", "confiance des étudiants et fraude", "saisonnalité", "résultats de placement faibles"],
         },
         "workforce": {
-            "signals": {"workforce", "shift", "schedule", "attendance", "leave request", "planning", "présence", "presence", "congé", "conge", "employee scheduling"},
+            "signals": {'workforce', 'shift', 'attendance', 'leave request', 'pr\xe9sence', 'presence', 'cong\xe9', 'conge', 'employee scheduling', 'employee schedule', 'planning du personnel'},
             "actors_en": ["Shift supervisor or HR assistant", "SME owner or HR manager", "Employee or team lead"],
             "actors_fr": ["Superviseur de planning ou assistant RH", "Dirigeant de PME ou responsable RH", "Employé ou chef d’équipe"],
             "workflows_en": ["create weekly shift schedules", "record attendance", "manage leave requests", "export monthly payroll preparation data"],
@@ -263,8 +273,20 @@ class ProjectArchetypeResolver:
         workflows: Sequence[str] | None = None,
     ) -> Dict[str, Any]:
         language = normalize_output_language(output_language)
+
+        # Canonical scope-polarity authority owns the semantic boundary.
+        #
+        # Explicitly excluded MVP capabilities may remain useful as
+        # negative project truth, but they must never become positive
+        # archetype, vertical or search identity signals.
+        positive_description, _ = (
+            partition_scope_sections(
+                description
+            )
+        )
+
         text = self._normalize(" ".join([
-            title, description, industry, problem, solution, business_model,
+            title, positive_description, industry, problem, solution, business_model,
             " ".join(target_users or []), " ".join(workflows or []),
         ]))
 
@@ -406,7 +428,8 @@ class ProjectArchetypeResolver:
         best_name = ""
         best_score = 0
         for name, profile in self.VERTICALS.items():
-            score = sum(1 for term in profile.get("signals", set()) if self._term_in_text(term, text))
+            identity_signals = profile.get("identity_signals", profile.get("signals", set()))
+            score = sum(1 for term in identity_signals if self._term_in_text(term, text))
             if score > best_score:
                 best_name = name
                 best_score = score
@@ -472,32 +495,84 @@ class ProjectArchetypeResolver:
                 "b2b_workflow_saas"
             ] += 4
 
-        if scores["hardware_iot"] >= 2:
-            selected = "hardware_iot"
-        elif scores["two_sided_marketplace"] >= 3:
-            selected = "two_sided_marketplace"
-        elif scores["ecommerce"] >= 3:
-            selected = "ecommerce"
-        elif (
-            scores["regulated_service"] >= 3
-            and scores[
-                "consumer_transactional_app"
-            ] >= 1
-        ):
-            selected = "regulated_service"
-        elif scores["b2b_workflow_saas"] >= 3:
-            selected = "b2b_workflow_saas"
-        elif (
-            scores[
-                "consumer_transactional_app"
-            ] >= 2
-        ):
-            selected = "consumer_transactional_app"
-        elif scores["analytics_ai_tool"] >= 2:
-            selected = "analytics_ai_tool"
-        elif scores["content_community"] >= 2:
-            selected = "content_community"
+        # Historical eligibility thresholds remain the admission policy.
+        #
+        # Once admitted, however, the resolver's own published scores are
+        # the primary authority. The previous priority ladder could select
+        # a low-score archetype merely because it crossed its threshold
+        # first.
+        #
+        # Historical order is retained only as a deterministic tie policy.
+        selection_order = (
+            "hardware_iot",
+            "two_sided_marketplace",
+            "ecommerce",
+            "regulated_service",
+            "b2b_workflow_saas",
+            "consumer_transactional_app",
+            "analytics_ai_tool",
+            "content_community",
+        )
+
+        eligible = {
+            "hardware_iot":
+                scores["hardware_iot"] >= 2,
+
+            "two_sided_marketplace":
+                scores["two_sided_marketplace"] >= 3,
+
+            "ecommerce":
+                scores["ecommerce"] >= 3,
+
+            "regulated_service":
+                (
+                    scores["regulated_service"] >= 3
+                    and scores[
+                        "consumer_transactional_app"
+                    ] >= 1
+                ),
+
+            "b2b_workflow_saas":
+                scores["b2b_workflow_saas"] >= 3,
+
+            "consumer_transactional_app":
+                scores[
+                    "consumer_transactional_app"
+                ] >= 2,
+
+            "analytics_ai_tool":
+                scores["analytics_ai_tool"] >= 2,
+
+            "content_community":
+                scores["content_community"] >= 2,
+        }
+
+        eligible_archetypes = [
+            name
+            for name in selection_order
+            if eligible[name]
+        ]
+
+        if eligible_archetypes:
+
+            dominant_score = max(
+                scores[name]
+                for name in eligible_archetypes
+            )
+
+            selected = next(
+                name
+                for name in selection_order
+                if (
+                    eligible[name]
+                    and scores[name]
+                    ==
+                    dominant_score
+                )
+            )
+
         else:
+
             selected = "generic_digital_product"
 
         primary_score = (

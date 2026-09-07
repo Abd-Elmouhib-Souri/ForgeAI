@@ -1,5 +1,6 @@
 "use client";
 
+import ReportNavigation from "./ReportNavigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -35,6 +36,7 @@ import ProjectStatusCards from "./ProjectStatusCards";
 import AnalysisActionCard from "./AnalysisActionCard";
 import { Panel } from "./UIBlocks";
 import FinalReportSection from "../_sections/FinalReportSection";
+import ProjectManagerSection from "../_sections/ProjectManagerSection";
 
 const content = {
   fr: {
@@ -1255,36 +1257,51 @@ export default function ProjectDetailClient() {
               }}
             />
 
-            <FinalReportSection
-              analysisData={analysisData}
-              project={project}
-              copy={{
-                reportTitle: t.reportTitle,
-                reportSubtitle: t.reportSubtitle,
-                noReport: t.noReport,
-                summary: t.summary,
-                problem: t.problem,
-                solution: t.solution,
-                targetMarket: t.targetMarket,
-                technologies: t.technologies,
-                improvements: t.improvements,
-                risks: t.risks,
-                startupScore: t.startupScoreReport,
-                verdict: t.verdict,
-                riskLevel: t.riskLevel,
-                nextActions: t.nextActions,
-                limitations: t.limitations,
-                marketStudy: t.marketStudy,
-                swot: t.swot,
-                bmc: t.bmc,
-                competitors: t.competitors,
-                personas: t.personas,
-                debate: t.debate,
-                factCheck: t.factCheck,
-                available: t.available,
-                missing: t.missing,
-              }}
-            />
+            <div className="grid gap-8 lg:grid-cols-[15rem_minmax(0,1fr)] lg:items-start">
+              <ReportNavigation />
+              <div className="min-w-0 space-y-8">
+                <FinalReportSection
+                  analysisData={analysisData}
+                  project={project}
+                  copy={{
+                    reportTitle: t.reportTitle,
+                    reportSubtitle: t.reportSubtitle,
+                    noReport: t.noReport,
+                    summary: t.summary,
+                    problem: t.problem,
+                    solution: t.solution,
+                    targetMarket: t.targetMarket,
+                    technologies: t.technologies,
+                    improvements: t.improvements,
+                    risks: t.risks,
+                    startupScore: t.startupScoreReport,
+                    verdict: t.verdict,
+                    riskLevel: t.riskLevel,
+                    nextActions: t.nextActions,
+                    limitations: t.limitations,
+                    marketStudy: t.marketStudy,
+                    swot: t.swot,
+                    bmc: t.bmc,
+                    competitors: t.competitors,
+                    personas: t.personas,
+                    debate: t.debate,
+                    factCheck: t.factCheck,
+                    available: t.available,
+                    missing: t.missing,
+                  }}
+                />
+
+                <ProjectManagerSection
+                  projectId={id}
+                  language={reportLanguage}
+                  analysisCompletedAt={
+                    analysis?.analysis_completed_at ??
+                    project.analysis_completed_at ??
+                    null
+                  }
+                />
+              </div>
+            </div>
           </>
         )}
       </section>

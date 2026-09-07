@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { getApiErrorMessage } from "@/lib/api-error";
 import {
@@ -37,6 +37,7 @@ interface AuthContextType {
     twoFactorCode?: string
   ) => Promise<LoginResult>;
   loginWithToken: (token: string) => Promise<boolean>;
+  completeOAuthLogin: () => Promise<boolean>;
   logout: () => Promise<void>;
   forceLocalLogout: () => void;
 }
@@ -180,6 +181,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [fetchMe]
   );
 
+  const completeOAuthLogin = useCallback(
+    async (): Promise<boolean> => {
+      try {
+        clearForcedLoggedOut();
+
+        const res = await api.post("/auth/refresh");
+        setAccessToken(res.data.access_token);
+
+        const success = await fetchMe();
+
+        if (!success) {
+          setAccessToken(null);
+          setUser(null);
+          return false;
+        }
+
+        return true;
+      } catch {
+        setAccessToken(null);
+        setUser(null);
+        return false;
+      }
+    },
+    [fetchMe]
+  );
+
   const logout = async () => {
     try {
       await api.post("/auth/logout");
@@ -199,6 +226,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isLoading,
         login,
         loginWithToken,
+        completeOAuthLogin,
         logout,
         forceLocalLogout,
       }}
@@ -217,9 +245,3 @@ export function useAuth() {
 
   return context;
 }
-
-
-
-
-
-

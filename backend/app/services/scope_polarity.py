@@ -30,6 +30,194 @@ _SCOPE_REFERENCE_PATTERN = re.compile(
 )
 
 
+_SCOPE_EXCLUSION_SECTION_HEADING_PATTERN = re.compile(
+    r"\b(?:"
+    r"(?:explicitly\s+)?out\s+of\s+scope\s+for\s+(?:the\s+)?mvp"
+    r"|outside\s+(?:the\s+)?mvp\s+scope"
+    r"|mvp\s+exclusions?"
+    r"|scope\s+exclusions?"
+    r"|(?:the\s+)?exclusions?\s+(?:of|from)\s+(?:the\s+)?mvp"
+    r"|(?:les?\s+)?exclusions?\s+du\s+mvp"
+    r"|hors\s+(?:du\s+|de\s+la\s+)?"
+    r"p(?:e|\u00e9)rim(?:e|\u00e8)tre"
+    r"(?:\s+du\s+mvp)?"
+    r"|(?:the\s+)?mvp\s+"
+    r"(?:do|does|did|will|would|shall|should|can|could)\s+"
+    r"not\b"
+    r"(?!\s+only\b)"
+    r"(?:\s+(?:initially|currently|yet)){0,2}\s+"
+    r"include"
+    r"|(?:le\s+)?mvp\s+"
+    r"(?:"
+    r"n['\u2019]\s*"
+    r"|ne\s+"
+    r")"
+    r"(?:"
+    r"inclu(?:t|ent|ra|ront)"
+    r"|comprend(?:s|ent|ra|ront)?"
+    r"|contien(?:t|nent|dra|dront)"
+    r")\s+"
+    r"pas\b"
+    r"(?!\s+seulement\b)"
+    r"(?:\s+(?:initialement|encore|actuellement)){0,2}"
+    r")\b"
+    r"(?:\s+(?:are|is|sont))?"
+    r"\s*:?",
+    re.IGNORECASE,
+)
+
+
+_SCOPE_FOLLOWING_SECTION_HEADING_PATTERN = re.compile(
+    r"\b(?:"
+    r"business\s+objective"
+    r"|business\s+goal"
+    r"|objectif\s+m(?:e|\u00e9)tier"
+    r"|objectif\s+commercial"
+    r")"
+    r"\s*:",
+    re.IGNORECASE,
+)
+
+
+def partition_scope_sections(
+    value: Any,
+) -> tuple[str, str]:
+    """
+    Split a mixed positive/negative MVP-scope carrier using explicit
+    semantic section boundaries.
+
+    This is a grammatical, domain-independent authority.
+
+    Invariants:
+
+    - a negative scope heading establishes negative polarity as a whole;
+    - a token such as "MVP" inside a negative heading cannot make that
+      section positive;
+    - a following explicit planning section terminates the negative
+      scope carrier;
+    - feature vocabulary, sector, geography and project identity never
+      participate in the decision.
+
+    Historical heading grammar remains supported.
+    """
+    text = clean_text(
+        value
+    )
+
+    if not text:
+        return "", ""
+
+    match = (
+        _SCOPE_EXCLUSION_SECTION_HEADING_PATTERN.search(
+            text
+        )
+    )
+
+    if match is None:
+        return text, ""
+
+    positive = clean_text(
+        text[
+            :match.start()
+        ].strip(
+            " .,:;-"
+        )
+    )
+
+    excluded_carrier = text[
+        match.end():
+    ]
+
+    following_section = (
+        _SCOPE_FOLLOWING_SECTION_HEADING_PATTERN.search(
+            excluded_carrier
+        )
+    )
+
+    if following_section is not None:
+        excluded_carrier = excluded_carrier[
+            :following_section.start()
+        ]
+
+    excluded = clean_text(
+        excluded_carrier.strip(
+            " .,:;-"
+        )
+    )
+
+    return positive, excluded
+
+
+def reconcile_scope_polarity(
+    positive_values: list[Any],
+    excluded_values: list[Any],
+) -> list[str]:
+    """
+    Reconcile canonical scope polarity.
+
+    An item explicitly established as excluded must never remain
+    simultaneously in positive MVP scope.
+
+    Matching uses exact canonical comparison only. It deliberately
+    avoids substring, vocabulary, sector, archetype, project and
+    geography heuristics.
+
+    Positive ordering is preserved.
+    """
+    excluded_keys: set[str] = set()
+
+    for value in excluded_values:
+        text = clean_text(
+            value
+        )
+
+        if not text:
+            continue
+
+        key = comparison_key(
+            text
+        )
+
+        if key:
+            excluded_keys.add(
+                key
+            )
+
+    reconciled: list[str] = []
+    seen_positive: set[str] = set()
+
+    for value in positive_values:
+        text = clean_text(
+            value
+        )
+
+        if not text:
+            continue
+
+        key = comparison_key(
+            text
+        )
+
+        if not key:
+            continue
+
+        if key in excluded_keys:
+            continue
+
+        if key in seen_positive:
+            continue
+
+        seen_positive.add(
+            key
+        )
+
+        reconciled.append(
+            text
+        )
+
+    return reconciled
+
+
 def is_scope_exclusion_statement(
     value: Any,
 ) -> bool:
@@ -71,6 +259,20 @@ def is_scope_exclusion_statement(
 
     if not key:
         return False
+
+    section_match = (
+        _SCOPE_EXCLUSION_SECTION_HEADING_PATTERN.search(
+            text
+        )
+    )
+
+    if (
+        section_match is not None
+        and not clean_text(
+            text[:section_match.start()]
+        )
+    ):
+        return True
 
     # --------------------------------------------------------
     # Strong FR continuation / direct exclusion:
@@ -165,6 +367,102 @@ def is_scope_exclusion_statement(
 
     if not has_scope_reference:
         return False
+
+    # --------------------------------------------------------
+    # F5 scope-qualified active capability negation.
+    #
+    # A current-release scope reference plus an explicit statement that
+    # the product/service does not provide, collect, perform, etc. a
+    # capability establishes negative product scope.
+    #
+    # The release-scope requirement above is essential: generic security,
+    # resilience and behavioral negative controls remain outside this
+    # classifier unless the user explicitly places them in release scope.
+    #
+    # No capability, sector, project, geography or archetype noun is
+    # hard-coded here.
+    # --------------------------------------------------------
+
+    english_scoped_active_exclusion = re.search(
+        r"\b(?:"
+        r"do|does|did|"
+        r"will|would|shall|should|"
+        r"can|could"
+        r")\s+not\b"
+        r"(?!\s+only\b)"
+        r"(?:\s+(?:"
+        r"initially|currently|yet"
+        r")){0,2}\s+"
+        r"(?:"
+        r"include|provide|offer|support|"
+        r"perform|collect|process|handle|deliver|"
+        r"replace"
+        r")\b",
+        key,
+        flags=re.IGNORECASE,
+    )
+
+    if (
+        english_scoped_active_exclusion
+        is not None
+    ):
+        return True
+
+    french_scoped_active_exclusion = re.search(
+        r"\b(?:n|ne)\s+"
+        r"(?:"
+        r"fournit|fournissent|fournira|fourniront|"
+        r"propose|proposent|proposera|proposeront|"
+        r"offre|offrent|offrira|offriront|"
+        r"collecte|collectent|collectera|collecteront|"
+        r"traite|traitent|traitera|traiteront|"
+        r"effectue|effectuent|effectuera|effectueront|"
+        r"realise|realisent|realisera|realiseront|"
+        r"inclut|incluent|inclura|incluront|"
+        r"comprend|comprennent|comprendra|comprendront|"
+        r"remplace|remplacent|remplacera|remplaceront"
+        r")\s+"
+        r"pas\b"
+        r"(?!\s+seulement\b)",
+        key,
+        flags=re.IGNORECASE,
+    )
+
+    if (
+        french_scoped_active_exclusion
+        is not None
+    ):
+        return True
+
+    french_scoped_modal_active_exclusion = re.search(
+        r"\b(?:n|ne)\s+"
+        r"(?:"
+        r"doit|doivent|"
+        r"devra|devront|"
+        r"devrait|devraient|"
+        r"peut|peuvent|"
+        r"pourra|pourront|"
+        r"pourrait|pourraient"
+        r")\s+"
+        r"pas\b"
+        r"(?!\s+seulement\b)"
+        r"(?:\s+(?:"
+        r"initialement|encore|actuellement"
+        r")){0,2}\s+"
+        r"(?:"
+        r"fournir|proposer|offrir|"
+        r"collecter|traiter|effectuer|realiser|"
+        r"inclure|comprendre|contenir"
+        r")\b",
+        key,
+        flags=re.IGNORECASE,
+    )
+
+    if (
+        french_scoped_modal_active_exclusion
+        is not None
+    ):
+        return True
 
 
     # --------------------------------------------------------

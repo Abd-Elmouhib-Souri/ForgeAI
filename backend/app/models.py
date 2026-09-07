@@ -149,7 +149,7 @@ class Project(Base):
 
     market_region: Mapped[str] = mapped_column(
         String(100),
-        default="Tunisie",
+        default="",
         nullable=False,
     )
 

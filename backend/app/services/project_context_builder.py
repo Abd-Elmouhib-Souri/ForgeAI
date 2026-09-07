@@ -61,7 +61,9 @@ class ProjectContextBuilder:
             "title": title or "",
             "description": description or "",
             "industry": industry or "Non spécifié",
-            "market_region": market_region or "Tunisie",
+            # Unknown geography must remain unknown. The confidence gate owns
+            # any clarification; this projection must not invent a country.
+            "market_region": market_region or "",
             "output_language": language,
         }
 

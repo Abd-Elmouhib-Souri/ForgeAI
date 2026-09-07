@@ -17,13 +17,18 @@ from app.schemas.analysis_context import (
     unique_texts,
 )
 from app.services.domain_integrity_guard import normalize_output_language
-from app.services.scope_polarity import is_scope_exclusion_statement
+from app.services.scope_polarity import (
+    is_scope_exclusion_statement,
+    partition_scope_sections,
+    reconcile_scope_polarity,
+)
 from app.services.constraint_semantics import (
     has_explicit_scope_reference,
     is_constraint_statement,
     is_negative_control_statement,
 )
 from app.services.project_intelligence_layer import project_intelligence_layer
+from app.schemas.analysis_context import clean_structured_text
 
 
 class ProjectContextExtractor:
@@ -41,17 +46,19 @@ class ProjectContextExtractor:
 
     TARGET_PATTERNS = (
         re.compile(
-            r"(?:les\s+)?(?:premiers?\s+)?"
+            r"(?:(?:les|le|la|un|une|des)\s+|l['\u2019]\s*)?"
+            r"(?:premiers?\s+)?"
+
             r"(?:clients?|utilisateurs?|usagers?|"
             r"bénéficiaires?|beneficiaires?)\s+"
             r"(?:ciblés?|cibles?|visés?|vises?)\s+"
-            r"(?:sont|seront|incluent|comprennent)\s+(.+)",
+            r"(?:est|sont|sera|seront|inclut|incluent|comprend|comprennent)\s+(.+)",
             re.IGNORECASE,
         ),
         re.compile(
-            r"(?:target|primary)\s+"
+            r"(?:the\s+)?(?:target|primary)\s+"
             r"(?:customers?|users?|beneficiaries)\s+"
-            r"(?:are|include)\s+(.+)",
+            r"(?:is|are|includes?)\s+(.+)",
             re.IGNORECASE,
         ),
         re.compile(
@@ -560,7 +567,7 @@ class ProjectContextExtractor:
             or project_context.get("title")
         )
 
-        description = clean_text(
+        description = clean_structured_text(
             description
             or project_context.get("description")
         )
@@ -598,6 +605,27 @@ class ProjectContextExtractor:
             self._explicit_semantic_sections(
                 description
             )
+        )
+
+        # Direct current user scope owns its own polarity over
+        # persisted or inferred lower-authority projections.
+        #
+        # Capture before narrative enrichment so explicit and
+        # inferred authorities remain distinguishable.
+        explicit_current_mvp_scope = list(
+            explicit_sections.get(
+                "mvp_scope",
+                [],
+            )
+            or []
+        )
+
+        explicit_current_scope_exclusions = list(
+            explicit_sections.get(
+                "scope_exclusions",
+                [],
+            )
+            or []
         )
 
         narrative_sections = (
@@ -691,24 +719,146 @@ class ProjectContextExtractor:
             )
         )
 
+        # Structured target users are canonical actor-population evidence,
+        # but they carry lower role authority than an explicit actor-role
+        # declaration for the same canonical identity.
+        #
+        # Merge structured evidence independently from archetype fallback:
+        #
+        # - distinct structured actors coexist with explicit relations;
+        # - an explicit/reconciled actor wins for the same identity;
+        # - archetype-only actors remain fallback-only evidence.
+        structured_actor_candidates = (
+            self._fallback_actors(
+                structured=structured,
+                archetype_context={},
+            )
+        )
+
+        represented_actor_identities = {
+            (
+                self._actor_alias_identity_key(
+                    actor.name
+                )
+                or comparison_key(
+                    actor.name
+                )
+            )
+            for actor in actors
+            if (
+                self._actor_alias_identity_key(
+                    actor.name
+                )
+                or comparison_key(
+                    actor.name
+                )
+            )
+        }
+
+        for candidate in structured_actor_candidates:
+            candidate_identity = (
+                self._actor_alias_identity_key(
+                    candidate.name
+                )
+                or comparison_key(
+                    candidate.name
+                )
+            )
+
+            if (
+                not candidate_identity
+                or candidate_identity
+                in represented_actor_identities
+            ):
+                continue
+
+            represented_actor_identities.add(
+                candidate_identity
+            )
+
+            actors.append(
+                candidate
+            )
+
         if not actors:
             actors = self._fallback_actors(
                 structured=structured,
                 archetype_context=archetype_context,
             )
 
-        mvp_scope = self._extract_mvp_scope(
-            sentences=sentences,
-            structured=structured,
-            project_context=project_context,
-            analysis_data=analysis_data,
+        # Canonical fresh-role authority closure.
+        #
+        # Fresh explicit current-project actor-role evidence already outranks
+        # persisted and inferred identities. Structured target population and
+        # fallback evidence are intentionally merged at lower authority, so
+        # they must pass through the same canonical reconciliation before any
+        # workflow or downstream projection can consume the actor registry.
+        #
+        # This preserves:
+        # - distinct structured actors;
+        # - legitimate multi-role identities;
+        # - fallback population when no fresh relation supersedes it.
+        #
+        # It prevents only lower-authority evidence from reintroducing an
+        # identity already superseded by a fresh explicit role relation.
+        actors = (
+            self._reconcile_fresh_declared_actor_authority(
+                actors=actors,
+                description=description,
+            )
         )
 
-        scope_exclusions = self._extract_scope_exclusions(
-            sentences=sentences,
-            structured=structured,
-            project_context=project_context,
-            analysis_data=analysis_data,
+        if explicit_current_mvp_scope:
+            mvp_scope = self._extract_mvp_scope(
+                sentences=[],
+                structured={
+                    "mvp_scope": (
+                        explicit_current_mvp_scope
+                    ),
+                },
+                project_context=project_context,
+                analysis_data={},
+            )
+        else:
+            mvp_scope = self._extract_mvp_scope(
+                sentences=sentences,
+                structured=structured,
+                project_context=project_context,
+                analysis_data=analysis_data,
+            )
+
+        if explicit_current_scope_exclusions:
+            scope_exclusions = (
+                self._extract_scope_exclusions(
+                    sentences=[],
+                    structured={
+                        "scope_exclusions": (
+                            explicit_current_scope_exclusions
+                        ),
+                    },
+                    project_context=project_context,
+                    analysis_data={},
+                )
+            )
+        else:
+            scope_exclusions = (
+                self._extract_scope_exclusions(
+                    sentences=sentences,
+                    structured=structured,
+                    project_context=project_context,
+                    analysis_data=analysis_data,
+                )
+            )
+
+        # Canonical polarity reconciliation.
+        #
+        # Historical positive projections may have lost the negative
+        # section heading before reaching this extractor. Once the
+        # current canonical extraction establishes an exact item as a
+        # scope exclusion, that item cannot remain positive MVP scope.
+        mvp_scope = reconcile_scope_polarity(
+            mvp_scope,
+            scope_exclusions,
         )
 
         workflows = self._extract_workflows(
@@ -736,21 +886,72 @@ class ProjectContextExtractor:
             )
         )
 
-        solution = SolutionContext(
-            mechanism=self._extract_solution_text(
+        solution_mechanism = (
+            self._extract_solution_text(
                 sentences=sentences,
                 structured=structured,
-            ),
-            core_value=clean_text(
-                structured.get(
-                    "value_proposition"
+            )
+        )
+
+        solution_core_value = clean_text(
+            structured.get(
+                "value_proposition"
+            )
+        )
+
+        # Derived solution semantics must consume positive canonical
+        # evidence, never the raw project description.
+        #
+        # The raw description may legitimately contain explicit
+        # exclusions. Those exclusions are canonical negative scope
+        # authority and cannot become evidence for a positive delivery
+        # mode or required capability.
+        #
+        # Reuse the scope-polarity authority instead of duplicating
+        # technology-specific negation rules here.
+        positive_solution_values: List[str] = []
+
+        for value in (
+            solution_mechanism,
+            solution_core_value,
+            *mvp_scope,
+        ):
+            positive_value, _ = (
+                partition_scope_sections(
+                    value
                 )
-            ),
+            )
+
+            positive_value = clean_text(
+                positive_value
+            )
+
+            if not positive_value:
+                continue
+
+            if is_scope_exclusion_statement(
+                positive_value
+            ):
+                continue
+
+            positive_solution_values.append(
+                positive_value
+            )
+
+        positive_solution_evidence = " ".join(
+            unique_texts(
+                positive_solution_values
+            )
+        )
+
+        solution = SolutionContext(
+            mechanism=solution_mechanism,
+            core_value=solution_core_value,
             delivery_mode=self._delivery_mode(
-                description
+                positive_solution_evidence
             ),
             required_capabilities=self._capabilities(
-                description
+                positive_solution_evidence
             ),
         )
 
@@ -850,7 +1051,7 @@ class ProjectContextExtractor:
 
         return ProjectContextPacketV3(
             project_name=title,
-            description=description,
+            description=clean_text(description),
             language=language,
             target_region=target_region,
             industry_user_input=industry,
@@ -1582,7 +1783,7 @@ class ProjectContextExtractor:
                 )
             )
 
-        return output[:8]
+        return output
 
 
     def _declared_marketplace_sides(
@@ -2315,6 +2516,7 @@ class ProjectContextExtractor:
                     r"(?:is|are)\s+"
                     r"(?:the\s+)?"
                     r"(?:main|primary|key)\s+"
+                    r"(?:daily\s+)?"
                     r"users?\b"
                     r"(?:\s+.+?)?"
                     r"(?=[.;]|$)",
@@ -3037,19 +3239,34 @@ class ProjectContextExtractor:
             # canonical DECISION_MAKER authority.
             (
                 re.compile(
-                    r"\b(?:"
-                    r"d(?:e|\u00e9)cideur"
-                    r"|d(?:e|\u00e9)cideuse"
+                    r"\b"
+                    r"(?:(?:"
+                    r"principal(?:e|es)?"
+                    r"|principaux"
+                    r"|principales"
+                    r")\s+)?"
+                    r"(?:"
+                    r"d(?:e|\u00e9)cideurs?"
+                    r"|d(?:e|\u00e9)cideuses?"
                     r")"
                     r"(?:\s+d['\u2019]achat)?"
-                    r"(?:\s+principal(?:e)?)?"
+                    r"(?:\s+(?:"
+                    r"principal(?:e|es)?"
+                    r"|principaux"
+                    r"|principales"
+                    r"))?"
                     r"\s+"
                     r"(?:"
                     r"est"
+                    r"|sont"
                     r"|serait"
+                    r"|seraient"
                     r"|sera"
+                    r"|seront"
                     r"|peut\s+(?:e|\u00ea)tre"
+                    r"|peuvent\s+(?:e|\u00ea)tre"
                     r"|pourrait\s+(?:e|\u00ea)tre"
+                    r"|pourraient\s+(?:e|\u00ea)tre"
                     r")"
                     r"(?:\s+(?:"
                     r"probablement|vraisemblablement"
@@ -3189,6 +3406,187 @@ class ProjectContextExtractor:
                 ActorRole.PROVIDER,
             ),
 
+            # ----------------------------------------------------------
+            # Explicit PARTNER relation authority.
+            #
+            # Canonical invariant:
+            #
+            #   An actor is PARTNER only when the user's language carries
+            #   explicit partner semantics. The industry or external-actor
+            #   status never promotes an actor to PARTNER.
+            #
+            # Supported grammatical surfaces:
+            #
+            #   Label-first:
+            #       "The operational partner is X."
+            #       "The operational partners are X and Y."
+            #       "Le partenaire operationnel est X."
+            #       "Les partenaires operationnels sont X et Y."
+            #
+            #   Qualified relational complement:
+            #       "... assigned to a partner workshop."
+            #       "... affectee a un atelier partenaire."
+            #
+            # The ordinary actor-list splitter remains the authority for
+            # coordinated values such as X and Y / X et Y.
+            # ----------------------------------------------------------
+
+            (
+                re.compile(
+                    r"^\s*"
+                    r"(?:"
+                    r"le\s+|la\s+|les\s+"
+                    r"|un\s+|une\s+|des\s+"
+                    r"|l['\u2019]\s*"
+                    r")?"
+                    r"(?:(?:"
+                    r"principal(?:e|es)?"
+                    r"|principaux"
+                    r"|principales"
+                    r"|operationnel(?:le|les|s)?"
+                    r"|op(?:e|\u00e9)rationnel(?:le|les|s)?"
+                    r"|strategique(?:s)?"
+                    r"|strat(?:e|\u00e9)gique(?:s)?"
+                    r"|commercial(?:e|es|s)?"
+                    r"|technologique(?:s)?"
+                    r")\s+)?"
+                    r"partenaires?"
+                    r"(?:\s+(?:"
+                    r"principal(?:e|es)?"
+                    r"|principaux"
+                    r"|principales"
+                    r"|operationnel(?:le|les|s)?"
+                    r"|op(?:e|\u00e9)rationnel(?:le|les|s)?"
+                    r"|strategique(?:s)?"
+                    r"|strat(?:e|\u00e9)gique(?:s)?"
+                    r"|commercial(?:e|es|s)?"
+                    r"|technologique(?:s)?"
+                    r"))?"
+                    r"\s+"
+                    r"(?:"
+                    r"est"
+                    r"|sont"
+                    r"|sera"
+                    r"|seront"
+                    r"|serait"
+                    r"|seraient"
+                    r")"
+                    r"\s+"
+                    r"(?:"
+                    r"le\s+|la\s+|les\s+"
+                    r"|un\s+|une\s+|des\s+"
+                    r"|l['\u2019]\s*"
+                    r")?"
+                    r"(.+?)"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.PARTNER,
+            ),
+
+            (
+                re.compile(
+                    r"\b"
+                    r"(?:(?:"
+                    r"primary"
+                    r"|main"
+                    r"|key"
+                    r"|operational"
+                    r"|strategic"
+                    r"|commercial"
+                    r"|business"
+                    r"|technology"
+                    r"|implementation"
+                    r")\s+)?"
+                    r"partners?"
+                    r"(?:\s+(?:"
+                    r"primary"
+                    r"|main"
+                    r"|key"
+                    r"|operational"
+                    r"|strategic"
+                    r"|commercial"
+                    r"|business"
+                    r"|technology"
+                    r"|implementation"
+                    r"))?"
+                    r"\s+"
+                    r"(?:"
+                    r"is"
+                    r"|are"
+                    r"|will\s+be"
+                    r"|would\s+be"
+                    r")"
+                    r"\s+"
+                    r"(?:the\s+|a\s+|an\s+)?"
+                    r"(.+?)"
+                    r"(?=[.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.PARTNER,
+            ),
+
+            # French qualified relational partner:
+            #
+            #     affecter / attribuer / confier / rediriger / orienter
+            #     ... a <actor> partenaire
+            #
+            # The relation predicate is required. A lexical mention such
+            # as "portail partenaire" therefore does not independently
+            # materialize an actor.
+            (
+                re.compile(
+                    r"\b(?:"
+                    r"affect(?:er|e|ent|(?:e|\u00e9)e?s?)"
+                    r"|attribu(?:er|e|ent|(?:e|\u00e9)e?s?)"
+                    r"|confi(?:er|e|ent|(?:e|\u00e9)e?s?)"
+                    r"|redirig(?:er|e|ent|(?:e|\u00e9)e?s?)"
+                    r"|orient(?:er|e|ent|(?:e|\u00e9)e?s?)"
+                    r")\b"
+                    r"[^.;]{0,120}?"
+                    r"\b(?:a|\u00e0)\s+"
+                    r"(?:"
+                    r"le\s+|la\s+|les\s+"
+                    r"|un\s+|une\s+|des\s+"
+                    r"|l['\u2019]\s*"
+                    r")?"
+                    r"("
+                    r"[^,.;]{1,100}?"
+                    r"\s+partenaires?"
+                    r")"
+                    r"(?=[,.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.PARTNER,
+            ),
+
+            # English qualified relational partner:
+            #
+            #     assigned / routed / referred / directed / sent
+            #     ... to a partner <actor>
+            (
+                re.compile(
+                    r"\b(?:"
+                    r"assign(?:s|ed|ing)?"
+                    r"|route(?:s|d|ing)?"
+                    r"|refer(?:s|red|ring)?"
+                    r"|direct(?:s|ed|ing)?"
+                    r"|send(?:s|ing)?"
+                    r"|sent"
+                    r")\b"
+                    r"[^.;]{0,120}?"
+                    r"\bto\s+"
+                    r"(?:the\s+|a\s+|an\s+)?"
+                    r"("
+                    r"partner\s+"
+                    r"[^,.;]{1,100}?"
+                    r")"
+                    r"(?=[,.;]|$)",
+                    re.IGNORECASE,
+                ),
+                ActorRole.PARTNER,
+            ),
+
             # Label-first primary operational-user declarations
             # intentionally do not live in _declared_actor_roles().
             #
@@ -3326,9 +3724,11 @@ class ProjectContextExtractor:
             (
                 re.compile(
                     r"\b(?:the\s+)?"
-                    r"decision[ -]?maker\s+"
+                    r"(?:(?:primary|main|key)\s+)?"
+                    r"decision[ -]?makers?\s+"
                     r"(?:"
                     r"is"
+                    r"|are"
                     r"|can\s+be"
                     r"|could\s+be"
                     r"|would(?:\s+(?:probably|likely))?\s+be"
@@ -3447,7 +3847,9 @@ class ProjectContextExtractor:
             (
                 re.compile(
                     r"\b(?:the\s+)?"
-                    r"(?:(?:main|primary)\s+)?payer\s+"
+                    r"(?:(?:main|primary)\s+)?payer"
+                    r"(?:\s+for\s+[^.;]{1,80}?)?"
+                    r"\s+"
                     r"(?:"
                     r"is"
                     r"|would(?:\s+(?:probably|likely))?\s+be"
@@ -3507,10 +3909,16 @@ class ProjectContextExtractor:
                     r"\b"
                     r"(?:(?:principal|principalement)\s+)?"
                     r"payeur"
-                    r"(?:\s+principal)?\s+"
+                    r"(?:\s+principal)?"
+                    r"(?:"
+                    r"\s+(?:de|du|des|pour)\s+[^.;]{1,80}?"
+                    r"|\s+d['\u2019][^.;]{1,80}?"
+                    r")?"
+                    r"\s+"
                     r"(?:est|serait|sera)"
                     r"(?:\s+(?:probablement|vraisemblablement))?"
-                    r"\s+(?:le\s+|la\s+|les\s+)?"
+                    r"\s+(?:le\s+|la\s+|les\s+|"
+                    r"l['\u2019]\s*)?"
                     r"(.+?)"
                     r"(?=[.;]|$)",
                     re.IGNORECASE,
@@ -3622,10 +4030,61 @@ class ProjectContextExtractor:
             re.IGNORECASE,
         )
 
+        # F6 ROOT1 universal modal request relation authority.
+        #
+        # An explicit positive operational request relation proves USER
+        # participation. The actor identity is the grammatical subject,
+        # never the complete modal proposition.
+        english_modal_request_pattern = re.compile(
+            r"^\s*(?:the\s+|a\s+|an\s+)?"
+            r"(.+?)\s+"
+            r"(?:can|may|could|will|would|should)\s+"
+            r"(?!not\b)"
+            r"(?:"
+            r"directly\s+|also\s+|initially\s+|"
+            r"currently\s+|normally\s+|usually\s+"
+            r")*"
+            r"(?:submit|send|file|create|open|raise)\b"
+            r"(?:\s+[^.;!?]{0,120}?)?"
+            r"\brequests?\b"
+            r"(?:\s+[^.;!?]*)?"
+            r"(?=[.;!?]|$)",
+            re.IGNORECASE,
+        )
+
+        french_modal_request_pattern = re.compile(
+            r"^\s*(?:le\s+|la\s+|les\s+|"
+            r"un\s+|une\s+|des\s+|"
+            r"l['\u2019]\s*)?"
+            r"(.+?)\s+"
+            r"(?:"
+            r"peut|peuvent|"
+            r"pourrait|pourraient|"
+            r"pourra|pourront|"
+            r"devrait|devraient"
+            r")\s+"
+            r"(?!pas\b)"
+            r"(?:"
+            r"directement\s+|aussi\s+|"
+            r"initialement\s+|actuellement\s+"
+            r")*"
+            r"(?:"
+            r"soumettre|envoyer|deposer|d\u00e9poser|"
+            r"creer|cr\u00e9er|ouvrir"
+            r")\b"
+            r"(?:\s+[^.;!?]{0,120}?)?"
+            r"\bdemandes?\b"
+            r"(?:\s+[^.;!?]*)?"
+            r"(?=[.;!?]|$)",
+            re.IGNORECASE,
+        )
+
         operational_user_patterns: Tuple[
             re.Pattern[str],
             ...,
         ] = (
+            english_modal_request_pattern,
+            french_modal_request_pattern,
             re.compile(
                 r"^\s*(?:the\s+|a\s+|an\s+)?"
                 r"(.+?)\s+"
@@ -3663,6 +4122,186 @@ class ProjectContextExtractor:
         seen: set[
             Tuple[str, str]
         ] = set()
+
+
+        # Explicit structured decision-maker authority.
+        #
+        # The declaration heading establishes the role. Actor-name
+        # vocabulary, sector, country and list position do not.
+        #
+        # Only explicit list items beneath the heading are consumed.
+        # Any other labeled section closes this authority boundary.
+        decision_heading_pattern = re.compile(
+            r"^(?:"
+            r"(?:(?:primary|main|key|secondary)\s+)?"
+            r"decision\s+makers?"
+            r"|"
+            r"(?:(?:"
+            r"principal|principale|principaux|principales|"
+            r"secondaire|secondaires"
+            r")\s+)?"
+            r"decideu(?:r|se)s?"
+            r"(?:\s+(?:"
+            r"principal|principale|principaux|principales|"
+            r"secondaire|secondaires"
+            r"))?"
+            r")$",
+            re.IGNORECASE,
+        )
+
+        active_decision_section = False
+
+        for raw_line in (
+            str(
+                description
+                or ""
+            )
+            .replace(
+                "\r\n",
+                "\n",
+            )
+            .replace(
+                "\r",
+                "\n",
+            )
+            .split(
+                "\n"
+            )
+        ):
+            line = clean_text(
+                raw_line
+            )
+
+            if not line:
+                continue
+
+            bullet_match = re.match(
+                r"^(?:[-*]|\u2022|\d+[.)])\s+(.+)$",
+                line,
+            )
+
+            if (
+                active_decision_section
+                and bullet_match
+            ):
+                name = self._clean_actor(
+                    bullet_match.group(
+                        1
+                    )
+                )
+
+                identity = (
+                    comparison_key(
+                        name
+                    ),
+                    str(
+                        ActorRole.DECISION_MAKER.value
+                    ),
+                )
+
+                if (
+                    name
+                    and identity[0]
+                    and identity
+                    not in seen
+                ):
+                    seen.add(
+                        identity
+                    )
+
+                    output.append(
+                        (
+                            name,
+                            ActorRole.DECISION_MAKER,
+                        )
+                    )
+
+                continue
+
+            heading_match = re.match(
+                r"^([^:]+):(?:\s*(.*))?$",
+                line,
+            )
+
+            if heading_match:
+                heading_key = comparison_key(
+                    heading_match.group(
+                        1
+                    )
+                )
+
+                active_decision_section = bool(
+                    decision_heading_pattern.fullmatch(
+                        heading_key
+                    )
+                )
+
+                inline_value = clean_text(
+                    heading_match.group(
+                        2
+                    )
+                    or ""
+                )
+
+                plural_decision_heading = bool(
+                    re.search(
+                        r"\bdecision\s+makers\b",
+                        heading_key,
+                        flags=re.IGNORECASE,
+                    )
+                    or re.search(
+                        r"\b(?:decideurs|decideuses)\b",
+                        heading_key,
+                        flags=re.IGNORECASE,
+                    )
+                )
+
+                if (
+                    active_decision_section
+                    and plural_decision_heading
+                    and inline_value
+                ):
+                    for raw_name in self._split_list(
+                        inline_value
+                    ):
+                        name = self._clean_actor(
+                            raw_name
+                        )
+
+                        identity = (
+                            comparison_key(
+                                name
+                            ),
+                            str(
+                                ActorRole.DECISION_MAKER.value
+                            ),
+                        )
+
+                        if (
+                            not name
+                            or not identity[0]
+                            or identity in seen
+                        ):
+                            continue
+
+                        seen.add(
+                            identity
+                        )
+
+                        output.append(
+                            (
+                                name,
+                                ActorRole.DECISION_MAKER,
+                            )
+                        )
+
+                # A labeled line is a complete structural boundary.
+                # Multi-line values continue through subsequent bullets;
+                # plural inline values were materialized above.
+                continue
+
+            if active_decision_section:
+                active_decision_section = False
 
         for sentence in self._sentences(
             description
@@ -3734,29 +4373,66 @@ class ProjectContextExtractor:
                     operational_name
                 )
 
+                modal_request_relation = (
+                    operational_pattern
+                    is english_modal_request_pattern
+                    or operational_pattern
+                    is french_modal_request_pattern
+                )
+
+                # Generic technical executors remain outside the business
+                # actor registry. This is a generic actor/entity boundary,
+                # not a project, sector or country exception.
+                technical_subject_keys = {
+                    "system",
+                    "systeme",
+                    "platform",
+                    "plateforme",
+                    "application",
+                    "software",
+                    "logiciel",
+                    "device",
+                    "product",
+                    "produit",
+                }
+
+                relation_authoritative_subject = (
+                    modal_request_relation
+                    and operational_key
+                    not in technical_subject_keys
+                    and operational_key
+                    not in self.GENERIC_ACTORS
+                )
+
                 if (
                     not operational_name
                     or not operational_key
                     or self._is_actor_identity_pronoun(
                         operational_name
                     )
-                    or not self._looks_like_actor_phrase(
-                        operational_name
+                    or (
+                        not relation_authoritative_subject
+                        and not self._looks_like_actor_phrase(
+                            operational_name
+                        )
                     )
                 ):
                     continue
 
-                operational_role = self._actor_role(
-                    operational_name
-                )
-
-                if operational_role not in {
-                    ActorRole.USER,
-                    ActorRole.OPERATOR,
-                    ActorRole.BUYER,
-                    ActorRole.BENEFICIARY,
-                }:
+                if modal_request_relation:
                     operational_role = ActorRole.USER
+                else:
+                    operational_role = self._actor_role(
+                        operational_name
+                    )
+
+                    if operational_role not in {
+                        ActorRole.USER,
+                        ActorRole.OPERATOR,
+                        ActorRole.BUYER,
+                        ActorRole.BENEFICIARY,
+                    }:
+                        operational_role = ActorRole.USER
 
                 identity = (
                     operational_key,
@@ -3997,6 +4673,45 @@ class ProjectContextExtractor:
                     ]
                 )
 
+                # D3 explicit partner relation-list normalization.
+                #
+                # At this point the surrounding grammatical pattern has
+                # already established PARTNER authority.
+                #
+                # Reuse the canonical conservative actor-list splitter
+                # rather than introducing another conjunction grammar.
+                #
+                # This preserves legitimate noun-phrase conjunctions while
+                # allowing explicit coordinated partner declarations such as:
+                #
+                #   "partners are A and B"
+                #   "partenaires sont A et B"
+                #
+                # Global _split_actor_list() remains unchanged.
+                if (
+                    role
+                    == ActorRole.PARTNER
+                ):
+                    partner_raw_names: List[str] = []
+
+                    for partner_raw_name in raw_names:
+                        partner_raw_names.extend(
+                            self._split_actor_list(
+                                clean_text(
+                                    partner_raw_name
+                                )
+                            )
+                        )
+
+                    raw_names = [
+                        partner_raw_name
+                        for partner_raw_name
+                        in partner_raw_names
+                        if clean_text(
+                            partner_raw_name
+                        )
+                    ]
+
                 # U7 coordinated decision-actor normalization.
                 #
                 # At this point the surrounding relation has already
@@ -4015,6 +4730,94 @@ class ProjectContextExtractor:
                         match.group(1)
                     )
 
+                    has_terminal_structural_coordinator = bool(
+                        re.search(
+                            r"\s+\b(?:et|and)\b\s+"
+                            r"(?=(?:"
+                            r"(?:"
+                            r"le|la|les|un|une|des|"
+                            r"the|a|an"
+                            r")\s+"
+                            r"|l['\u2019]\s*"
+                            r"|(?:e|\u00e9)ventuellement\b"
+                            r"|optionally\b"
+                            r"|possibly\b"
+                            r"|potentially\b"
+                            r"|perhaps\b"
+                            r"|potentiellement\b"
+                            r"|possiblement\b"
+                            r"))",
+                            decision_blob,
+                            flags=re.IGNORECASE,
+                        )
+                    )
+
+                    # D2.3 two-item comma decision-list boundary.
+                    #
+                    # Global _split_actor_list() deliberately remains
+                    # conservative. At this point, however, the surrounding
+                    # grammar has already established DECISION_MAKER
+                    # authority.
+                    #
+                    # A plural decision-maker declaration followed by one
+                    # comma and an explicitly determined second actor is
+                    # therefore sufficient structural evidence for a
+                    # two-item relation list:
+                    #
+                    #   "decision makers are A, the B"
+                    #   "decideurs sont A, le B"
+                    #
+                    # The plural relation label is important. It prevents a
+                    # singular title/appositive such as:
+                    #
+                    #   "decision maker is the research, development and
+                    #    innovation director"
+                    #
+                    # from being split merely because a comma exists.
+                    decision_relation_prefix = (
+                        relation_sentence[
+                            match.start():
+                            match.start(1)
+                        ]
+                    )
+
+                    decision_relation_prefix_key = comparison_key(
+                        decision_relation_prefix
+                    )
+
+                    decision_label_is_plural = bool(
+                        re.search(
+                            r"\b(?:"
+                            r"decideurs"
+                            r"|decideuses"
+                            r"|decision\s+makers"
+                            r")\b",
+                            decision_relation_prefix_key,
+                            flags=re.IGNORECASE,
+                        )
+                    )
+
+                    has_two_item_comma_actor_boundary = (
+                        decision_label_is_plural
+                        and decision_blob.count(
+                            ","
+                        )
+                        == 1
+                        and re.search(
+                            r",\s*"
+                            r"(?=(?:"
+                            r"(?:"
+                            r"le|la|les|un|une|des|"
+                            r"the|a|an"
+                            r")\s+"
+                            r"|l['\u2019]\s*"
+                            r"))",
+                            decision_blob,
+                            flags=re.IGNORECASE,
+                        )
+                        is not None
+                    )
+
                     has_structural_list = (
                         bool(
                             re.search(
@@ -4027,6 +4830,14 @@ class ProjectContextExtractor:
                             ","
                         )
                         >= 2
+                        or (
+                            decision_blob.count(
+                                ","
+                            )
+                            >= 1
+                            and has_terminal_structural_coordinator
+                        )
+                        or has_two_item_comma_actor_boundary
                     )
 
                     if has_structural_list:
@@ -4035,7 +4846,7 @@ class ProjectContextExtractor:
                             for item
                             in re.split(
                                 r"\s*,\s*"
-                                r"(?:(?:ou|or)\s+)?"
+                                r"(?:(?:et|and|ou|or)\s+)?"
                                 r"|\s+\b(?:ou|or)\b\s+",
                                 decision_blob,
                                 flags=re.IGNORECASE,
@@ -4049,7 +4860,22 @@ class ProjectContextExtractor:
 
                     for raw_name in raw_names:
                         residual_names = re.split(
-                            r"\s+\b(?:ou|or)\b\s+",
+                            r"\s+\b(?:ou|or)\b\s+"
+                            r"|\s+\b(?:et|and)\b\s+"
+                            r"(?=(?:"
+                            r"(?:"
+                            r"le|la|les|un|une|des|"
+                            r"the|a|an"
+                            r")\s+"
+                            r"|l['\u2019]\s*"
+                            r"|(?:e|\u00e9)ventuellement\b"
+                            r"|optionally\b"
+                            r"|possibly\b"
+                            r"|potentially\b"
+                            r"|perhaps\b"
+                            r"|potentiellement\b"
+                            r"|possiblement\b"
+                            r"))",
                             clean_text(
                                 raw_name
                             ),
@@ -4074,7 +4900,30 @@ class ProjectContextExtractor:
                                 residual_name
                             )
 
-                            if residual_name:
+                            residual_key = comparison_key(
+                                residual_name
+                            )
+
+                            is_conditional_decision_candidate = bool(
+                                re.match(
+                                    r"^(?:"
+                                    r"eventuellement"
+                                    r"|optionally"
+                                    r"|possibly"
+                                    r"|potentially"
+                                    r"|perhaps"
+                                    r"|potentiellement"
+                                    r"|possiblement"
+                                    r")\b",
+                                    residual_key,
+                                    flags=re.IGNORECASE,
+                                )
+                            )
+
+                            if (
+                                residual_name
+                                and not is_conditional_decision_candidate
+                            ):
                                 normalized_raw_names.append(
                                     residual_name
                                 )
@@ -4121,11 +4970,13 @@ class ProjectContextExtractor:
         Utilise les acteurs inférés seulement si aucun acteur explicite
         n'a été extrait.
         """
-        names = self._listify(
+        structured_names = self._listify(
             structured.get(
                 "target_users"
             )
         )
+
+        names = structured_names
 
         if not names:
             names = self._listify(
@@ -4167,6 +5018,9 @@ class ProjectContextExtractor:
                     is_explicit=False,
                 )
             )
+
+        if structured_names:
+            return output
 
         return output[:4]
 
@@ -4889,7 +5743,7 @@ class ProjectContextExtractor:
                 actor
             )
 
-        return output[:8]
+        return output
 
 
     def _is_monetization_only_solution(
@@ -5175,19 +6029,79 @@ class ProjectContextExtractor:
                 r"|hypoth(?:e|\u00e8)se\s+commerciale"
                 r")",
             ),
+
+            # ----------------------------------------------------
+            # Explicit negative MVP/scope section.
+            #
+            # This pattern MUST occur before the generic MVP
+            # grammar so that a token such as "MVP" inside a
+            # negative heading is classified by the whole heading.
+            # ----------------------------------------------------
+            (
+                "scope_exclusions",
+                r"(?:"
+                r"explicitly\s+out\s+of\s+scope\s+for\s+(?:the\s+)?mvp"
+                r"|out\s+of\s+scope\s+for\s+(?:the\s+)?mvp"
+                r"|outside\s+(?:the\s+)?mvp\s+scope"
+                r"|mvp\s+exclusions?"
+                r"|scope\s+exclusions?"
+                r"|(?:the\s+)?exclusions?\s+(?:of|from)\s+(?:the\s+)?mvp"
+                r"|(?:the\s+)?mvp\s+"
+                r"(?:does\s+not|doesn['\u2019]t)"
+                r"(?:\s+initially)?\s+include"
+                r"|(?:le\s+)?mvp\s+"
+                r"(?:"
+                r"n['\u2019]\s*inclut\s+pas"
+                r"|ne\s+comprend\s+pas"
+                r")"
+                r"(?:\s+initialement)?"
+                r"|(?:les?\s+)?exclusions?\s+du\s+mvp"
+                r"|hors\s+(?:du\s+|de\s+la\s+)?"
+                r"p(?:e|\u00e9)rim(?:e|\u00e8)tre"
+                r"(?:\s+du\s+mvp)?"
+                r")",
+            ),
+
+            # A semantic section heading is also a boundary for
+            # the preceding section. The value may be consumed
+            # elsewhere later; here it prevents scope bleed.
+            (
+                "business_objective",
+                r"(?:"
+                r"business\s+objective"
+                r"|business\s+goal"
+                r"|objectif\s+m(?:e|\u00e9)tier"
+                r"|objectif\s+commercial"
+                r")",
+            ),
+
             (
                 "mvp_scope",
                 r"(?:"
-                r"mvp\s+scope"
+                r"mvp\s+(?:"
+                r"scope"
+                r"|capabilities"
+                r"|features"
+                r"|functionality"
+                r")"
                 r"|p(?:e|\u00e9)rim(?:e|\u00e8)tre\s+mvp"
+                r"|capacit(?:e|\u00e9)s\s+mvp"
+                r"|fonctionnalit(?:e|\u00e9)s\s+mvp"
                 r"|mvp"
                 r")",
             ),
             (
                 "constraints",
                 r"(?:"
-                r"constraints?"
-                r"|contraintes?"
+                r"(?:the\s+)?"
+                r"(?:important|main|key)\s+constraints?"
+                r"|constraints?"
+                r"|(?:les?\s+)?contraintes?"
+                r"(?:\s+(?:"
+                r"importantes?"
+                r"|principales?"
+                r"|cl(?:e|\u00e9)s"
+                r"))?"
                 r")",
             ),
             (
@@ -5264,10 +6178,106 @@ class ProjectContextExtractor:
                 else len(description)
             )
 
+            raw_value = description[
+                value_start:value_end
+            ]
+
+            # Scope list rows are structural user declarations.
+            #
+            # Preserve item identity before clean_text() collapses
+            # whitespace. A lexical hyphen or and/or inside one row
+            # remains part of the same canonical commitment.
+            if canonical_name in {
+                "mvp_scope",
+                "scope_exclusions",
+            }:
+                structural_values: List[str] = []
+                current_parts: List[str] = []
+                saw_structural_item = False
+
+                normalized_raw_value = (
+                    raw_value
+                    .replace("\r\n", "\n")
+                    .replace("\r", "\n")
+                )
+
+                for raw_line in normalized_raw_value.split("\n"):
+                    structural_match = re.match(
+                        r"^\s*(?:"
+                        r"[-+*]"
+                        r"|\u2022"
+                        r"|\u25aa"
+                        r"|\u25e6"
+                        r"|\u2023"
+                        r"|\u2013"
+                        r"|\u2014"
+                        r"|\d{1,3}[.)]"
+                        r")\s+"
+                        r"(?P<item>.+?)"
+                        r"\s*$",
+                        raw_line,
+                    )
+
+                    if structural_match:
+                        if current_parts:
+                            candidate = clean_text(
+                                " ".join(
+                                    current_parts
+                                )
+                            )
+
+                            if candidate:
+                                structural_values.append(
+                                    candidate
+                                )
+
+                        current_parts = [
+                            structural_match.group(
+                                "item"
+                            )
+                        ]
+
+                        saw_structural_item = True
+                        continue
+
+                    if saw_structural_item and current_parts:
+                        continuation = clean_text(
+                            raw_line
+                        )
+
+                        if continuation:
+                            current_parts.append(
+                                continuation
+                            )
+
+                if current_parts:
+                    candidate = clean_text(
+                        " ".join(
+                            current_parts
+                        )
+                    )
+
+                    if candidate:
+                        structural_values.append(
+                            candidate
+                        )
+
+                structural_values = unique_texts(
+                    structural_values
+                )
+
+                if structural_values:
+                    output.setdefault(
+                        canonical_name,
+                        []
+                    ).extend(
+                        structural_values
+                    )
+
+                    continue
+
             value = clean_text(
-                description[
-                    value_start:value_end
-                ]
+                raw_value
             )
 
             value = re.sub(
@@ -5472,21 +6482,108 @@ class ProjectContextExtractor:
                 "scope_exclusions",
                 "excluded_scope",
             ):
-                values.extend(
-                    self._listify(
-                        source.get(
-                            field
+                for raw_value in self._listify(
+                    source.get(
+                        field
+                    )
+                ):
+                    normalized = (
+                        self._normalize_scope_item(
+                            raw_value
                         )
                     )
-                )
 
-        values.extend(
-            sentence
-            for sentence in sentences
-            if is_scope_exclusion_statement(
+                    if not normalized:
+                        continue
+
+                    parts = self._split_scope_items(
+                        normalized
+                    )
+
+                    if parts:
+                        values.extend(
+                            parts
+                        )
+                    else:
+                        values.append(
+                            normalized
+                        )
+
+        # Recover an explicitly labeled negative subsection even when
+        # an older/upstream projection stored positive and negative scope
+        # inside the same textual carrier.
+        for source in sources:
+            for field in (
+                "mvp_scope",
+                "mvp_scope_items",
+            ):
+                for raw_value in self._listify(
+                    source.get(
+                        field
+                    )
+                ):
+                    _, embedded_exclusion = (
+                        partition_scope_sections(
+                            raw_value
+                        )
+                    )
+
+                    if not embedded_exclusion:
+                        continue
+
+                    normalized = (
+                        self._normalize_scope_item(
+                            embedded_exclusion
+                        )
+                    )
+
+                    if not normalized:
+                        continue
+
+                    values.extend(
+                        self._split_scope_items(
+                            normalized
+                        )
+                    )
+
+        for sentence in sentences:
+            if not is_scope_exclusion_statement(
                 sentence
+            ):
+                continue
+
+            _, embedded_exclusion = (
+                partition_scope_sections(
+                    sentence
+                )
             )
-        )
+
+            candidate = (
+                embedded_exclusion
+                or sentence
+            )
+
+            normalized = (
+                self._normalize_scope_item(
+                    candidate
+                )
+            )
+
+            if not normalized:
+                continue
+
+            parts = self._split_scope_items(
+                normalized
+            )
+
+            if parts:
+                values.extend(
+                    parts
+                )
+            else:
+                values.append(
+                    normalized
+                )
 
         return unique_texts(
             values
@@ -5557,6 +6654,17 @@ class ProjectContextExtractor:
         normalized_values: List[str] = []
 
         for raw_value in raw_values:
+            positive_scope, _ = (
+                partition_scope_sections(
+                    raw_value
+                )
+            )
+
+            raw_value = positive_scope
+
+            if not raw_value:
+                continue
+
             if (
                 is_scope_exclusion_statement(
                     raw_value
@@ -9901,17 +11009,52 @@ class ProjectContextExtractor:
                 }
             )
 
-            split_here = (
-                current_is_group
-                and next_is_group
-                and not ends_with_open_modifier(
-                    current
+            # A conjunction followed by an explicit nominal determiner
+            # is a strong structural boundary between two actor
+            # identities, even when one of the role nouns is outside
+            # the lexical actor-head vocabulary.
+            #
+            # Examples:
+            #   "the manager and the field agent"
+            #   "le gestionnaire et l'agent terrain"
+            #
+            # This does not affect coordinated modifiers such as:
+            #   "small and medium businesses"
+            #   "petites et moyennes entreprises"
+            explicit_next_actor_boundary = (
+                conjunction
+                and re.match(
+                    r"^(?:"
+                    r"(?:le|la|les|un|une|des)\s+"
+                    r"|l['\u2019]\s*"
+                    r"|(?:the|a|an)\s+"
+                    r")",
+                    next_fragment,
+                    flags=re.IGNORECASE,
                 )
-                and not (
-                    conjunction
-                    and modifier_fragment(
+                is not None
+            )
+
+            split_here = (
+                (
+                    current_is_group
+                    and next_is_group
+                )
+                or (
+                    explicit_next_actor_boundary
+                    and not modifier_fragment(
                         current
                     )
+                    and not modifier_fragment(
+                        next_fragment
+                    )
+                )
+            ) and not ends_with_open_modifier(
+                current
+            ) and not (
+                conjunction
+                and modifier_fragment(
+                    current
                 )
             )
 
@@ -12862,6 +14005,12 @@ class ProjectContextExtractor:
             if request_initiator:
                 role = ActorRole.USER
 
+            # Preserve the historical workflow-enrichment budget,
+            # but never use it to truncate actors that were already
+            # canonical on entry.
+            if len(output) >= 8:
+                break
+
             seen.add(
                 key
             )
@@ -12874,11 +14023,7 @@ class ProjectContextExtractor:
                 )
             )
 
-            # Preserve the existing canonical packet bound.
-            if len(output) >= 8:
-                break
-
-        return output[:8]
+        return output
 
 
     def _preferred_actor(
@@ -13576,6 +14721,44 @@ class ProjectContextExtractor:
         # Signals describe semantics, not one specific product or
         # industry. They cover common natural formulations of
         # difficulty, friction, unreliability and operational harm.
+        # Causative difficulty is explicit problem authority.
+        #
+        # The construction describes a negative operational consequence:
+        #
+        #   "X makes it difficult to ..."
+        #   "X rend difficile ..."
+        #
+        # It must not be interpreted as positive workflow authority.
+        # Explicit negation remains excluded.
+        causative_difficulty_patterns = (
+            re.compile(
+                r"\b(?:make|makes|made)\s+it\s+"
+                r"(?:more\s+)?(?:difficult|hard)\s+to\b",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"\b(?:rend|rendent|rendait|rendaient|"
+                r"rendra|rendront)\s+"
+                r"(?:plus\s+)?difficiles?\b",
+                re.IGNORECASE,
+            ),
+        )
+
+        negated_causative_difficulty_patterns = (
+            re.compile(
+                r"\b(?:do|does|did)\s+not\s+make\s+it\s+"
+                r"(?:more\s+)?(?:difficult|hard)\s+to\b",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"\bne\s+"
+                r"(?:rend|rendent|rendait|rendaient|"
+                r"rendra|rendront)\s+pas\s+"
+                r"(?:plus\s+)?difficiles?\b",
+                re.IGNORECASE,
+            ),
+        )
+
         difficulty_signals = (
             "il est difficile de",
             "il est souvent difficile de",
@@ -13713,6 +14896,23 @@ class ProjectContextExtractor:
             "manually",
         )
 
+        has_causative_difficulty = (
+            any(
+                pattern.search(
+                    key
+                )
+                for pattern
+                in causative_difficulty_patterns
+            )
+            and not any(
+                pattern.search(
+                    key
+                )
+                for pattern
+                in negated_causative_difficulty_patterns
+            )
+        )
+
         has_difficulty = any(
             signal in key
             for signal in difficulty_signals
@@ -13732,6 +14932,11 @@ class ProjectContextExtractor:
             signal in key
             for signal in strong_problem_signals
         )
+
+        # A causative difficulty statement already expresses
+        # explicit negative operational consequence.
+        if has_causative_difficulty:
+            return True
 
         # A strong negative operational statement is independently
         # sufficient.
@@ -13771,14 +14976,24 @@ class ProjectContextExtractor:
             return ""
 
         prefix_pattern = (
-            r"^(?:le|la|the)?\s*"
-            r"(?:premier|première|premiere|first)?\s*"
-            r"(?:mvp|version|prototype)?\s*"
-            r"(?:sera|serait|is|will be)?\s*"
-            r"(?:limité|limitee|limitée|limited|"
-            r"concentré|concentree|concentrée|focused)?\s*"
-            r"(?:à|sur|to|on|only)?\s*"
-            r"[:\-]?\s*"
+            r"^(?:"
+            r"(?:(?:le|la|the)\s+)?"
+            r"(?:(?:premier|premi\u00e8re|premiere|first)\s+)?"
+            r"mvp\b"
+            r"|"
+            r"(?:(?:le|la|the)\s+)?"
+            r"(?:premier|premi\u00e8re|premiere|first)\s+"
+            r"(?:version|prototype)\b"
+            r"|"
+            r"(?:version|prototype)\s*(?=:)"
+            r")"
+            r"(?:\s+(?:sera|serait|is|will\s+be)\b)?"
+            r"(?:\s+(?:"
+            r"limit\u00e9|limitee|limit\u00e9e|limited|"
+            r"concentr\u00e9|concentree|concentr\u00e9e|focused"
+            r")\b)?"
+            r"(?:\s+(?:\u00e0|sur|to|on|only)\b)?"
+            r"\s*[:\-]?\s*"
         )
 
         for _ in range(
@@ -14730,6 +15945,9 @@ class ProjectContextExtractor:
             "intelligence artificielle": (
                 "intelligence artificielle"
             ),
+            "artificial intelligence": (
+                "intelligence artificielle"
+            ),
             "machine learning": (
                 "machine learning"
             ),
@@ -14956,6 +16174,203 @@ class ProjectContextExtractor:
             )
         )
 
+    def _actor_candidate_is_predicative_clause(
+        self,
+        value: str,
+    ) -> bool:
+        """
+        Reject declarative propositions at the canonical actor-identity
+        boundary.
+
+        Actor identity and facts ABOUT that actor are separate canonical
+        facts. A grammatical subject followed by a modal, delegation verb
+        or copular predicate must therefore not survive as one actor name.
+
+        This authority is intentionally language/grammar based. It has no
+        project, sector, archetype, country or fixture-specific vocabulary.
+        """
+        key = comparison_key(
+            value
+        )
+
+        if not key:
+            return False
+
+        predicate_patterns = (
+            re.compile(
+                r"\b(?:"
+                r"must|should|can|could|"
+                r"may|might|will|would"
+                r")\b"
+                r"(?:\s+(?:"
+                r"only|also|directly|initially|"
+                r"currently|normally|usually"
+                r"))*",
+                re.IGNORECASE,
+            ),
+
+            re.compile(
+                r"\b(?:"
+                r"doit|doivent|"
+                r"devra|devront|"
+                r"devrait|devraient|"
+                r"peut|peuvent|"
+                r"pourra|pourront|"
+                r"pourrait|pourraient"
+                r")\b"
+                r"(?:\s+(?:"
+                r"seulement|uniquement|aussi|"
+                r"directement|initialement|"
+                r"actuellement"
+                r"))*",
+                re.IGNORECASE,
+            ),
+
+            re.compile(
+                r"\b(?:"
+                r"is|are|was|were|"
+                r"becomes?|"
+                r"est|sont|sera|seront|"
+                r"devient|deviennent"
+                r")\b",
+                re.IGNORECASE,
+            ),
+
+            re.compile(
+                r"\b(?:"
+                r"allows?|enables?|lets?|permits?|"
+                r"authorizes?|requires?|"
+                r"permet|permettent|"
+                r"autorise|autorisent|"
+                r"exige|exigent"
+                r")\b",
+                re.IGNORECASE,
+            ),
+        )
+
+        for pattern in predicate_patterns:
+
+            match = pattern.search(
+                key
+            )
+
+            if match is None:
+                continue
+
+            prefix = clean_text(
+                key[
+                    :match.start()
+                ]
+            )
+
+            suffix = clean_text(
+                key[
+                    match.end():
+                ]
+            )
+
+            if (
+                prefix
+                and suffix
+            ):
+                return True
+
+        return False
+
+
+    def _normalize_actor_population_quantifier(
+        self,
+        value: str,
+    ) -> str:
+        """
+        Remove leading population/cardinality language from an actor
+        identity while preserving semantic organization/type modifiers.
+
+        Population quantity describes how many instances of an actor
+        exist; it is not part of the actor's canonical identity.
+
+        The remainder must independently look like an actor phrase.
+        This prevents the normalization from becoming a generic lexical
+        blacklist.
+        """
+        text = clean_text(
+            value
+        )
+
+        if not text:
+            return ""
+
+        quantifier_patterns = (
+            # --------------------------------------------------------
+            # French population/cardinality quantifiers.
+            #
+            # Examples after determiner normalization:
+            #   beaucoup de responsables
+            #   de nombreux responsables
+            #   nombreux responsables
+            #   plusieurs responsables
+            #   grand nombre de responsables
+            # --------------------------------------------------------
+            re.compile(
+                r"^(?:"
+                r"beaucoup\s+de"
+                r"|beaucoup\s+des"
+                r"|de\s+nombreux"
+                r"|de\s+nombreuses"
+                r"|nombreux"
+                r"|nombreuses"
+                r"|plusieurs"
+                r"|grand\s+nombre\s+de"
+                r"|certain\s+nombre\s+de"
+                r")\s+",
+                re.IGNORECASE,
+            ),
+
+            # --------------------------------------------------------
+            # English population/cardinality quantifiers.
+            #
+            # Determiners such as "a" may already have been removed
+            # by the canonical actor determiner normalization.
+            # --------------------------------------------------------
+            re.compile(
+                r"^(?:"
+                r"many(?:\s+of\s+the)?"
+                r"|several(?:\s+of\s+the)?"
+                r"|numerous"
+                r"|large\s+number\s+of"
+                r"|number\s+of"
+                r"|lot\s+of"
+                r"|lots\s+of"
+                r")\s+",
+                re.IGNORECASE,
+            ),
+        )
+
+        for pattern in quantifier_patterns:
+            match = pattern.match(
+                text
+            )
+
+            if match is None:
+                continue
+
+            remainder = clean_text(
+                text[
+                    match.end():
+                ]
+            )
+
+            if (
+                remainder
+                and self._looks_like_actor_phrase(
+                    remainder
+                )
+            ):
+                return remainder
+
+        return text
+
+
     def _clean_actor(
         self,
         value: str,
@@ -14977,6 +16392,20 @@ class ProjectContextExtractor:
         if not text:
             return ""
 
+        # A leading coordinator belongs to list/clause syntax and must
+        # never become part of canonical actor identity. Internal
+        # conjunctions such as "research and development director"
+        # remain untouched.
+        text = re.sub(
+            r"^(?:(?:and|or|et|ou)\s+)+",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+
+        if not text:
+            return ""
+
         text = re.split(
             r"\s*(?::|\u2014|\u2013)\s*"
             r"|\s+\b(?:"
@@ -14993,11 +16422,33 @@ class ProjectContextExtractor:
             flags=re.IGNORECASE,
         )[0]
 
+        text = clean_text(
+            text
+        )
+
+        if (
+            not text
+            or self._actor_candidate_is_predicative_clause(
+                text
+            )
+        ):
+            return ""
+
         text = re.sub(
-            r"^(?:les|des|aux|the|a|an)\s+",
+            r"^(?:"
+            r"(?:le|la|les|un|une|des|aux)\s+"
+            r"|l['\u2019]\s*"
+            r"|(?:the|a|an)\s+"
+            r")",
             "",
             text,
             flags=re.IGNORECASE,
+        )
+
+        text = (
+            self._normalize_actor_population_quantifier(
+                text
+            )
         )
 
         text = clean_text(
