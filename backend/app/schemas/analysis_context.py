@@ -62,6 +62,50 @@ def clean_text(value: Any) -> str:
     ).strip()
 
 
+def clean_structured_text(value: Any) -> str:
+    """
+    Normalize structured user-authored text without erasing
+    semantic line boundaries.
+
+    Headings, sections, lists, and paragraph boundaries remain
+    available to deterministic semantic extractors.
+
+    clean_text() remains the canonical authority for flat
+    atomic text.
+    """
+    if value is None:
+        return ""
+
+    text = unicodedata.normalize(
+        "NFC",
+        str(value).replace("\x00", " "),
+    )
+
+    text = (
+        text
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+    )
+
+    lines = [
+        " ".join(
+            line.split()
+        )
+        for line
+        in text.split("\n")
+    ]
+
+    while lines and not lines[0]:
+        lines.pop(0)
+
+    while lines and not lines[-1]:
+        lines.pop()
+
+    return "\n".join(
+        lines
+    )
+
+
 def comparison_key(value: Any) -> str:
     """
     Crée une clé normalisée utilisée uniquement pour les comparaisons.

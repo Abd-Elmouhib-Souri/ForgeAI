@@ -37,3 +37,116 @@ test("analysis journey labels use valid UTF-8", async () => {
   assert.match(source, /Complétion/);
   assert.match(source, /étape par étape/);
 });
+
+// S4.33 universal production source encoding contract
+test(
+  "all frontend production sources avoid encoding corruption artifacts",
+  async () => {
+    const {
+      readdir,
+      readFile: readProductionFile,
+    } = await import("node:fs/promises");
+
+    const {
+      join,
+      relative,
+    } = await import("node:path");
+
+    const {
+      fileURLToPath,
+    } = await import("node:url");
+
+    const frontendRoot = fileURLToPath(
+      new URL("../", import.meta.url)
+    );
+
+    const productionRoots = [
+      "app",
+      "components",
+      "lib",
+    ];
+
+    const extensions = new Set([
+      ".ts",
+      ".tsx",
+      ".js",
+      ".jsx",
+      ".mjs",
+      ".cjs",
+    ]);
+
+    const corruptionPattern =
+      /(?:\uFFFD|[\u0080-\u009F]|\u00E2\u20AC|\u00C3[\u00A0-\u00BF])/u;
+
+    const checked = [];
+
+    async function walk(directory) {
+      const entries = await readdir(
+        directory,
+        {
+          withFileTypes: true,
+        }
+      );
+
+      for (const entry of entries) {
+        const fullPath = join(
+          directory,
+          entry.name
+        );
+
+        if (entry.isDirectory()) {
+          await walk(fullPath);
+          continue;
+        }
+
+        const extensionIndex =
+          entry.name.lastIndexOf(".");
+
+        const extension =
+          extensionIndex >= 0
+            ? entry.name.slice(extensionIndex)
+            : "";
+
+        if (!extensions.has(extension)) {
+          continue;
+        }
+
+        const currentSource =
+          await readProductionFile(
+            fullPath,
+            "utf8"
+          );
+
+        checked.push(
+          relative(
+            frontendRoot,
+            fullPath
+          )
+        );
+
+        assert.doesNotMatch(
+          currentSource,
+          corruptionPattern,
+          (
+            "Encoding corruption artifact in " +
+            relative(frontendRoot, fullPath)
+          )
+        );
+      }
+    }
+
+    for (const root of productionRoots) {
+      await walk(
+        join(
+          frontendRoot,
+          root
+        )
+      );
+    }
+
+    assert.ok(
+      checked.length > 0,
+      "No frontend production source was inspected"
+    );
+  }
+);

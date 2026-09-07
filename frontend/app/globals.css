@@ -185,7 +185,7 @@
     min-height: 100vh;
     background: var(--forge-gradient-page);
     color: var(--forge-text);
-    overflow-x: hidden;
+    overflow-x: clip;
   }
 
   .forge-container {

@@ -21,6 +21,7 @@ from app.services.project_context_extractor import (
 from app.services.clarification_answer_projector import (
     clarification_answer_projector,
 )
+from app.schemas.analysis_context import clean_structured_text
 
 
 class IdeaReadinessChecker:
@@ -114,7 +115,7 @@ class IdeaReadinessChecker:
             )
         )
 
-        description = clean_text(
+        description = clean_structured_text(
             description
             or project_context.get(
                 "description"

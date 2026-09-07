@@ -50,6 +50,9 @@ TECHNICAL_KEYS_TO_HIDE = {
     "guard_context",
     "internal_context",
     "project_context_used",
+    # Durable Sprint 4 plans are published only through their owner-scoped
+    # Project Manager endpoints.  They must not leak into generic report data.
+    "project_manager",
 
     # Internal contamination-control lists - never public
     "forbidden_offtopic_terms",

@@ -11,7 +11,6 @@ import {
 } from "../_lib/analysis-helpers";
 
 import ReportSection from "../_components/ReportSection";
-import ReportNavigation from "../_components/ReportNavigation";
 import { EmptyState } from "../_components/UIBlocks";
 
 import ReportIntro from "./ReportIntro";
@@ -60,7 +59,6 @@ export default function FinalReportSection({
     <section className="space-y-6">
       <ReportIntro analysisData={analysisData} project={project} />
 
-      <ReportNavigation />
 
       <AnalysisJourneySection analysisData={analysisData} project={project} />
 

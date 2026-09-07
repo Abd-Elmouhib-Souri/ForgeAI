@@ -1495,8 +1495,11 @@ class EvidenceLedger:
     @staticmethod
     def _has_text(value: Any) -> bool:
         if isinstance(value, (list, tuple, set)):
-            return any(str(item or "").strip() for item in value)
-        return bool(str(value or "").strip())
+            return any(
+                str(item or "").strip() not in {"", "—", "-", "n/a", "na"}
+                for item in value
+            )
+        return str(value or "").strip().casefold() not in {"", "—", "-", "n/a", "na"}
 
     @classmethod
     def _text(cls, value: Any) -> str:

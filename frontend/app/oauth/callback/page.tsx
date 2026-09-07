@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useMemo, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { useForgeLanguage } from "@/lib/language-context";
 import ForgeLanguageSwitch from "@/components/forge/ForgeLanguageSwitch";
@@ -31,8 +31,7 @@ const content = {
 
 function OAuthCallbackContent() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const { loginWithToken } = useAuth();
+  const { completeOAuthLogin } = useAuth();
   const { lang } = useForgeLanguage();
 
   const t = useMemo(() => content[lang], [lang]);
@@ -45,18 +44,9 @@ function OAuthCallbackContent() {
 
   useEffect(() => {
     const handleOAuthCallback = async () => {
-      const token = searchParams.get("access_token");
-
-      if (!token) {
-        setMessage(t.missing);
-        setTimeout(() => router.replace("/login"), 1500);
-        return;
-      }
-
-      const success = await loginWithToken(token);
+      const success = await completeOAuthLogin();
 
       if (success) {
-        window.history.replaceState({}, document.title, "/oauth/callback");
         router.replace("/dashboard");
       } else {
         setMessage(t.failed);
@@ -65,7 +55,7 @@ function OAuthCallbackContent() {
     };
 
     handleOAuthCallback();
-  }, [searchParams, loginWithToken, router, t.failed, t.missing]);
+  }, [completeOAuthLogin, router, t.failed]);
 
   return (
     <main className="forge-page relative flex min-h-screen items-center justify-center px-6 py-10">

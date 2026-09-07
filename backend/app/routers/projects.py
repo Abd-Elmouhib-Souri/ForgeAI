@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any, List, Optional
@@ -28,6 +29,9 @@ from app.services.evidence_ledger import evidence_ledger
 from app.services.final_report_builder import (
     final_report_builder,
 )
+from app.services.project_management_plan_service import (
+    project_management_plan_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +40,64 @@ router = APIRouter(prefix="/projects", tags=["Projects"])
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+async def _generate_sprint4_plan_automatically(
+    project: Project,
+    db: AsyncSession,
+) -> bool:
+    """Generate Sprint 4 after a completed analysis without blocking it."""
+    try:
+        analysis_data = dict(project.analysis_data or {})
+        previous = project_management_plan_service.deserialize_current(
+            analysis_data.get("project_manager")
+            if isinstance(analysis_data.get("project_manager"), dict)
+            else None
+        )
+        plan = await project_management_plan_service.generate(
+            project_id=project.id,
+            analysis_data=analysis_data,
+            settings=previous.settings if previous else None,
+            revision=(previous.revision + 1) if previous else 1,
+        )
+        analysis_data["project_manager"] = (
+            project_management_plan_service.serialize_with_history(
+                current=plan,
+                previous_envelope=analysis_data.get("project_manager"),
+            )
+        )
+        project.analysis_data = analysis_data
+        await db.commit()
+        logger.info("[ProjectAnalysis] Sprint 4 generated automatically | project_id=%s", project.id)
+        return True
+    except Exception:
+        await db.rollback()
+        logger.exception(
+            "[ProjectAnalysis] Automatic Sprint 4 generation failed | project_id=%s",
+            project.id,
+        )
+        return False
+
+
+async def _retry_automatic_sprint4_plan(project_id: int) -> None:
+    """Retry free-provider generation without replacing a current plan."""
+    for delay_seconds in (60, 180):
+        await asyncio.sleep(delay_seconds)
+        async with AsyncSessionLocal() as retry_db:
+            project = await retry_db.get(Project, project_id)
+            if project is None or project.analysis_status != "completed":
+                return
+            current = project_management_plan_service.deserialize_current(
+                project.analysis_data.get("project_manager")
+                if isinstance(project.analysis_data, dict)
+                else None
+            )
+            if current and not project_management_plan_service.is_stale(
+                plan=current, project_id=project.id, analysis_data=project.analysis_data
+            ):
+                return
+            if await _generate_sprint4_plan_automatically(project, retry_db):
+                return
 
 
 def normalize_market_region(region: Optional[str]) -> str:
@@ -129,7 +191,20 @@ def _invalidate_analysis_after_context_change(
     project.analysis_status = "not_started"
     project.analysis_step = "Projet modifié - relancez l’analyse"
     project.analysis_progress = 0
-    project.analysis_data = None
+    # Sprint 4 plans are durable revisions.  Keep the latest plan internally
+    # so the dedicated Project Manager endpoint can report it as stale against
+    # the next canonical context instead of silently losing the user's work.
+    previous_data = project.analysis_data or {}
+    project_manager = (
+        previous_data.get("project_manager")
+        if isinstance(previous_data, dict)
+        else None
+    )
+    project.analysis_data = (
+        {"project_manager": project_manager}
+        if isinstance(project_manager, dict)
+        else None
+    )
     project.analysis_error = None
     project.analysis_started_at = None
     project.analysis_completed_at = None
@@ -323,12 +398,20 @@ def _safe_public_source_list(value: Any) -> List[dict]:
         return []
 
     result: List[dict] = []
+    seen: set[str] = set()
 
     for item in value:
         clean_item = _safe_public_source_item(item)
 
-        if clean_item.get("title") or clean_item.get("url"):
+        identity = str(
+            clean_item.get("canonical_source_id")
+            or clean_item.get("url")
+            or clean_item.get("title")
+            or ""
+        ).strip().casefold()
+        if identity and identity not in seen:
             result.append(clean_item)
+            seen.add(identity)
 
     return result
 
@@ -1380,6 +1463,13 @@ async def run_project_analysis_background(project_id: int, run_id: str) -> None:
             project.analysis_started_at = project.analysis_started_at or utc_now()
             project.analysis_completed_at = None
 
+            previous_analysis_data = project.analysis_data or {}
+            project_manager_snapshot = (
+                previous_analysis_data.get("project_manager")
+                if isinstance(previous_analysis_data, dict)
+                else None
+            )
+
             await db.commit()
 
             await set_analysis_progress(
@@ -1451,6 +1541,11 @@ async def run_project_analysis_background(project_id: int, run_id: str) -> None:
             readiness_analysis_data = _build_readiness_analysis_data(
                 idea_readiness
             )
+
+            if isinstance(project_manager_snapshot, dict):
+                readiness_analysis_data["project_manager"] = (
+                    project_manager_snapshot
+                )
 
             if not idea_readiness.get("ready_for_agents", False):
                 await _persist_needs_clarification(
@@ -1978,6 +2073,13 @@ async def run_project_analysis_background(project_id: int, run_id: str) -> None:
 
             await db.commit()
 
+            # Sprint 4 is part of the analysis pipeline: users should see a
+            # generated plan as soon as the strategic analysis is complete.
+            # A free-provider failure is isolated and never downgrades the
+            # completed analysis itself.
+            if not await _generate_sprint4_plan_automatically(project, db):
+                asyncio.create_task(_retry_automatic_sprint4_plan(project.id))
+
             logger.info(
                 "[ProjectAnalysis] Analyse complète terminée | project_id=%s | score=%s | partial=%s",
                 project_id,
@@ -2397,7 +2499,17 @@ async def start_project_analysis(
     project.analysis_status = "queued"
     project.analysis_step = "Analyse en attente d’un créneau"
     project.analysis_progress = 2
-    project.analysis_data = None
+    existing_analysis_data = project.analysis_data or {}
+    project_manager = (
+        existing_analysis_data.get("project_manager")
+        if isinstance(existing_analysis_data, dict)
+        else None
+    )
+    project.analysis_data = (
+        {"project_manager": project_manager}
+        if isinstance(project_manager, dict)
+        else None
+    )
     project.analysis_error = None
     project.analysis_started_at = utc_now()
     project.analysis_completed_at = None

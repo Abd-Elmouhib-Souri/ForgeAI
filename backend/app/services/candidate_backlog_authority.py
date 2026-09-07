@@ -77,6 +77,8 @@ class CandidateBacklogAuthorityValidator:
     _POSITIVE_NAMESPACES = frozenset(
         {
             "actor",
+            "problem",
+            "solution",
             "workflow",
             "mvp_scope",
             "constraint",
@@ -247,6 +249,83 @@ class CandidateBacklogAuthorityValidator:
                 errors=errors,
             )
 
+        covered_mvp_scope: set[str] = set()
+
+        for _, reference in (
+            self._candidate_provenance_refs(
+                candidate
+            )
+        ):
+
+            cleaned = clean_text(
+                reference
+            )
+
+            if (
+                not cleaned
+                or ":" not in cleaned
+            ):
+                continue
+
+            raw_namespace, raw_value = (
+                cleaned.split(
+                    ":",
+                    1,
+                )
+            )
+
+            namespace = (
+                clean_text(
+                    raw_namespace
+                )
+                .casefold()
+            )
+
+            if namespace != "mvp_scope":
+                continue
+
+            value = self._normalize_value(
+                raw_value
+            )
+
+            if (
+                value
+                and value
+                in positive_index.get(
+                    "mvp_scope",
+                    set(),
+                )
+            ):
+                covered_mvp_scope.add(
+                    value
+                )
+
+        missing_mvp_scope = [
+            clean_text(value)
+            for value in context.mvp_scope
+            if (
+                self._normalize_value(value)
+                and self._normalize_value(value)
+                not in covered_mvp_scope
+            )
+        ]
+
+        if missing_mvp_scope:
+
+            self._add_error(
+                code="canonical_scope_undercovered",
+                message=(
+                    "Candidate backlog does not preserve "
+                    "all explicit positive MVP scope "
+                    "commitments: "
+                    + ", ".join(
+                        missing_mvp_scope
+                    )
+                ),
+                error_codes=error_codes,
+                errors=errors,
+            )
+
         return CandidateBacklogAuthorityResultV1(
             is_valid=(
                 len(
@@ -320,6 +399,25 @@ class CandidateBacklogAuthorityValidator:
                 "actor",
                 actor.name,
             )
+
+        for value in (
+            list(context.problem.actors_affected)
+            + [context.problem.pain, context.problem.frequency, context.problem.severity]
+            + list(context.problem.current_alternatives)
+            + list(context.problem.consequences)
+        ):
+            self._index_value(index, "problem", value)
+
+        for value in (
+            [
+                context.solution.mechanism,
+                context.solution.core_value,
+                context.solution.delivery_mode,
+            ]
+            + list(context.solution.required_capabilities)
+            + list(context.solution.differentiators)
+        ):
+            self._index_value(index, "solution", value)
 
         for workflow in context.priority_workflows:
 

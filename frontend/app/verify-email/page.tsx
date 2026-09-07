@@ -104,7 +104,7 @@ function VerifyEmailContent() {
           </div>
 
           <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-sky-100 text-3xl">
-            {status === "loading" ? "â³" : status === "success" ? "✅" : "âš ï¸"}
+            {status === "loading" ? "⏳" : status === "success" ? "✅" : "⚠️"}
           </div>
 
           <h1 className="text-4xl font-black tracking-tight text-slate-950">

@@ -20,7 +20,8 @@ class ProjectCreate(BaseModel):
     title: str
     description: str
     industry: Optional[str] = None
-    market_region: str = "Tunisie"
+    # A missing region must remain unknown for the context-confidence gate.
+    market_region: str = ""
 
     # Language Lock.
     # fr => toute l’analyse doit sortir en français.
@@ -144,7 +145,7 @@ class ProjectResponse(BaseModel):
     title: str
     description: str
     industry: Optional[str] = None
-    market_region: str = "Tunisie"
+    market_region: str = ""
     output_language: str = "fr"
     status: str
     startup_score: Optional[float] = None

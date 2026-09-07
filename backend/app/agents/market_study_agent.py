@@ -758,6 +758,18 @@ Expected JSON:
             or project_context.get("target_market")
             or "target users"
         )
+        if not target_users:
+            requested_language = str(
+                structured.get("output_language")
+                or project_context.get("output_language")
+                or state.get("output_language")
+                or "fr"
+            ).lower()
+            target_users = (
+                "utilisateurs cibles"
+                if requested_language.startswith("fr")
+                else "target users"
+            )
 
         problem = self._safe_text(
             structured.get("problem")

@@ -326,6 +326,12 @@ class StartupEvaluatorGraph:
             analysis_data[
                 "project_context_meta"
             ] = {
+                **dict(
+                    analysis_data.get(
+                        "project_context_meta"
+                    )
+                    or {}
+                ),
                 "domain_label": (
                     project_context.get(
                         "domain_label"
@@ -588,6 +594,27 @@ class StartupEvaluatorGraph:
         stored[
             "legacy_project_context"
         ] = legacy_project_context
+
+        from app.services.project_context_freshness import (
+            project_context_freshness_authority,
+        )
+
+        stored[
+            "project_context_meta"
+        ] = {
+            **dict(
+                stored.get(
+                    "project_context_meta"
+                )
+                or {}
+            ),
+            **(
+                project_context_freshness_authority
+                .build_metadata(
+                    project_context_packet
+                )
+            ),
+        }
 
         stored[
             "context_extraction_quality"

@@ -23,7 +23,11 @@ from typing import Any, Dict, List
 
 from app.services.domain_integrity_guard import normalize_output_language
 from app.services.project_archetype_resolver import project_archetype_resolver
-from app.services.scope_polarity import is_scope_exclusion_statement
+from app.services.scope_polarity import (
+    is_scope_exclusion_statement,
+    partition_scope_sections,
+)
+from app.schemas.analysis_context import clean_structured_text
 
 class ProjectIntelligenceLayer:
     DEFAULT_WEAK_TERMS = {
@@ -1007,8 +1011,12 @@ class ProjectIntelligenceLayer:
             or project_context.get("title")
             or ""
         )
-        description = self._clean_text(
+        description = clean_structured_text(
             description or project_context.get("description") or ""
+        )
+        description = "\n".join(
+            self._clean_text(line)
+            for line in description.split("\n")
         )
         industry = self._clean_text(
             industry or project_context.get("industry") or ""
@@ -1044,17 +1052,43 @@ class ProjectIntelligenceLayer:
                 "the first version would focus only on",
                 "the first version would focus on",
                 "the first version focuses on",
+                "the first version includes",
+                "first version includes",
+                "the first version comprises",
+                "first version comprises",
                 "the mvp should focus on",
                 "mvp should focus on",
                 "the mvp will be limited to",
                 "the mvp is limited to",
                 "mvp limited to",
+                "the mvp must include",
+                "mvp must include",
+                "the mvp should include",
+                "mvp should include",
+                "the mvp will include",
+                "mvp will include",
+                "the mvp includes",
+                "mvp includes",
+                "the mvp must support",
+                "mvp must support",
+                "the mvp should support",
+                "mvp should support",
+                "the mvp will support",
+                "mvp will support",
+                "mvp capabilities:",
+                "mvp features:",
+                "mvp functionality:",
+                "mvp scope:",
                 "the mvp is",
                 "mvp:",
                 "la premiere version se concentrerait uniquement sur",
                 "la première version se concentrerait uniquement sur",
                 "la premiere version se concentre sur",
                 "la première version se concentre sur",
+                "la premiere version comprend",
+                "la première version comprend",
+                "la premiere version inclut",
+                "la première version inclut",
                 "le mvp doit se concentrer sur",
                 "le mvp sera limité à",
                 "le mvp sera limite a",
@@ -1062,10 +1096,39 @@ class ProjectIntelligenceLayer:
                 "le mvp est limite a",
                 "mvp limité à",
                 "mvp limite a",
+                "le mvp doit inclure",
+                "le mvp doit comprendre",
+                "le mvp doit permettre",
+                "le mvp inclut",
+                "le mvp comprend",
+                "le mvp permettra",
+                "le mvp permet",
+                "capacités mvp :",
+                "capacites mvp :",
+                "fonctionnalités mvp :",
+                "fonctionnalites mvp :",
+                "périmètre mvp :",
+                "perimetre mvp :",
                 "le mvp est",
                 "mvp :",
             ),
             stop_labels=(
+                "explicitly out of scope for the mvp:",
+                "out of scope for the mvp:",
+                "outside the mvp scope:",
+                "mvp exclusions:",
+                "scope exclusions:",
+                "the exclusions of the mvp:",
+                "exclusions of the mvp:",
+                "exclusions from the mvp:",
+                "hors périmètre du mvp :",
+                "hors perimetre du mvp :",
+                "exclusions du mvp :",
+                "business objective:",
+                "business goal:",
+                "objectif métier :",
+                "objectif metier :",
+                "objectif commercial :",
                 "it would not initially include",
                 "it will not initially include",
                 "the main operational user",
@@ -1099,6 +1162,10 @@ class ProjectIntelligenceLayer:
                 "la réussite sera mesurée par",
             ),
         )
+        explicit_mvp, _ = partition_scope_sections(
+            explicit_mvp
+        )
+
         explicit_business_model = self._extract_labeled_section(
             description,
             labels=("the business model can be", "the business model is", "business model:", "le modèle économique peut être", "le modele economique peut etre", "le modèle économique est", "modele economique :"),
@@ -1172,11 +1239,11 @@ class ProjectIntelligenceLayer:
         mvp_scope = (
             self._first_available_non_scope_exclusion(
                 explicit_mvp,
-                project_context.get("mvp_scope"),
-                detected.get("mvp_scope"),
-                self._extract_sentence(
-                    description,
-                    self.MVP_HINTS(),
+                project_context.get(
+                    "mvp_scope"
+                ),
+                detected.get(
+                    "mvp_scope"
                 ),
             )
         )
@@ -2092,6 +2159,113 @@ class ProjectIntelligenceLayer:
             r"(?:l['’]utilisateur\s+opérationnel\s+principal|l['’]utilisateur\s+principal)\s+(?:est|serait)\s+(.+?)(?:\.|,\s+mais|\n|$)",
         ]
         roles: List[str] = []
+
+        # Explicit actor-heading authority:
+        #
+        # A heading such as "Primary operational users:" or
+        # "External users:" explicitly establishes actor identity.
+        # Items declared beneath such a heading must therefore not
+        # depend on the generic actor vocabulary used for heuristic
+        # prose.
+        #
+        # This parser preserves line boundaries and assigns no
+        # business role (payer, demand, supply, partner, etc.).
+        explicit_actor_headings = {
+            "primary operational users",
+            "external users",
+            "target users",
+            "utilisateurs op\u00e9rationnels principaux",
+            "utilisateurs operationnels principaux",
+            "utilisateurs externes",
+            "utilisateurs cibles",
+        }
+
+        active_actor_section = False
+
+        for raw_line in (
+            str(description or "")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+            .split("\n")
+        ):
+            line = self._clean_text(
+                raw_line
+            )
+
+            if not line:
+                continue
+
+            bullet_match = re.match(
+                r"^(?:[-*]|\u2022|\d+[.)])\s+(.+)$",
+                line,
+            )
+
+            if (
+                active_actor_section
+                and bullet_match
+            ):
+                candidate = self._clean_actor_phrase(
+                    bullet_match.group(1)
+                )
+
+                if candidate:
+                    roles.append(
+                        candidate
+                    )
+
+                continue
+
+            heading_match = re.match(
+                r"^([^:]+):(?:\s*(.*))?$",
+                line,
+            )
+
+            if heading_match:
+                heading_key = (
+                    self._clean_text(
+                        heading_match.group(1)
+                    )
+                    .casefold()
+                    .strip()
+                )
+
+                if (
+                    heading_key
+                    in explicit_actor_headings
+                ):
+                    active_actor_section = True
+
+                    inline_value = self._clean_text(
+                        heading_match.group(2)
+                        or ""
+                    )
+
+                    if inline_value:
+                        for item in self._split_items(
+                            inline_value
+                        ):
+                            candidate = (
+                                self._clean_actor_phrase(
+                                    item
+                                )
+                            )
+
+                            if candidate:
+                                roles.append(
+                                    candidate
+                                )
+
+                else:
+                    active_actor_section = False
+
+                continue
+
+            if active_actor_section:
+                # Structured actor sections consume explicit list
+                # items only. Narrative text cannot silently become
+                # actor identity.
+                active_actor_section = False
+
         for pattern in patterns:
             match = re.search(pattern, description, flags=re.IGNORECASE)
             if match:
@@ -2105,14 +2279,20 @@ class ProjectIntelligenceLayer:
 
     def _extract_economic_buyer_from_description(self, description: str) -> str:
         patterns = [
+            r"(?:^|[\r\n]+|(?<=[.!?])\s+)(?:(?:the\s+)?(?:economic\s+buyer|budget\s+owner|paying\s+customer|paying\s+client)|acheteur\s+\u00e9conomique|d\u00e9tenteur\s+du\s+budget|client\s+payeur)[ \t]*:[ \t]*(?:\r?\n[ \t]*(?:[-*]|\u2022)[ \t]*)?([^\r\n.;]+)",
             r"(?:the\s+)?economic\s+buyer\s+(?:is|would\s+be|will\s+be|would\s+probably\s+be|is\s+probably)\s+(.+?)(?:\.|,\s+but|\n|$)",
             r"(?:the\s+)?budget\s+owner\s+(?:is|would\s+be|will\s+be)\s+(.+?)(?:\.|,\s+but|\n|$)",
             r"(?:l['’]acheteur\s+économique|le\s+détenteur\s+du\s+budget)\s+(?:est|serait)\s+(.+?)(?:\.|,\s+mais|\n|$)",
         ]
+        explicit_declaration_pattern = patterns[0]
         for pattern in patterns:
             match = re.search(pattern, description, flags=re.IGNORECASE)
             if match:
                 candidate = self._clean_actor_phrase(match.group(1))
+                if pattern == explicit_declaration_pattern:
+                    if candidate:
+                        return candidate
+                    continue
                 if self._is_actor_phrase(candidate):
                     return candidate
         return ""
@@ -2161,32 +2341,172 @@ class ProjectIntelligenceLayer:
         labels: tuple[str, ...],
         stop_labels: tuple[str, ...],
     ) -> str:
-        clean = self._clean_text(text)
+        clean = self._clean_text(
+            text
+        )
+
         if not clean:
             return ""
 
         lowered = clean.lower()
-        starts: list[tuple[int, str]] = []
+
+        # Semantic-section invariant:
+        #
+        # A shorter candidate label may occur lexically inside
+        # a longer stop heading. Such a nested occurrence cannot
+        # start another semantic section.
+        #
+        # Project identity, geography, sector and feature vocabulary
+        # never participate in this decision.
+        stop_spans: list[
+            tuple[int, int]
+        ] = []
+
+        for stop in stop_labels:
+            stop_key = stop.lower()
+
+            if not stop_key:
+                continue
+
+            search_from = 0
+
+            while True:
+                index = lowered.find(
+                    stop_key,
+                    search_from,
+                )
+
+                if index < 0:
+                    break
+
+                stop_spans.append(
+                    (
+                        index,
+                        index
+                        + len(
+                            stop_key
+                        ),
+                    )
+                )
+
+                search_from = (
+                    index
+                    + 1
+                )
+
+        starts: list[
+            tuple[int, str]
+        ] = []
+
         for label in labels:
-            index = lowered.find(label.lower())
-            if index >= 0:
-                starts.append((index, label))
+            label_key = label.lower()
+
+            if not label_key:
+                continue
+
+            search_from = 0
+
+            while True:
+                index = lowered.find(
+                    label_key,
+                    search_from,
+                )
+
+                if index < 0:
+                    break
+
+                label_end = (
+                    index
+                    + len(
+                        label_key
+                    )
+                )
+
+                nested_in_stop = any(
+                    stop_start
+                    <= index
+                    and label_end
+                    <= stop_end
+                    for (
+                        stop_start,
+                        stop_end,
+                    )
+                    in stop_spans
+                )
+
+                if not nested_in_stop:
+                    starts.append(
+                        (
+                            index,
+                            label,
+                        )
+                    )
+
+                    break
+
+                search_from = (
+                    index
+                    + 1
+                )
+
         if not starts:
             return ""
 
-        start_index, label = min(starts, key=lambda item: item[0])
-        content_start = start_index + len(label)
-        end_index = len(clean)
-        for stop in stop_labels:
-            index = lowered.find(stop.lower(), content_start)
-            if index >= 0:
-                end_index = min(end_index, index)
+        start_index, label = min(
+            starts,
+            key=lambda item: item[0],
+        )
 
-        value = clean[content_start:end_index].strip(" \t\n:;.-")
-        value = re.sub(r"\s+", " ", value).strip()
+        content_start = (
+            start_index
+            + len(
+                label
+            )
+        )
+
+        end_index = len(
+            clean
+        )
+
+        for stop in stop_labels:
+            stop_key = stop.lower()
+
+            if not stop_key:
+                continue
+
+            index = lowered.find(
+                stop_key,
+                content_start,
+            )
+
+            if index >= 0:
+                end_index = min(
+                    end_index,
+                    index,
+                )
+
+        value = clean[
+            content_start:
+            end_index
+        ].strip(
+            " \t\n:;.-"
+        )
+
+        value = re.sub(
+            r"\s+",
+            " ",
+            value,
+        ).strip()
+
         if not value:
             return ""
-        return value[0].upper() + value[1:] if len(value) > 1 else value.upper()
+
+        return (
+            value[0].upper()
+            + value[1:]
+            if len(value) > 1
+            else value.upper()
+        )
 
     def _hint_matches(
         self,
@@ -2959,16 +3279,204 @@ class ProjectIntelligenceLayer:
             "technology", "technologie", "software", "saas", "traceability",
             "tracabilite", "digital", "human resources", "sme saas",
         }
+        canonical_domain_material = [
+            self._normalize_concept(item)
+            for item in domain_concepts
+            if self._is_specific_concept(item)
+        ]
+
+        has_generic_industry_wrapper = any(
+            part in generic_industry_parts
+            for part in industry_parts
+        )
+
+        category_context_terms = {
+            "business",
+            "businesses",
+            "industry",
+            "industries",
+            "operation",
+            "operations",
+            "sector",
+            "sectors",
+            "secteur",
+            "secteurs",
+            "service",
+            "services",
+        }
+
+        def concept_tokens(
+            value: str,
+        ) -> set[str]:
+            return {
+                token
+                for token in self._concept_tokens(value)
+                if (
+                    token not in self.CONCEPT_STOP_WORDS
+                    and token not in self.GENERIC_CONCEPT_TERMS
+                )
+            }
+
+        def has_distinct_canonical_candidate(
+            part: str,
+        ) -> bool:
+            return any(
+                candidate
+                and candidate != part
+                for candidate in canonical_domain_material
+            )
+
+        def has_canonical_refinement(
+            part: str,
+        ) -> bool:
+            part_tokens = concept_tokens(
+                part
+            )
+
+            if not part_tokens:
+                return False
+
+            return any(
+                (
+                    candidate != part
+                    and part_tokens
+                    < concept_tokens(candidate)
+                )
+                for candidate in canonical_domain_material
+            )
+
+        def can_own_explicit_query_identity(
+            part: str,
+        ) -> bool:
+            if part in generic_industry_parts:
+                return False
+
+            if not self._is_specific_concept(
+                part
+            ):
+                return False
+
+            if re.search(
+                r"\b(?:and|or|et|ou)\b",
+                part,
+                flags=re.IGNORECASE,
+            ):
+                return False
+
+            tokens = concept_tokens(
+                part
+            )
+
+            if not tokens:
+                return False
+
+            if not has_distinct_canonical_candidate(
+                part
+            ):
+                return True
+
+            contextual_tokens = {
+                token
+                for token in tokens
+                if token not in category_context_terms
+            }
+
+            has_context_container = bool(
+                tokens
+                &
+                category_context_terms
+            )
+
+            if (
+                has_context_container
+                and len(contextual_tokens) <= 1
+            ):
+                return False
+
+            if len(
+                contextual_tokens
+            ) >= 2:
+                return True
+
+            if (
+                has_generic_industry_wrapper
+                and has_canonical_refinement(
+                    part
+                )
+            ):
+                return True
+
+            return False
+
         specific_industry = next(
-            (part for part in industry_parts if part not in generic_industry_parts),
+            (
+                part
+                for part in industry_parts
+                if can_own_explicit_query_identity(
+                    part
+                )
+            ),
             "",
         )
+
+        non_executable_industry_parts = {
+            part
+            for part in industry_parts
+            if not can_own_explicit_query_identity(
+                part
+            )
+        }
+
+        canonical_domain_candidates = [
+            item
+            for item in domain_concepts
+            if (
+                self._normalize_concept(item)
+                not in non_executable_industry_parts
+            )
+        ]
+
         archetype_terms = self._safe_list(archetype_context.get("search_terms"))
-        archetype_domain = self._pick_market_domain_concept(
-            archetype_terms,
-            archetype_terms,
+
+        # Domain-source authority:
+        #
+        # explicit current project fact
+        #     > canonical structured project domain
+        #     > advisory archetype discovery hint
+        #     > generic fallback.
+        #
+        # Guarding the helper calls is intentional: an absent source must
+        # remain absent here instead of materializing the helper's generic
+        # "business sector" fallback before higher authorities are exhausted.
+        canonical_domain = (
+            self._pick_market_domain_concept(
+                canonical_domain_candidates,
+                canonical_domain_candidates,
+            )
+            if any(
+                self._is_specific_concept(item)
+                for item in canonical_domain_candidates
+            )
+            else ""
         )
-        domain = archetype_domain or specific_industry or self._pick_market_domain_concept(domain_concepts, search_concepts)
+
+        archetype_domain = (
+            self._pick_market_domain_concept(
+                archetype_terms,
+                archetype_terms,
+            )
+            if any(
+                self._is_specific_concept(item)
+                for item in archetype_terms
+            )
+            else ""
+        )
+
+        domain = (
+            specific_industry
+            or canonical_domain
+            or archetype_domain
+        )
         target = self._pick_query_concept(target_terms, [], 0)
 
         def useful(values: List[str], limit: int = 4) -> List[str]:
@@ -3702,13 +4210,12 @@ class ProjectIntelligenceLayer:
         A target user, organization or industry label must never be
         promoted automatically to economic buyer.
         """
-        if (
+        explicit_candidate = self._clean_actor_phrase(
             explicit_buyer
-            and self._is_actor_phrase(explicit_buyer)
-        ):
-            return self._clean_actor_phrase(
-                explicit_buyer
-            )
+        )
+
+        if explicit_candidate:
+            return explicit_candidate
 
         archetype_context = (
             archetype_context

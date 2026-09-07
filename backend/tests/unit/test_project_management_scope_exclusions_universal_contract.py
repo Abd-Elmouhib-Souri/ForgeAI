@@ -357,3 +357,221 @@ def test_plain_operational_without_is_not_scope_exclusion() -> None:
         "internet connection"
         not in exclusion_text
     ), packet.scope_exclusions
+
+
+@pytest.mark.parametrize(
+    (
+        "language",
+        "description",
+        "positive_terms",
+        "excluded_terms",
+    ),
+    (
+        (
+            "en",
+            (
+                "The product helps an operations team process "
+                "incoming requests. "
+                "MVP: request intake; decision review. "
+                "MVP exclusions: automatic settlement; "
+                "predictive scoring."
+            ),
+            (
+                "request intake",
+                "decision review",
+            ),
+            (
+                "automatic settlement",
+                "predictive scoring",
+            ),
+        ),
+        (
+            "fr",
+            (
+                "Le produit aide une équipe opérationnelle "
+                "à traiter des demandes. "
+                "MVP : enregistrement des demandes ; "
+                "revue des décisions. "
+                "Les exclusions du MVP sont : "
+                "règlement automatique ; "
+                "notation prédictive."
+            ),
+            (
+                "enregistrement des demandes",
+                "revue des décisions",
+            ),
+            (
+                "règlement automatique",
+                "notation prédictive",
+            ),
+        ),
+    ),
+)
+def test_labeled_positive_and_negative_scope_sections_remain_disjoint(
+    language: str,
+    description: str,
+    positive_terms: tuple[str, ...],
+    excluded_terms: tuple[str, ...],
+) -> None:
+    """
+    Universal canonical invariant:
+
+    A positive MVP section followed by an explicit negative scope
+    section must preserve section polarity.
+
+    Positive items belong only to mvp_scope.
+    Negative items belong only to scope_exclusions.
+
+    The invariant is independent of project, sector, geography,
+    archetype and feature vocabulary.
+    """
+
+    packet = extract(
+        description,
+        language=language,
+    )
+
+    scope_text = comparison_key(
+        " | ".join(
+            packet.mvp_scope
+        )
+    )
+
+    exclusion_text = comparison_key(
+        " | ".join(
+            packet.scope_exclusions
+        )
+    )
+
+    for term in positive_terms:
+        key = comparison_key(
+            term
+        )
+
+        assert (
+            key in scope_text
+        ), (
+            term,
+            packet.mvp_scope,
+        )
+
+        assert (
+            key not in exclusion_text
+        ), (
+            term,
+            packet.scope_exclusions,
+        )
+
+    for term in excluded_terms:
+        key = comparison_key(
+            term
+        )
+
+        assert (
+            key not in scope_text
+        ), (
+            term,
+            packet.mvp_scope,
+        )
+
+        assert (
+            key in exclusion_text
+        ), (
+            term,
+            packet.scope_exclusions,
+        )
+
+
+def test_historical_scope_items_cannot_override_explicit_exclusion_authority(
+) -> None:
+    """
+    Historical compatibility invariant:
+
+    A stale positive projection may contain atomic items whose original
+    negative section heading has already been lost.
+
+    Once the current canonical extraction establishes an item as an
+    explicit scope exclusion, that same canonical item must never remain
+    in positive MVP scope.
+
+    Negative authority wins over stale positive projection.
+    """
+
+    description = (
+        "The product supports operational request review. "
+        "MVP: request intake; decision review. "
+        "MVP exclusions: automatic settlement; predictive scoring."
+    )
+
+    packet = project_context_extractor.extract(
+        title="Historical Scope Compatibility Contract",
+        description=description,
+        industry="General project domain",
+        target_region="International",
+        output_language="en",
+        project_context={
+            "context_locked": True,
+            "mvp_scope": (
+                "MVP: request intake; decision review. "
+                "MVP exclusions: automatic settlement; "
+                "predictive scoring."
+            ),
+            "mvp_scope_items": [
+                "request intake",
+                "decision review",
+                "MVP exclusions: automatic settlement",
+                "predictive scoring",
+            ],
+            "scope_exclusions": [],
+        },
+        idea_readiness={},
+        analysis_data={},
+    )
+
+    positive_text = comparison_key(
+        " | ".join(
+            packet.mvp_scope
+        )
+    )
+
+    exclusion_text = comparison_key(
+        " | ".join(
+            packet.scope_exclusions
+        )
+    )
+
+    for positive in (
+        "request intake",
+        "decision review",
+    ):
+        key = comparison_key(
+            positive
+        )
+
+        assert key in positive_text, (
+            positive,
+            packet.mvp_scope,
+        )
+
+        assert key not in exclusion_text, (
+            positive,
+            packet.scope_exclusions,
+        )
+
+    for excluded in (
+        "automatic settlement",
+        "predictive scoring",
+    ):
+        key = comparison_key(
+            excluded
+        )
+
+        assert key in exclusion_text, (
+            excluded,
+            packet.scope_exclusions,
+        )
+
+        assert key not in positive_text, (
+            excluded,
+            packet.mvp_scope,
+        )
