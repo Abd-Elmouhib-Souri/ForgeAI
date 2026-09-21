@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import ReportNavigation from "./ReportNavigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -37,71 +37,72 @@ import AnalysisActionCard from "./AnalysisActionCard";
 import { Panel } from "./UIBlocks";
 import FinalReportSection from "../_sections/FinalReportSection";
 import ProjectManagerSection from "../_sections/ProjectManagerSection";
+import SolutionArchitectSection from "../_sections/SolutionArchitectSection";
 
 const content = {
   fr: {
     loadingProject: "Chargement du projet...",
     projectNotFound: "Projet introuvable.",
-    loadAnalysisError: "Erreur lors du chargement de l’analyse.",
+    loadAnalysisError: "Erreur lors du chargement de lâ€™analyse.",
     deleteConfirm: "Voulez-vous vraiment supprimer ce projet ?",
     deleteError: "Erreur lors de la suppression.",
-    startAnalysisError: "Erreur lors du lancement de l’analyse.",
-    clarificationTitle: "Précisions nécessaires avant l’analyse",
+    startAnalysisError: "Erreur lors du lancement de lâ€™analyse.",
+    clarificationTitle: "PrÃ©cisions nÃ©cessaires avant lâ€™analyse",
     clarificationIntro:
-      "ForgeAI a arrêté l’analyse avant les recherches externes et les agents afin d’éviter des conclusions basées sur des hypothèses.",
+      "ForgeAI a arrÃªtÃ© lâ€™analyse avant les recherches externes et les agents afin dâ€™Ã©viter des conclusions basÃ©es sur des hypothÃ¨ses.",
     contextScore: "Score de contexte",
     blockingFields: "Champs bloquants",
     missingFields: "Informations manquantes",
-    ambiguousFields: "Informations ambiguës",
-    clarificationQuestions: "Questions à compléter",
+    ambiguousFields: "Informations ambiguÃ«s",
+    clarificationQuestions: "Questions Ã  complÃ©ter",
     editProject: "Modifier le projet",
-    rerunContextCheck: "Relancer la vérification",
-    rerunningContextCheck: "Vérification...",
+    rerunContextCheck: "Relancer la vÃ©rification",
+    rerunningContextCheck: "VÃ©rification...",
     clarificationReadyHint:
-      "Répondez directement à chaque question. ForgeAI réévalue le contexte sans modifier la description du projet.",
-    clarificationAnswerPlaceholder: "Votre réponse...",
-    saveClarifications: "Enregistrer et revérifier",
+      "RÃ©pondez directement Ã  chaque question. ForgeAI rÃ©Ã©value le contexte sans modifier la description du projet.",
+    clarificationAnswerPlaceholder: "Votre rÃ©ponse...",
+    saveClarifications: "Enregistrer et revÃ©rifier",
     savingClarifications: "Enregistrement...",
-    clarificationSaved: "Réponses enregistrées. Le contexte a été réévalué.",
-    clarificationSaveError: "Impossible d’enregistrer les précisions.",
-    analysisLaunched: "Analyse lancée. ForgeAI prépare le rapport...",
+    clarificationSaved: "RÃ©ponses enregistrÃ©es. Le contexte a Ã©tÃ© rÃ©Ã©valuÃ©.",
+    clarificationSaveError: "Impossible dâ€™enregistrer les prÃ©cisions.",
+    analysisLaunched: "Analyse lancÃ©e. ForgeAI prÃ©pare le rapport...",
     backProjects: "Retour aux projets",
     report: "Rapport ForgeAI",
     edit: "Modifier",
     delete: "Supprimer",
     deleting: "Suppression...",
-    unknownSector: "Secteur non spécifié",
-    defaultRegion: "Non définie",
+    unknownSector: "Secteur non spÃ©cifiÃ©",
+    defaultRegion: "Non dÃ©finie",
     description: "Description du projet",
     startupScore: "Score de potentiel",
     analysis: "Analyse",
-    step: "Étape",
+    step: "Ã‰tape",
     progress: "Progression",
-    start: "Début",
+    start: "DÃ©but",
     end: "Fin",
-    targetRegion: "Pays/Région cible",
+    targetRegion: "Pays/RÃ©gion cible",
     running: "Analyse en cours...",
     launching: "Lancement...",
-    relaunch: "Relancer l’analyse",
-    launch: "Lancer l’analyse",
+    relaunch: "Relancer lâ€™analyse",
+    launch: "Lancer lâ€™analyse",
     reportTitle: "Rapport utilisateur final",
     reportSubtitle:
-      "Aperçu structuré du rapport. Les sections détaillées sont séparées dans des composants dédiés.",
+      "AperÃ§u structurÃ© du rapport. Les sections dÃ©taillÃ©es sont sÃ©parÃ©es dans des composants dÃ©diÃ©s.",
     noReport:
-      "Aucune analyse disponible. Lancez l’analyse IA pour générer le rapport.",
-    summary: "Résumé exécutif",
-    problem: "Problème identifié",
-    solution: "Solution proposée",
-    targetMarket: "Marché cible",
-    technologies: "Technologies recommandées",
-    improvements: "Suggestions d’amélioration",
+      "Aucune analyse disponible. Lancez lâ€™analyse IA pour gÃ©nÃ©rer le rapport.",
+    summary: "RÃ©sumÃ© exÃ©cutif",
+    problem: "ProblÃ¨me identifiÃ©",
+    solution: "Solution proposÃ©e",
+    targetMarket: "MarchÃ© cible",
+    technologies: "Technologies recommandÃ©es",
+    improvements: "Suggestions dâ€™amÃ©lioration",
     risks: "Risques",
-    startupScoreReport: "Évaluation startup",
+    startupScoreReport: "Ã‰valuation startup",
     verdict: "Verdict final",
     riskLevel: "Niveau de risque",
-    nextActions: "Actions recommandées",
-    limitations: "Limites de l’analyse",
-    marketStudy: "Étude de marché",
+    nextActions: "Actions recommandÃ©es",
+    limitations: "Limites de lâ€™analyse",
+    marketStudy: "Ã‰tude de marchÃ©",
     swot: "Analyse SWOT",
     bmc: "Business Model Canvas",
     competitors: "Analyse concurrentielle",
@@ -109,7 +110,7 @@ const content = {
     debate: "Debate Room Pro",
     factCheck: "Fact Checker",
     available: "Disponible",
-    missing: "À compléter",
+    missing: "Ã€ complÃ©ter",
   },
   en: {
     loadingProject: "Loading project...",
@@ -356,7 +357,7 @@ function fieldLabel(field: string, language: "fr" | "en"): string {
       en: "Project name",
     },
     problem: {
-      fr: "Problème",
+      fr: "ProblÃ¨me",
       en: "Problem",
     },
     solution: {
@@ -364,7 +365,7 @@ function fieldLabel(field: string, language: "fr" | "en"): string {
       en: "Solution",
     },
     actors: {
-      fr: "Utilisateurs, acheteurs et opérateurs",
+      fr: "Utilisateurs, acheteurs et opÃ©rateurs",
       en: "Users, buyers, and operators",
     },
     priority_workflow: {
@@ -372,7 +373,7 @@ function fieldLabel(field: string, language: "fr" | "en"): string {
       en: "Primary workflow",
     },
     target_region: {
-      fr: "Pays ou région cible",
+      fr: "Pays ou rÃ©gion cible",
       en: "Target country or region",
     },
     project_archetype: {
@@ -380,11 +381,11 @@ function fieldLabel(field: string, language: "fr" | "en"): string {
       en: "Project archetype",
     },
     business_model: {
-      fr: "Modèle économique",
+      fr: "ModÃ¨le Ã©conomique",
       en: "Business model",
     },
     mvp_scope: {
-      fr: "Périmètre du MVP",
+      fr: "PÃ©rimÃ¨tre du MVP",
       en: "MVP scope",
     },
     constraints: {
@@ -392,11 +393,11 @@ function fieldLabel(field: string, language: "fr" | "en"): string {
       en: "Constraints",
     },
     success_metrics: {
-      fr: "Indicateurs de succès",
+      fr: "Indicateurs de succÃ¨s",
       en: "Success metrics",
     },
     domain_integrity: {
-      fr: "Périmètre métier",
+      fr: "PÃ©rimÃ¨tre mÃ©tier",
       en: "Domain integrity",
     },
   };
@@ -490,7 +491,7 @@ function ContextClarificationPanel({
             </p>
 
             <p className="mt-1 text-3xl font-black text-amber-700">
-              {scorePercent === null ? "—" : `${scorePercent}%`}
+              {scorePercent === null ? "â€”" : `${scorePercent}%`}
             </p>
           </div>
         </div>
@@ -789,14 +790,14 @@ export default function ProjectDetailClient() {
           loadedStatus === "completed"
             ? loadedProject.output_language === "en"
               ? "Analysis completed"
-              : "Analyse terminée"
+              : "Analyse terminÃ©e"
             : loadedStatus === "needs_clarification"
               ? loadedProject.output_language === "en"
                 ? "Project clarification required"
                 : "Clarification du projet requise"
               : loadedProject.output_language === "en"
                 ? "Analysis failed"
-                : "Analyse échouée";
+                : "Analyse Ã©chouÃ©e";
 
         setAnalysis({
           project_id: loadedProject.id,
@@ -1010,7 +1011,7 @@ export default function ProjectDetailClient() {
               href="/projects"
               className="mt-4 inline-block text-sm font-black text-sky-600 hover:underline"
             >
-              ← {t.backProjects}
+              â† {t.backProjects}
             </Link>
           </div>
         </section>
@@ -1300,6 +1301,16 @@ export default function ProjectDetailClient() {
                     null
                   }
                 />
+
+                <SolutionArchitectSection
+                  projectId={id}
+                  language={reportLanguage}
+                  analysisCompletedAt={
+                    analysis?.analysis_completed_at ??
+                    project.analysis_completed_at ??
+                    null
+                  }
+                />
               </div>
             </div>
           </>
@@ -1308,3 +1319,5 @@ export default function ProjectDetailClient() {
     </main>
   );
 }
+
+

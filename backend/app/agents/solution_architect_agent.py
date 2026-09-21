@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 
@@ -94,17 +94,6 @@ class SolutionArchitectAgent:
             ),
         )
 
-        candidate_schema_json = json.dumps(
-            CandidateSolutionArchitectureV1
-            .model_json_schema(),
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(
-                ",",
-                ":",
-            ),
-        )
-
         return (
             "You are the ForgeAI Solution Architect candidate generator.\n"
             "\n"
@@ -130,11 +119,13 @@ class SolutionArchitectAgent:
             "- Recommend only technically relevant layers.\n"
             "- Use recommended, conditional or not_applicable honestly.\n"
             "- Give a justification for every proposed layer.\n"
+            "- Every layer marked recommended or conditional MUST include a non-empty technology field naming the actual technology (e.g. \"PostgreSQL\", \"React\"). Never leave it blank or generic.\n"
             "\n"
             "UML\n"
             "- UML source syntax is PlantUML.\n"
             "- Candidate UML may be partial; ForgeAI validates and repairs only missing or invalid required diagram types later.\n"
             "- Never fabricate actors or workflows merely to fill a diagram.\n"
+            "- Every use_case diagram MUST contain at least one actor and one use case, drawn strictly from the actors and priority_workflows already present in the canonical context below. An empty container is never valid.\n"
             "\n"
             "DATABASE\n"
             "- Database status may be recommended, conditional or not_applicable.\n"
@@ -151,11 +142,26 @@ class SolutionArchitectAgent:
             "- Follow CandidateSolutionArchitectureV1 JSON schema exactly.\n"
             "- Copy no provider-owned canonical decision.\n"
             "\n"
-            f"SOURCE_CONTEXT_FINGERPRINT = {context.upstream_context_fingerprint}\n"
+            f"CONTEXT_BINDING_HASH = {context.upstream_context_fingerprint}\n"
             f"PROJECT_NAME = {context.project_name}\n"
             "\n"
-            "CANDIDATE JSON SCHEMA\n"
-            f"{candidate_schema_json}\n"
+            "EXAMPLE OF CORRECT TOP-LEVEL JSON SHAPE "
+            "(structure only, do not reuse these values; "
+            "architecture, stack, uml_diagrams, database, warnings, "
+            "assumptions and confidence are ALL SIBLING FIELDS at the "
+            "TOP LEVEL, never nested inside architecture):\n"
+            "{\"source_context_fingerprint\":\"<sha256>\","
+            "\"architecture\":{\"style\":\"modular_monolith\","
+            "\"rationale\":\"...\",\"quality_attributes\":[],"
+            "\"constraints\":[],\"risks\":[],\"alternatives\":[]},"
+            "\"stack\":{\"layers\":[{\"layer\":\"backend\","
+            "\"status\":\"recommended\",\"technology\":\"FastAPI\","
+            "\"justification\":\"...\"}]},"
+            "\"uml_diagrams\":[{\"diagram_type\":\"class\","
+            "\"syntax\":\"plantuml\",\"source\":\"@startuml\\n...\\n@enduml\"}],"
+            "\"database\":{\"status\":\"recommended\",\"dialect\":\"postgresql\","
+            "\"entities\":[]},"
+            "\"warnings\":[],\"assumptions\":[],\"confidence\":0.7}\n"
             "\n"
             "CANONICAL TECHNICAL CONTEXT\n"
             f"{context_json}\n"
@@ -206,6 +212,56 @@ class SolutionArchitectAgent:
             ),
         )
 
+        plantuml_examples = {
+            "use_case": (
+                "@startuml\n"
+                "actor User\n"
+                "actor Admin\n"
+                "rectangle System {\n"
+                "  User --> (Search item)\n"
+                "  User --> (Place order)\n"
+                "  Admin --> (Manage catalog)\n"
+                "}\n"
+                "@enduml"
+            ),
+            "class": (
+                "@startuml\n"
+                "class User {\n"
+                "  +id: int\n"
+                "  +login()\n"
+                "}\n"
+                "class Order {\n"
+                "  +id: int\n"
+                "  +date: datetime\n"
+                "}\n"
+                "User \"1\" --> \"many\" Order\n"
+                "@enduml"
+            ),
+            "sequence": (
+                "@startuml\n"
+                "actor User\n"
+                "participant API\n"
+                "participant Database\n"
+                "User -> API: request\n"
+                "API -> Database: query\n"
+                "Database --> API: result\n"
+                "API --> User: response\n"
+                "@enduml"
+            ),
+            "activity": (
+                "@startuml\n"
+                "start\n"
+                ":User opens app;\n"
+                "if (Logged in?) then (yes)\n"
+                "  :Show dashboard;\n"
+                "else (no)\n"
+                "  :Show login;\n"
+                "endif\n"
+                "stop\n"
+                "@enduml"
+            ),
+        }
+
         prompt = (
             "You are repairing exactly one missing or invalid UML diagram for ForgeAI.\n"
             "Return JSON only and no Markdown fences.\n"
@@ -214,9 +270,12 @@ class SolutionArchitectAgent:
             "Do not add another diagram type.\n"
             "Do not invent domain facts.\n"
             f"REQUESTED_DIAGRAM_TYPE = {diagram_type}\n"
-            f"SOURCE_CONTEXT_FINGERPRINT = {context.upstream_context_fingerprint}\n"
+            f"CONTEXT_BINDING_HASH = {context.upstream_context_fingerprint}\n"
             "REQUIRED JSON FIELDS = diagram_type, syntax, source\n"
             "syntax must be plantuml.\n"
+            "EXAMPLE OF VALID PLANTUML SYNTAX FOR THIS DIAGRAM TYPE "
+            "(structure only, do not reuse these facts):\n"
+            f"{plantuml_examples[diagram_type]}\n"
             "CANONICAL TECHNICAL CONTEXT\n"
             f"{context_json}\n"
         )
@@ -347,12 +406,33 @@ class SolutionArchitectAgent:
             TypeError,
             ValueError,
         ) as exc:
+            preview_start = str(raw_response or "")[:300]
+            preview_end = str(raw_response or "")[-300:]
+            print(
+                f"CANDIDATE_RAW_RESPONSE_INVALID length={len(str(raw_response or ''))} "
+                f"start={preview_start!r} end={preview_end!r}",
+                flush=True,
+            )
             raise SolutionArchitectGenerationError(
                 "invalid_model_response",
                 (
                     "Solution Architect model response does not "
-                    "satisfy CandidateSolutionArchitectureV1."
+                    f"satisfy CandidateSolutionArchitectureV1. Detail: {exc}"
                 ),
             ) from exc
 
         return candidate
+
+
+
+
+
+
+
+
+
+
+
+
+
+

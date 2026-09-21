@@ -1,5 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
+import logging
 import re
 
 from app.agents.solution_architect_agent import (
@@ -17,6 +18,101 @@ from app.schemas.solution_architecture import (
     UMLDiagramBundleV1,
     UMLDiagramV1,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _plantuml_safe_id(raw_name: str) -> str:
+    """
+    Identifiant PlantUML valide a partir d'un nom arbitraire, sans jamais
+    supposer de langue, de domaine ou de region. Purement mecanique :
+    ne conserve que les caracteres alphanumeriques ASCII, remplace le
+    reste par "_". Fonctionne identiquement quel que soit le contenu
+    metier ou linguistique du nom d'origine.
+    """
+    import re as _re
+    safe = _re.sub(r"[^a-zA-Z0-9]+", "_", raw_name.strip())
+    safe = safe.strip("_") or "item"
+    if safe[0].isdigit():
+        safe = f"a_{safe}"
+    return safe
+
+
+def build_use_case_diagram_deterministic(
+    *,
+    actors: list,
+    workflows: list,
+) -> str:
+    """
+    Construit un diagramme use_case PlantUML directement depuis les
+    acteurs et workflows du contexte canonique deterministe -
+    aucun LLM implique, donc aucune hallucination ni conteneur vide
+    possible. Le lien acteur -> workflow se fait par correspondance de
+    nom (WorkflowV1.actor reference ArchitectureActorV1.name), pas par
+    contenu metier : fonctionne pour n'importe quel domaine, pays ou
+    langue, puisque seule la structure du schema est exploitee.
+    """
+    lines = ["@startuml", "left to right direction"]
+
+    actor_ids: dict[str, str] = {}
+    for actor in actors:
+        actor_id = _plantuml_safe_id(actor.name)
+        actor_ids[actor.name] = actor_id
+        safe_label = actor.name.replace('"', "'")
+        lines.append(f'actor "{safe_label}" as {actor_id}')
+
+    lines.append("rectangle Systeme {")
+    workflow_ids: dict[int, str] = {}
+    for index, workflow in enumerate(workflows):
+        workflow_id = _plantuml_safe_id(f"{workflow.action}_{workflow.object}")
+        workflow_ids[index] = workflow_id
+        safe_label = f"{workflow.action} {workflow.object}".strip().replace('"', "'")
+        lines.append(f'  usecase "{safe_label}" as {workflow_id}')
+    lines.append("}")
+
+    for index, workflow in enumerate(workflows):
+        actor_id = actor_ids.get(workflow.actor)
+        if actor_id is None:
+            # L'acteur du workflow ne correspond a aucun acteur connu :
+            # on ignore ce lien plutot que d'inventer un acteur fantome.
+            continue
+        lines.append(f"{actor_id} --> {workflow_ids[index]}")
+
+    lines.append("@enduml")
+    return "\n".join(lines)
+
+
+def build_class_diagram_deterministic(
+    *,
+    entities: list,
+) -> str:
+    """
+    Construit un diagramme class PlantUML directement depuis les
+    entites de la conception de base de donnees deterministe. Meme
+    principe : purement structurel, agnostique au domaine/langue/pays.
+    """
+    lines = ["@startuml"]
+
+    entity_ids: dict[str, str] = {}
+    for entity in entities:
+        entity_id = _plantuml_safe_id(entity.name)
+        entity_ids[entity.name] = entity_id
+        lines.append(f"class {entity_id} {{")
+        for column in entity.columns:
+            marker = "+" if column.primary_key else "-"
+            lines.append(f"  {marker}{column.name}: {column.data_type}")
+        lines.append("}")
+
+    for entity in entities:
+        source_id = entity_ids.get(entity.name)
+        for fk in entity.foreign_keys:
+            target_id = entity_ids.get(fk.references_table)
+            if source_id is None or target_id is None:
+                continue
+            lines.append(f'{source_id} --> "1" {target_id}')
+
+    lines.append("@enduml")
+    return "\n".join(lines)
 
 
 class SolutionArchitectureCoreError(
@@ -251,19 +347,46 @@ class UMLCompletionService:
             if diagram_type in selected:
                 continue
 
-            repaired = (
-                await
-                self._agent
-                .generate_uml_diagram(
-                    context=context,
-                    diagram_type=diagram_type,
+            if diagram_type == "use_case":
+                repaired = CandidateUMLDiagramV1(
+                    diagram_type="use_case",
+                    syntax="plantuml",
+                    source=build_use_case_diagram_deterministic(
+                        actors=context.actors,
+                        workflows=context.priority_workflows,
+                    ),
                 )
-            )
+            elif diagram_type == "class":
+                repaired = CandidateUMLDiagramV1(
+                    diagram_type="class",
+                    syntax="plantuml",
+                    source=build_class_diagram_deterministic(
+                        entities=(
+                            candidate.database.entities
+                            if candidate.database is not None
+                            else []
+                        ),
+                    ),
+                )
+            else:
+                repaired = (
+                    await
+                    self._agent
+                    .generate_uml_diagram(
+                        context=context,
+                        diagram_type=diagram_type,
+                    )
+                )
 
             if not self._validator.validate(
                 diagram_type=diagram_type,
                 source=repaired.source,
             ):
+                logger.error(
+                    "solution_architecture.uml_repair_invalid_source diagram_type=%s source=%r",
+                    diagram_type,
+                    repaired.source,
+                )
                 raise SolutionArchitectureCoreError(
                     "invalid_uml_after_repair",
                     (
@@ -547,7 +670,7 @@ class DatabaseDesignBuilder:
                         "unsafe_database_default",
                         (
                             "Unsafe SQL default for "
-                            f"{table_name}.{column_name}."
+                            f"{table_name}.{column_name}: {default!r}."
                         ),
                     )
 
@@ -929,3 +1052,8 @@ plantuml_structural_validator = (
 database_design_builder = (
     DatabaseDesignBuilder()
 )
+
+
+
+
+

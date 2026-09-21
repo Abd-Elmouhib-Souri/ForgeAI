@@ -23,6 +23,7 @@ from app.database import engine
 from app.routers.auth import router as auth_router
 from app.routers.projects import router as projects_router
 from app.routers.project_manager import router as project_manager_router
+from app.routers.solution_architect import router as solution_architect_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ForgeAI")
@@ -68,6 +69,7 @@ app.add_middleware(SessionMiddleware, secret_key=settings.SESSION_SECRET_KEY)
 app.include_router(auth_router)
 app.include_router(projects_router)
 app.include_router(project_manager_router)
+app.include_router(solution_architect_router)
 app.include_router(admin_router)
 
 @app.get("/", status_code=status.HTTP_200_OK, tags=["System"])
