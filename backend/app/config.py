@@ -1,4 +1,4 @@
-from typing import List, Optional
+﻿from typing import List, Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -11,12 +11,12 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # 🎯 CONFIGURATION GÉNÉRALE DE L'APPLICATION
+    # ðŸŽ¯ CONFIGURATION GÃ‰NÃ‰RALE DE L'APPLICATION
     APP_NAME: str = "DotJcom ForgeAI"
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
 
-    # 🔒 SÉCURITÉ, SESSIONS & CHIFFREMENT
+    # ðŸ”’ SÃ‰CURITÃ‰, SESSIONS & CHIFFREMENT
     JWT_SECRET_KEY: str
     JWT_REFRESH_SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
@@ -24,17 +24,17 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     AES_SECRET_KEY: str
 
-    # 🔐 GOOGLE OAUTH 2.0
+    # ðŸ” GOOGLE OAUTH 2.0
     GOOGLE_CLIENT_ID: str
     GOOGLE_CLIENT_SECRET: str
     GOOGLE_REDIRECT_URI: str
     SESSION_SECRET_KEY: str
 
-    # 📧 VÉRIFICATION EMAIL
+    # ðŸ“§ VÃ‰RIFICATION EMAIL
     FRONTEND_URL: str = "http://localhost:3000"
     EMAIL_VERIFICATION_EXPIRE_HOURS: int = 24
 
-    # 📤 SMTP
+    # ðŸ“¤ SMTP
     SMTP_HOST: str = "smtp.gmail.com"
     SMTP_PORT: int = 587
     SMTP_USERNAME: str = ""
@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     SMTP_FROM_NAME: str = "DotJcom ForgeAI"
     SMTP_USE_TLS: bool = True
 
-    # 🗄️ POSTGRESQL
+    # ðŸ—„ï¸ POSTGRESQL
     POSTGRES_SERVER: str = "postgres"
     POSTGRES_PORT: int = 5432
     POSTGRES_DB: str = "forgeai"
@@ -57,12 +57,13 @@ class Settings(BaseSettings):
     CHROMA_AUTH_TOKEN: str
     REDIS_URL: str = "redis://redis:6379/0"
 
-     # 🤖 LLM PROVIDERS
+     # ðŸ¤– LLM PROVIDERS
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-3-flash-preview"
     GEMINI_FALLBACK_MODEL: str = ""
 
     GROQ_API_KEY: str = ""
+    GROQ_API_BASE: str = ""
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
     GROQ_FALLBACK_MODEL: str = "llama-3.1-8b-instant"
 
@@ -76,10 +77,10 @@ class Settings(BaseSettings):
 
     OPENAI_API_KEY: Optional[str] = ""
 
-    # 📊 MONITORING
+    # ðŸ“Š MONITORING
     MLFLOW_TRACKING_URI: str = "http://mlflow:5000"
 
-    # 🌐 CORS
+    # ðŸŒ CORS
     
     ALLOWED_ORIGINS: List[str] = ["http://localhost:3000"]
     PASSWORD_RESET_EXPIRE_HOURS: int = 1
@@ -123,3 +124,5 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+

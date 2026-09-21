@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Literal
 
@@ -371,6 +371,12 @@ class DatabaseColumnProposalV1(
     unique: bool = False
 
     default: str | None = None
+
+    # Le modele documente parfois le role semantique d une colonne
+    # (ex. "buyer or provider"). Champ legitime, ignore par le
+    # DatabaseDesignBuilder deterministe en aval, mais accepte ici
+    # pour ne plus rejeter une sortie par ailleurs valide.
+    description: str = ""
 
 
 class DatabaseForeignKeyProposalV1(
@@ -903,3 +909,4 @@ class CanonicalSolutionArchitectureV1(
         ge=0.0,
         le=1.0,
     )
+
