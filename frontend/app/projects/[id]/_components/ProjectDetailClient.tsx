@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import ReportNavigation from "./ReportNavigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -38,71 +38,78 @@ import { Panel } from "./UIBlocks";
 import FinalReportSection from "../_sections/FinalReportSection";
 import ProjectManagerSection from "../_sections/ProjectManagerSection";
 import SolutionArchitectSection from "../_sections/SolutionArchitectSection";
+import ExportSection from "../_sections/ExportSection";
+import PostAnalysisPipelinePanel from "./PostAnalysisPipelinePanel";
+import {
+  isPipelineActive,
+  isStageDisplayable,
+  type PipelineState,
+} from "../_lib/pipeline";
 
 const content = {
   fr: {
     loadingProject: "Chargement du projet...",
     projectNotFound: "Projet introuvable.",
-    loadAnalysisError: "Erreur lors du chargement de lâ€™analyse.",
+    loadAnalysisError: "Erreur lors du chargement de l’analyse.",
     deleteConfirm: "Voulez-vous vraiment supprimer ce projet ?",
     deleteError: "Erreur lors de la suppression.",
-    startAnalysisError: "Erreur lors du lancement de lâ€™analyse.",
-    clarificationTitle: "PrÃ©cisions nÃ©cessaires avant lâ€™analyse",
+    startAnalysisError: "Erreur lors du lancement de l’analyse.",
+    clarificationTitle: "Précisions nécessaires avant l’analyse",
     clarificationIntro:
-      "ForgeAI a arrÃªtÃ© lâ€™analyse avant les recherches externes et les agents afin dâ€™Ã©viter des conclusions basÃ©es sur des hypothÃ¨ses.",
+      "ForgeAI a arrêté l’analyse avant les recherches externes et les agents afin d’éviter des conclusions basées sur des hypothèses.",
     contextScore: "Score de contexte",
     blockingFields: "Champs bloquants",
     missingFields: "Informations manquantes",
-    ambiguousFields: "Informations ambiguÃ«s",
-    clarificationQuestions: "Questions Ã  complÃ©ter",
+    ambiguousFields: "Informations ambiguës",
+    clarificationQuestions: "Questions à compléter",
     editProject: "Modifier le projet",
-    rerunContextCheck: "Relancer la vÃ©rification",
-    rerunningContextCheck: "VÃ©rification...",
+    rerunContextCheck: "Relancer la vérification",
+    rerunningContextCheck: "Vérification...",
     clarificationReadyHint:
-      "RÃ©pondez directement Ã  chaque question. ForgeAI rÃ©Ã©value le contexte sans modifier la description du projet.",
-    clarificationAnswerPlaceholder: "Votre rÃ©ponse...",
-    saveClarifications: "Enregistrer et revÃ©rifier",
+      "Répondez directement à chaque question. ForgeAI réévalue le contexte sans modifier la description du projet.",
+    clarificationAnswerPlaceholder: "Votre réponse...",
+    saveClarifications: "Enregistrer et revérifier",
     savingClarifications: "Enregistrement...",
-    clarificationSaved: "RÃ©ponses enregistrÃ©es. Le contexte a Ã©tÃ© rÃ©Ã©valuÃ©.",
-    clarificationSaveError: "Impossible dâ€™enregistrer les prÃ©cisions.",
-    analysisLaunched: "Analyse lancÃ©e. ForgeAI prÃ©pare le rapport...",
+    clarificationSaved: "Réponses enregistrées. Le contexte a été réévalué.",
+    clarificationSaveError: "Impossible d’enregistrer les précisions.",
+    analysisLaunched: "Analyse lancée. ForgeAI prépare le rapport...",
     backProjects: "Retour aux projets",
     report: "Rapport ForgeAI",
     edit: "Modifier",
     delete: "Supprimer",
     deleting: "Suppression...",
-    unknownSector: "Secteur non spÃ©cifiÃ©",
-    defaultRegion: "Non dÃ©finie",
+    unknownSector: "Secteur non spécifié",
+    defaultRegion: "Non définie",
     description: "Description du projet",
     startupScore: "Score de potentiel",
     analysis: "Analyse",
-    step: "Ã‰tape",
+    step: "Étape",
     progress: "Progression",
-    start: "DÃ©but",
+    start: "Début",
     end: "Fin",
-    targetRegion: "Pays/RÃ©gion cible",
+    targetRegion: "Pays/Région cible",
     running: "Analyse en cours...",
     launching: "Lancement...",
-    relaunch: "Relancer lâ€™analyse",
-    launch: "Lancer lâ€™analyse",
+    relaunch: "Relancer l’analyse",
+    launch: "Lancer l’analyse",
     reportTitle: "Rapport utilisateur final",
     reportSubtitle:
-      "AperÃ§u structurÃ© du rapport. Les sections dÃ©taillÃ©es sont sÃ©parÃ©es dans des composants dÃ©diÃ©s.",
+      "Aperçu structuré du rapport. Les sections détaillées sont séparées dans des composants dédiés.",
     noReport:
-      "Aucune analyse disponible. Lancez lâ€™analyse IA pour gÃ©nÃ©rer le rapport.",
-    summary: "RÃ©sumÃ© exÃ©cutif",
-    problem: "ProblÃ¨me identifiÃ©",
-    solution: "Solution proposÃ©e",
-    targetMarket: "MarchÃ© cible",
-    technologies: "Technologies recommandÃ©es",
-    improvements: "Suggestions dâ€™amÃ©lioration",
+      "Aucune analyse disponible. Lancez l’analyse IA pour générer le rapport.",
+    summary: "Résumé exécutif",
+    problem: "Problème identifié",
+    solution: "Solution proposée",
+    targetMarket: "Marché cible",
+    technologies: "Technologies recommandées",
+    improvements: "Suggestions d’amélioration",
     risks: "Risques",
-    startupScoreReport: "Ã‰valuation startup",
+    startupScoreReport: "Évaluation startup",
     verdict: "Verdict final",
     riskLevel: "Niveau de risque",
-    nextActions: "Actions recommandÃ©es",
-    limitations: "Limites de lâ€™analyse",
-    marketStudy: "Ã‰tude de marchÃ©",
+    nextActions: "Actions recommandées",
+    limitations: "Limites de l’analyse",
+    marketStudy: "Étude de marché",
     swot: "Analyse SWOT",
     bmc: "Business Model Canvas",
     competitors: "Analyse concurrentielle",
@@ -110,7 +117,7 @@ const content = {
     debate: "Debate Room Pro",
     factCheck: "Fact Checker",
     available: "Disponible",
-    missing: "Ã€ complÃ©ter",
+    missing: "À compléter",
   },
   en: {
     loadingProject: "Loading project...",
@@ -357,7 +364,7 @@ function fieldLabel(field: string, language: "fr" | "en"): string {
       en: "Project name",
     },
     problem: {
-      fr: "ProblÃ¨me",
+      fr: "Problème",
       en: "Problem",
     },
     solution: {
@@ -365,7 +372,7 @@ function fieldLabel(field: string, language: "fr" | "en"): string {
       en: "Solution",
     },
     actors: {
-      fr: "Utilisateurs, acheteurs et opÃ©rateurs",
+      fr: "Utilisateurs, acheteurs et opérateurs",
       en: "Users, buyers, and operators",
     },
     priority_workflow: {
@@ -373,7 +380,7 @@ function fieldLabel(field: string, language: "fr" | "en"): string {
       en: "Primary workflow",
     },
     target_region: {
-      fr: "Pays ou rÃ©gion cible",
+      fr: "Pays ou région cible",
       en: "Target country or region",
     },
     project_archetype: {
@@ -381,11 +388,11 @@ function fieldLabel(field: string, language: "fr" | "en"): string {
       en: "Project archetype",
     },
     business_model: {
-      fr: "ModÃ¨le Ã©conomique",
+      fr: "Modèle économique",
       en: "Business model",
     },
     mvp_scope: {
-      fr: "PÃ©rimÃ¨tre du MVP",
+      fr: "Périmètre du MVP",
       en: "MVP scope",
     },
     constraints: {
@@ -393,11 +400,11 @@ function fieldLabel(field: string, language: "fr" | "en"): string {
       en: "Constraints",
     },
     success_metrics: {
-      fr: "Indicateurs de succÃ¨s",
+      fr: "Indicateurs de succès",
       en: "Success metrics",
     },
     domain_integrity: {
-      fr: "PÃ©rimÃ¨tre mÃ©tier",
+      fr: "Périmètre métier",
       en: "Domain integrity",
     },
   };
@@ -491,7 +498,7 @@ function ContextClarificationPanel({
             </p>
 
             <p className="mt-1 text-3xl font-black text-amber-700">
-              {scorePercent === null ? "â€”" : `${scorePercent}%`}
+              {scorePercent === null ? "—" : `${scorePercent}%`}
             </p>
           </div>
         </div>
@@ -667,6 +674,12 @@ export default function ProjectDetailClient() {
     projectId: "",
     message: "",
   });
+  // Latest post-analysis pipeline state, tagged with the analysis run it
+  // belongs to so a relaunched analysis never shows a previous run's state.
+  const [pipelineSnapshot, setPipelineSnapshot] = useState<{
+    marker: string | null;
+    state: PipelineState;
+  } | null>(null);
   const analysisRequestInFlight = useRef(false);
   const activeAnalysisRunId = useRef<string | null>(null);
   const analysisStatusRef = useRef<string | null>(null);
@@ -790,14 +803,14 @@ export default function ProjectDetailClient() {
           loadedStatus === "completed"
             ? loadedProject.output_language === "en"
               ? "Analysis completed"
-              : "Analyse terminÃ©e"
+              : "Analyse terminée"
             : loadedStatus === "needs_clarification"
               ? loadedProject.output_language === "en"
                 ? "Project clarification required"
                 : "Clarification du projet requise"
               : loadedProject.output_language === "en"
                 ? "Analysis failed"
-                : "Analyse Ã©chouÃ©e";
+                : "Analyse échouée";
 
         setAnalysis({
           project_id: loadedProject.id,
@@ -1011,7 +1024,7 @@ export default function ProjectDetailClient() {
               href="/projects"
               className="mt-4 inline-block text-sm font-black text-sky-600 hover:underline"
             >
-              â† {t.backProjects}
+              ← {t.backProjects}
             </Link>
           </div>
         </section>
@@ -1036,6 +1049,24 @@ export default function ProjectDetailClient() {
   );
 
   const analysisIsRunning = isActiveAnalysisStatus(currentStatus);
+
+  // Plan / Architecture / Export only exist after a completed analysis.
+  // Before that, no "Générer" button is shown: the backend chains the
+  // steps automatically and PostAnalysisPipelinePanel reports progress.
+  const analysisIsCompleted = currentStatus === "completed";
+  const analysisCompletedAt =
+    analysis?.analysis_completed_at ?? project.analysis_completed_at ?? null;
+  const pipeline =
+    pipelineSnapshot && pipelineSnapshot.marker === analysisCompletedAt
+      ? pipelineSnapshot.state
+      : null;
+  const planStage = pipeline?.stages.project_manager;
+  const architectureStage = pipeline?.stages.solution_architecture;
+  const showPlan = analysisIsCompleted && isStageDisplayable(planStage);
+  const showArchitecture =
+    analysisIsCompleted && isStageDisplayable(architectureStage);
+  const showExport =
+    showPlan && !isPipelineActive(architectureStage?.status);
 
   const contextReadiness = resolveContextReadiness(analysisData);
 
@@ -1292,25 +1323,48 @@ export default function ProjectDetailClient() {
                   }}
                 />
 
-                <ProjectManagerSection
-                  projectId={id}
-                  language={reportLanguage}
-                  analysisCompletedAt={
-                    analysis?.analysis_completed_at ??
-                    project.analysis_completed_at ??
-                    null
-                  }
-                />
+                {analysisIsCompleted && (
+                  <PostAnalysisPipelinePanel
+                    key={analysisCompletedAt ?? "pipeline"}
+                    projectId={id}
+                    language={reportLanguage}
+                    onStateChange={(state) =>
+                      setPipelineSnapshot({
+                        marker: analysisCompletedAt,
+                        state,
+                      })
+                    }
+                  />
+                )}
 
-                <SolutionArchitectSection
-                  projectId={id}
-                  language={reportLanguage}
-                  analysisCompletedAt={
-                    analysis?.analysis_completed_at ??
-                    project.analysis_completed_at ??
-                    null
-                  }
-                />
+                {showPlan && (
+                  <ProjectManagerSection
+                    projectId={id}
+                    language={reportLanguage}
+                    // Stage completion time: changes when a provisional
+                    // plan is upgraded, which reloads the section.
+                    analysisCompletedAt={
+                      planStage?.finished_at ?? analysisCompletedAt
+                    }
+                  />
+                )}
+
+                {showArchitecture && (
+                  <SolutionArchitectSection
+                    projectId={id}
+                    language={reportLanguage}
+                    analysisCompletedAt={
+                      architectureStage?.finished_at ?? analysisCompletedAt
+                    }
+                  />
+                )}
+
+                {showExport && (
+                  <ExportSection
+                    projectId={id}
+                    language={reportLanguage}
+                  />
+                )}
               </div>
             </div>
           </>
@@ -1319,5 +1373,7 @@ export default function ProjectDetailClient() {
     </main>
   );
 }
+
+
 
 

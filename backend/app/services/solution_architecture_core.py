@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 import re
@@ -369,6 +369,18 @@ class UMLCompletionService:
                     ),
                 )
             else:
+                repaired = None
+
+            # Deterministic builders come first for use_case/class, but
+            # they can only project what the candidate already contains
+            # (actors/workflows, database entities). When that projection
+            # is empty or structurally invalid (e.g. no entities ->
+            # "@startuml\n@enduml"), fall back to ONE bounded LLM repair
+            # instead of failing the whole architecture closed.
+            if repaired is None or not self._validator.validate(
+                diagram_type=diagram_type,
+                source=repaired.source,
+            ):
                 repaired = (
                     await
                     self._agent

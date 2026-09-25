@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
@@ -24,6 +24,7 @@ from app.services.solution_architecture_core import (
     plantuml_structural_validator,
 )
 from app.services.solution_architecture_policy import architecture_policy_authority
+from app.services.llm_failure_classifier import is_provider_unavailable
 
 logger = logging.getLogger(__name__)
 
@@ -169,20 +170,28 @@ async def generate(
                 "solution_architect.generation_attempt_failed project_id=%s attempt=%s code=%s message=%s",
                 project_id, attempt, exc.code, str(exc),
             )
+            # No model can answer (quota exhausted, outage, broken model id):
+            # the next attempt would hit the same open circuits within
+            # milliseconds. Stop now; the post-analysis pipeline schedules a
+            # delayed retry instead. Content errors keep their retries.
+            if is_provider_unavailable(exc):
+                break
             continue
 
     logger.error(
         "solution_architect.generation_failed_all_attempts",
         extra={"project_id": project_id, "attempts": MAX_GENERATION_ATTEMPTS},
     )
+    # "from last_error" keeps the typed provider error reachable, so callers
+    # can tell a quota problem from a configuration or content problem.
     raise SolutionArchitecturePlanError(
         "generation_temporarily_unavailable",
         (
             "Le service de generation d'architecture n'a pas produit de resultat valide "
-            f"apres {MAX_GENERATION_ATTEMPTS} tentatives. "
+            f"apres {attempt} tentative(s). "  # real count: provider outages stop early
             f"Derniere cause : {last_error}"
         ),
-    )
+    ) from last_error
 
 
 def is_stale(

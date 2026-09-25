@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 
@@ -14,6 +14,51 @@ from app.schemas.solution_architecture import (
     SolutionArchitectureContextV1,
     CandidateUMLDiagramV1,
 )
+
+
+# Exact key synonyms observed in real model answers -> contract field names.
+# Only KEY renames: values are never created, changed or guessed, and a
+# canonical key already present always wins over its synonym.
+_COLUMN_KEY_ALIASES = {"type": "data_type", "datatype": "data_type", "sql_type": "data_type"}
+_FOREIGN_KEY_KEY_ALIASES = {
+    "source_column": "column",
+    "from_column": "column",
+    "referenced_table": "references_table",
+    "reference_table": "references_table",
+    "ref_table": "references_table",
+    "referenced_column": "references_column",
+    "reference_column": "references_column",
+    "ref_column": "references_column",
+}
+
+
+def _rename_keys(item, aliases):
+    if not isinstance(item, dict):
+        return item
+    renamed = dict(item)
+    for alias, canonical in aliases.items():
+        if alias in renamed and canonical not in renamed:
+            renamed[canonical] = renamed.pop(alias)
+    return renamed
+
+
+def normalize_candidate_field_aliases(payload):
+    """Rename known database key synonyms in a raw candidate payload."""
+    if not isinstance(payload, dict):
+        return payload
+    database = payload.get("database")
+    if not isinstance(database, dict) or not isinstance(database.get("entities"), list):
+        return payload
+    entities = []
+    for entity in database["entities"]:
+        if isinstance(entity, dict):
+            entity = dict(entity)
+            if isinstance(entity.get("columns"), list):
+                entity["columns"] = [_rename_keys(c, _COLUMN_KEY_ALIASES) for c in entity["columns"]]
+            if isinstance(entity.get("foreign_keys"), list):
+                entity["foreign_keys"] = [_rename_keys(f, _FOREIGN_KEY_KEY_ALIASES) for f in entity["foreign_keys"]]
+        entities.append(entity)
+    return {**payload, "database": {**database, "entities": entities}}
 
 
 class SolutionArchitectGenerationError(
@@ -117,6 +162,8 @@ class SolutionArchitectAgent:
             "\n"
             "TECHNOLOGY STACK\n"
             "- Recommend only technically relevant layers.\n"
+            "- Use EXACTLY these layer names for the four core responsibilities: frontend, backend, database, infrastructure (at most one layer each). Put every client surface (web app, mobile app, tablet or kiosk screen) under frontend, and hosting/deployment under infrastructure. Mark a core layer not_applicable only when the context truly has no such responsibility.\n"
+            "- Any other technical concern (for example realtime messaging, cache, offline sync, payments) is an additional layer with its own descriptive name.\n"
             "- Use recommended, conditional or not_applicable honestly.\n"
             "- Give a justification for every proposed layer.\n"
             "- Every layer marked recommended or conditional MUST include a non-empty technology field naming the actual technology (e.g. \"PostgreSQL\", \"React\"). Never leave it blank or generic.\n"
@@ -132,8 +179,10 @@ class SolutionArchitectAgent:
             "- If persistent structured storage is not justified, use not_applicable and do not invent tables.\n"
             "- If database is applicable, provide a SQL dialect and structured project-domain entities.\n"
             "- Every applicable entity must contain real project-domain columns.\n"
-            "- Identify primary-key columns explicitly.\n"
-            "- Represent real relationships through foreign_keys with source column, referenced table and referenced column.\n"
+            "- Every entity needs name, description, columns and foreign_keys.\n"
+            "- Every column uses exactly: name, data_type, nullable, primary_key, unique (never \"type\").\n"
+            "- Identify primary-key columns explicitly with primary_key=true.\n"
+            "- Every foreign key uses exactly: column, references_table, references_column (never source_column/referenced_table/referenced_column).\n"
             "- Do not describe the internal ForgeAI database; describe the user's project database only.\n"
             "\n"
             "OUTPUT\n"
@@ -150,17 +199,28 @@ class SolutionArchitectAgent:
             "architecture, stack, uml_diagrams, database, warnings, "
             "assumptions and confidence are ALL SIBLING FIELDS at the "
             "TOP LEVEL, never nested inside architecture):\n"
-            "{\"source_context_fingerprint\":\"<sha256>\","
+            "{\"schema_version\":\"candidate_solution_architecture_v1\","
+            "\"source_context_fingerprint\":\"<sha256>\","
             "\"architecture\":{\"style\":\"modular_monolith\","
-            "\"rationale\":\"...\",\"quality_attributes\":[],"
-            "\"constraints\":[],\"risks\":[],\"alternatives\":[]},"
-            "\"stack\":{\"layers\":[{\"layer\":\"backend\","
-            "\"status\":\"recommended\",\"technology\":\"FastAPI\","
+            "\"rationale\":[\"...\"],\"quality_attributes\":[],"
+            "\"constraints_addressed\":[],\"risks\":[],\"alternatives\":[]},"
+            "\"stack\":{\"layers\":[{\"layer\":\"frontend\","
+            "\"status\":\"recommended\",\"technology\":\"<technology>\","
+            "\"justification\":\"...\"},{\"layer\":\"backend\","
+            "\"status\":\"recommended\",\"technology\":\"<technology>\","
+            "\"justification\":\"...\"},{\"layer\":\"database\","
+            "\"status\":\"recommended\",\"technology\":\"<technology>\","
+            "\"justification\":\"...\"},{\"layer\":\"infrastructure\","
+            "\"status\":\"recommended\",\"technology\":\"<technology>\","
             "\"justification\":\"...\"}]},"
             "\"uml_diagrams\":[{\"diagram_type\":\"class\","
             "\"syntax\":\"plantuml\",\"source\":\"@startuml\\n...\\n@enduml\"}],"
-            "\"database\":{\"status\":\"recommended\",\"dialect\":\"postgresql\","
-            "\"entities\":[]},"
+            "\"database\":{\"status\":\"recommended\",\"rationale\":\"...\","
+            "\"dialect\":\"postgresql\",\"entities\":[{\"name\":\"<table>\",\"description\":\"...\","
+            "\"columns\":[{\"name\":\"id\",\"data_type\":\"INTEGER\",\"primary_key\":true,\"nullable\":false},"
+            "{\"name\":\"<other_table>_id\",\"data_type\":\"INTEGER\",\"nullable\":false}],"
+            "\"foreign_keys\":[{\"column\":\"<other_table>_id\",\"references_table\":\"<other_table>\","
+            "\"references_column\":\"id\"}]}]},"
             "\"warnings\":[],\"assumptions\":[],\"confidence\":0.7}\n"
             "\n"
             "CANONICAL TECHNICAL CONTEXT\n"
@@ -385,6 +445,12 @@ class SolutionArchitectAgent:
                 payload
             )
 
+            # Deterministic key-synonym repair (renames only, never content):
+            # models often write "type" / "source_column" for our fields.
+            candidate_payload = normalize_candidate_field_aliases(
+                candidate_payload
+            )
+
             # ForgeAI owns canonical context binding.
             candidate_payload[
                 "source_context_fingerprint"
@@ -392,6 +458,14 @@ class SolutionArchitectAgent:
                 context
                 .upstream_context_fingerprint
             )
+
+            # ForgeAI owns the contract version exactly like the context
+            # binding above: the LLM never decides which schema version
+            # its own output claims (a missing/typo'd literal used to
+            # reject an otherwise valid candidate).
+            candidate_payload[
+                "schema_version"
+            ] = "candidate_solution_architecture_v1"
 
             candidate = (
                 CandidateSolutionArchitectureV1

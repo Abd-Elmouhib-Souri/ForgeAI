@@ -1,7 +1,8 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import Any, ClassVar, Optional
@@ -13,6 +14,26 @@ from langchain_groq import ChatGroq
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Groq limit errors, e.g.:
+#   413 "Request too large ... on tokens per minute (TPM): Limit 8000, Requested 12738"
+#   429 "Rate limit reached ... (TPM): Limit 8000, Used 7888, Requested 6120.
+#        Please try again in 7.66s"
+#   429 "Request too large ... output tokens per minute (OTPM): Limit 1000, Requested 2305"
+_TOKEN_LIMIT_RE = re.compile(
+    r"\((I|O)?TPM\):\s*Limit\s+(\d+)(?:,\s*Used\s+(\d+))?,\s*Requested\s+(\d+)",
+    re.IGNORECASE,
+)
+_RETRY_AFTER_RE = re.compile(
+    r"try again in\s+(?:(\d+)m)?(\d+(?:\.\d+)?)(ms|s)", re.IGNORECASE
+)
+# Kept free between the estimated prompt and the answer budget.
+_TOKEN_SAFETY_MARGIN = 256
+
+
+def _estimate_tokens(text: str) -> int:
+    # Conservative: ~3.2 characters per token for French prose + JSON.
+    return int(len(text or "") / 3.2) + 32
 
 
 @dataclass(frozen=True)
@@ -30,6 +51,27 @@ class LLMModelConfig:
 class ProviderHealth:
     failures: int = 0
     open_until: float = 0.0
+    # Last proven failure kind ("temporary" | "configuration") that fed this
+    # circuit. Lets a later "circuit_open" skip explain its real cause.
+    last_kind: str = ""
+
+
+class LLMUnavailableError(RuntimeError):
+    """
+    Every configured model failed or was skipped for one invocation.
+
+    Subclass of RuntimeError: every existing ``except RuntimeError`` /
+    ``except Exception`` caller keeps working unchanged.
+
+    ``failures`` maps "provider:model" -> kind, where kind is one of
+    "temporary", "configuration", "unknown" or "circuit_open:<last_kind>".
+    Callers (e.g. the post-analysis pipeline) use it to distinguish an
+    exhausted quota (retry later) from a broken configuration (fix .env).
+    """
+
+    def __init__(self, message: str, failures: dict[str, str] | None = None) -> None:
+        super().__init__(message)
+        self.failures: dict[str, str] = dict(failures or {})
 
 
 class LLMProvider:
@@ -49,13 +91,15 @@ class LLMProvider:
     _shared_health: ClassVar[dict[str, ProviderHealth]] = {}
     _model_lock: ClassVar[asyncio.Lock] = asyncio.Lock()
     _fallback_chain_logged: ClassVar[bool] = False
+    # "provider:model" -> ("TPM" | "OTPM" | "ITPM", limit) learned from errors.
+    _learned_token_limits: ClassVar[dict[str, tuple[str, int]]] = {}
     _blocked_model_config_logged: ClassVar[bool] = False
 
     def __init__(self) -> None:
         self.model_configs = self._build_model_configs()
         if not self.model_configs:
             raise RuntimeError(
-                "Aucun modÃ¨le LLM disponible. Configure GEMINI_API_KEY ou GROQ_API_KEY."
+                "Aucun modèle LLM disponible. Configure GEMINI_API_KEY ou GROQ_API_KEY."
             )
 
         if not LLMProvider._fallback_chain_logged:
@@ -131,6 +175,9 @@ class LLMProvider:
                             model_name=settings.GROQ_FALLBACK_MODEL,
                             rpm=20,
                             api_key=settings.GROQ_API_KEY,
+                            # Same endpoint as the primary Groq model: without
+                            # it the fallback silently bypassed GROQ_API_BASE.
+                            base_url=settings.GROQ_API_BASE or None,
                             priority=priority,
                         )
                     )
@@ -221,6 +268,7 @@ class LLMProvider:
                         temperature=0.2,
                         timeout=timeout,
                         max_tokens=8000,
+                        **self._groq_reasoning_kwargs(config),
                     # Groq's JSON object mode is supported by the selected
                         # free models and avoids Markdown/prose wrappers.
                         model_kwargs={
@@ -229,14 +277,128 @@ class LLMProvider:
                         max_retries=0,
                     )
             else:
-                raise RuntimeError(f"Provider LLM non supportÃ© : {config.provider}")
+                raise RuntimeError(f"Provider LLM non supporté : {config.provider}")
 
             self._shared_models[key] = model
             return model
 
     @staticmethod
+    def _groq_reasoning_kwargs(config: LLMModelConfig) -> dict[str, Any]:
+        effort = str(settings.GROQ_REASONING_EFFORT or "").strip()
+        if effort and "gpt-oss" in config.model_name.lower():
+            return {"reasoning_effort": effort}
+        return {}
+
+    @staticmethod
+    def _default_max_tokens(model: Any) -> int | None:
+        value = getattr(model, "max_tokens", None) or getattr(model, "max_output_tokens", None)
+        return int(value) if isinstance(value, int) and value > 0 else None
+
+    def _output_budget(self, key: str, prompt: str, default_max: int | None) -> int | None:
+        """
+        Answer budget that fits the model's learned per-minute limit.
+
+        None  -> no known limit: use the model default.
+        0     -> the prompt alone cannot fit: skip this model.
+        """
+        learned = self._learned_token_limits.get(key)
+        if not learned or not default_max:
+            return None
+        scope, limit = learned
+        if scope == "OTPM":
+            budget = limit - _TOKEN_SAFETY_MARGIN
+        elif scope == "ITPM":
+            budget = default_max if _estimate_tokens(prompt) + _TOKEN_SAFETY_MARGIN <= limit else 0
+        else:  # TPM counts prompt + requested max_tokens
+            budget = limit - _estimate_tokens(prompt) - _TOKEN_SAFETY_MARGIN
+        budget = min(default_max, budget)
+        return budget if budget >= settings.LLM_MIN_OUTPUT_TOKENS else 0
+
+    def _learn_from_limit_error(self, key: str, exc: Exception, sent_max: int | None) -> tuple[int | None, float | None]:
+        """
+        Parse a per-minute limit error.
+
+        Returns (new_max_tokens, wait_seconds):
+        * new_max_tokens: smaller answer budget that fits the limit (413 case);
+        * wait_seconds: provider-advised wait before the budget refills (429).
+        """
+        message = str(exc)
+        match = _TOKEN_LIMIT_RE.search(message)
+        new_max: int | None = None
+        if match:
+            prefix, limit_raw, _used, requested_raw = match.groups()
+            scope = f"{(prefix or '').upper()}TPM"
+            limit, requested = int(limit_raw), int(requested_raw)
+            self._learned_token_limits[key] = (scope, limit)
+            if requested > limit and sent_max:
+                if scope == "OTPM":
+                    candidate = limit - _TOKEN_SAFETY_MARGIN
+                elif scope == "ITPM":
+                    candidate = 0  # the prompt itself is too big for this model
+                else:
+                    prompt_tokens = max(0, requested - sent_max)
+                    candidate = limit - prompt_tokens - _TOKEN_SAFETY_MARGIN
+                if settings.LLM_MIN_OUTPUT_TOKENS <= candidate < sent_max:
+                    new_max = candidate
+        wait: float | None = None
+        retry = _RETRY_AFTER_RE.search(message)
+        if retry and new_max is None:
+            minutes, amount, unit = retry.groups()
+            seconds = float(amount) / (1000.0 if unit.lower() == "ms" else 1.0)
+            wait = seconds + 60.0 * int(minutes or 0)
+        return new_max, wait
+
+    async def _ainvoke_within_limits(self, model: Any, config: LLMModelConfig, prompt: str, task_type: str) -> Any:
+        """
+        One model call that adapts to per-minute token limits:
+        shrink the answer budget when the request is too large, or wait the
+        provider-advised delay when the minute budget is momentarily spent.
+        Bounded to 2 adaptations; anything else propagates unchanged.
+        """
+        key = self._model_key(config)
+        default_max = self._default_max_tokens(model)
+        budget = self._output_budget(key, prompt, default_max)
+        if budget == 0:
+            raise RuntimeError(
+                f"Request too large for {key} per-minute token limit (413): skipped before sending."
+            )
+        limiter = self._get_limiter(config)
+        for adaptation in range(3):
+            runnable = model.bind(max_tokens=budget) if budget else model
+            try:
+                async with limiter:
+                    return await asyncio.wait_for(
+                        runnable.ainvoke(prompt),
+                        timeout=float(settings.LLM_REQUEST_TIMEOUT_SECONDS),
+                    )
+            except Exception as exc:
+                if adaptation == 2:
+                    raise
+                new_max, wait = self._learn_from_limit_error(key, exc, budget or default_max)
+                if new_max:
+                    logger.info(
+                        "[LLMProvider] shrinking max_tokens model=%s task_type=%s max_tokens=%s",
+                        key, task_type, new_max,
+                    )
+                    budget = new_max
+                    continue
+                if wait is not None and 0 < wait <= float(settings.LLM_RATE_LIMIT_MAX_WAIT_SECONDS):
+                    logger.info(
+                        "[LLMProvider] rate limited, waiting model=%s task_type=%s seconds=%.1f",
+                        key, task_type, wait,
+                    )
+                    await asyncio.sleep(wait + 0.25)
+                    continue
+                raise
+        raise RuntimeError("unreachable")  # pragma: no cover
+
+    @staticmethod
     def _error_kind(exc: Exception) -> str:
         message = str(exc).lower()
+        # Request-scoped size problem: another (larger-limit) model may still
+        # answer, but it must never open this model's shared circuit.
+        if "request too large" in message or "413" in message:
+            return "too_large"
         if any(token in message for token in (
             "429", "rate limit", "quota", "resource_exhausted", "500", "502",
             "503", "504", "timeout", "timed out", "temporarily unavailable",
@@ -264,6 +426,11 @@ class LLMProvider:
         )
         return health.open_until > time.time()
 
+    def _circuit_cause(self, config: LLMModelConfig, *, structured: bool = False) -> str:
+        # "circuit_open:<kind>" keeps the original reason visible to callers.
+        health = self._shared_health.get(self._health_key(config, structured=structured))
+        return f"circuit_open:{(health.last_kind if health else '') or 'unknown'}"
+
     def _record_success(self, config: LLMModelConfig, *, structured: bool = False) -> None:
         health = self._shared_health.setdefault(
             self._health_key(config, structured=structured), ProviderHealth()
@@ -280,26 +447,30 @@ class LLMProvider:
         # The current invocation still fails normally and may continue
         # through the fallback chain; only proven provider/model-scoped
         # failures are eligible to poison the shared circuit.
-        if kind == "unknown":
+        if kind in ("unknown", "too_large"):
             return
 
         health = self._shared_health.setdefault(
             self._health_key(config, structured=structured), ProviderHealth()
         )
+        health.last_kind = kind
         health.failures += 1
         if kind == "configuration" or health.failures >= settings.LLM_CIRCUIT_FAILURES:
             health.open_until = time.time() + settings.LLM_CIRCUIT_COOLDOWN_SECONDS
 
     async def invoke(self, prompt: str, task_type: str = "general") -> str:
         if not str(prompt or "").strip():
-            raise ValueError("Le prompt LLM ne peut pas Ãªtre vide.")
+            raise ValueError("Le prompt LLM ne peut pas être vide.")
 
         last_error: Optional[Exception] = None
         attempted = 0
+        # model key -> failure kind, reported through LLMUnavailableError
+        failures: dict[str, str] = {}
 
         for config in self.model_configs:
             key = self._model_key(config)
             if self._circuit_is_open(config):
+                failures[key] = self._circuit_cause(config)
                 logger.warning(
                     "[LLMProvider] circuit_open model=%s task_type=%s", key, task_type
                 )
@@ -311,12 +482,7 @@ class LLMProvider:
                     "[LLMProvider] trying model=%s task_type=%s", key, task_type
                 )
                 model = await self._get_or_create_model(config)
-                limiter = self._get_limiter(config)
-                async with limiter:
-                    response = await asyncio.wait_for(
-                        model.ainvoke(prompt),
-                        timeout=float(settings.LLM_REQUEST_TIMEOUT_SECONDS),
-                    )
+                response = await self._ainvoke_within_limits(model, config, prompt, task_type)
 
                 content = getattr(response, "content", None)
                 if isinstance(content, list):
@@ -326,7 +492,7 @@ class LLMProvider:
                     )
                 content = str(content or "").strip()
                 if not content:
-                    raise RuntimeError(f"RÃ©ponse vide depuis {key}")
+                    raise RuntimeError(f"Réponse vide depuis {key}")
 
                 self._record_success(config)
                 logger.info(
@@ -337,6 +503,7 @@ class LLMProvider:
             except Exception as exc:
                 last_error = exc
                 kind = self._error_kind(exc)
+                failures[key] = kind
                 self._record_failure(config, kind)
                 logger.warning(
                     "[LLMProvider] failed model=%s task_type=%s kind=%s error_type=%s error=%s",
@@ -352,11 +519,15 @@ class LLMProvider:
                 continue
 
         if attempted == 0:
-            raise RuntimeError("Tous les circuits LLM configurÃ©s sont temporairement ouverts.")
+            raise LLMUnavailableError(
+                "Tous les circuits LLM configurés sont temporairement ouverts.",
+                failures,
+            )
 
-        raise RuntimeError(
-            f"Tous les modÃ¨les LLM ont Ã©chouÃ©. DerniÃ¨re erreur : {last_error}"
-        )
+        raise LLMUnavailableError(
+            f"Tous les modèles LLM ont échoué. Dernière erreur : {last_error}",
+            failures,
+        ) from last_error
 
     async def invoke_structured(
         self,
@@ -379,10 +550,11 @@ class LLMProvider:
         de fallback est partagee et inchangee.
         """
         if not str(prompt or "").strip():
-            raise ValueError("Le prompt LLM ne peut pas Ãªtre vide.")
+            raise ValueError("Le prompt LLM ne peut pas être vide.")
 
         last_error: Optional[Exception] = None
         attempted = 0
+        failures: dict[str, str] = {}
 
         for config in self.model_configs:
             if not config.supports_structured:
@@ -393,6 +565,7 @@ class LLMProvider:
 
             key = self._model_key(config)
             if self._circuit_is_open(config, structured=True):
+                failures[key] = self._circuit_cause(config, structured=True)
                 logger.warning(
                     "[LLMProvider] circuit_open model=%s task_type=%s", key, task_type
                 )
@@ -415,7 +588,7 @@ class LLMProvider:
                     )
 
                 if result is None:
-                    raise RuntimeError(f"RÃ©ponse structurÃ©e vide depuis {key}")
+                    raise RuntimeError(f"Réponse structurée vide depuis {key}")
 
                 self._record_success(config, structured=True)
                 logger.info(
@@ -428,6 +601,7 @@ class LLMProvider:
             except Exception as exc:
                 last_error = exc
                 kind = self._error_kind(exc)
+                failures[key] = kind
                 self._record_failure(config, kind, structured=True)
                 logger.warning(
                     "[LLMProvider] failed model=%s task_type=%s mode=structured kind=%s error_type=%s error=%s",
@@ -440,11 +614,15 @@ class LLMProvider:
                 continue
 
         if attempted == 0:
-            raise RuntimeError("Tous les circuits LLM configurÃ©s sont temporairement ouverts.")
+            raise LLMUnavailableError(
+                "Tous les circuits LLM configurés sont temporairement ouverts.",
+                failures,
+            )
 
-        raise RuntimeError(
-            f"Tous les modÃ¨les LLM (mode structurÃ©) ont Ã©chouÃ©. DerniÃ¨re erreur : {last_error}"
-        )
+        raise LLMUnavailableError(
+            f"Tous les modèles LLM (mode structuré) ont échoué. Dernière erreur : {last_error}",
+            failures,
+        ) from last_error
 
 
 
