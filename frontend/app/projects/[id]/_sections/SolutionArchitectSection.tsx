@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 
 import api from "@/lib/api";
 
+import { failureReasonMessage, misconfiguredModelsMessage } from "../_lib/pipeline";
+
 type Language = "fr" | "en" | string;
 
 type TechLayer = {
@@ -123,7 +125,7 @@ const copy = {
     loadError: "Impossible de charger l'architecture technique.",
     actionError: "La génération de l'architecture a échoué.",
     noArchitecture:
-      "L'architecture technique est générée à la demande, une fois l'analyse terminée. Cliquez sur Générer pour lancer le pipeline.",
+      "Aucune architecture enregistrée pour ce projet. Utilisez « Générer l'architecture » pour la relancer.",
     stale: "Le contexte du projet a changé : régénérez l'architecture avant de vous y fier.",
     confidence: "Confiance",
     style: "Style d'architecture",
@@ -170,7 +172,7 @@ const copy = {
     loadError: "Unable to load the technical architecture.",
     actionError: "Architecture generation failed.",
     noArchitecture:
-      "The technical architecture is generated on demand, once analysis is complete. Click Generate to start the pipeline.",
+      "No architecture is stored for this project. Use Generate architecture to run it again.",
     stale: "The project context has changed: regenerate the architecture before relying on it.",
     confidence: "Confidence",
     style: "Architecture style",
@@ -209,13 +211,25 @@ const copy = {
   },
 };
 
-function messageFrom(error: unknown, fallback: string) {
+function messageFrom(error: unknown, fallback: string, language: Language = "fr") {
   if (typeof error === "object" && error && "response" in error) {
     const detail = (error as { response?: { data?: { detail?: unknown } } })
       .response?.data?.detail;
     if (typeof detail === "string") return detail;
     if (detail && typeof detail === "object" && "message" in detail) {
       const code = (detail as { code?: unknown }).code;
+      // Backend classification (quota / broken model id / invalid output)
+      // replaces the old generic "temporarily unavailable" message.
+      const reason = (detail as { reason?: unknown }).reason;
+      if (typeof reason === "string") {
+        const models = (detail as { misconfigured_models?: unknown }).misconfigured_models;
+        const extra = misconfiguredModelsMessage(
+          Array.isArray(models) ? models.map(String) : [],
+          language,
+        );
+        const main = failureReasonMessage(reason, language);
+        if (main) return extra ? `${main} ${extra}` : main;
+      }
       if (code === "generation_temporarily_unavailable") {
         return "Le service IA est temporairement indisponible. Réessayez dans quelques instants.";
       }
@@ -507,7 +521,10 @@ export default function SolutionArchitectSection({
     if (architecture) {
       void loadRender();
     }
-  }, [architecture?.context_fingerprint, loadRender]);
+  // Keyed on the architecture object itself: a regeneration from the same
+  // project context keeps the same fingerprint, so keying on the fingerprint
+  // left the freshly cleared render empty ("rendu indisponible").
+  }, [architecture, loadRender]);
 
   const run = async (action: () => Promise<SolutionArchitectureResponse>) => {
     setWorking(true);
@@ -515,7 +532,7 @@ export default function SolutionArchitectSection({
     try {
       sync(await action());
     } catch (requestError) {
-      setError(messageFrom(requestError, t.actionError));
+      setError(messageFrom(requestError, t.actionError, language));
     } finally {
       setWorking(false);
     }
@@ -648,6 +665,18 @@ export default function SolutionArchitectSection({
                 layer={architecture.stack.infrastructure}
                 t={t}
               />
+              {/* Project-specific layers (realtime, cache, offline sync...)
+                  were computed by the backend but never displayed. */}
+              {Object.entries(architecture.stack.additional_layers ?? {}).map(
+                ([name, layer]) => (
+                  <TechLayerCard
+                    key={name}
+                    label={name.replace(/[_-]+/g, " ")}
+                    layer={layer}
+                    t={t}
+                  />
+                ),
+              )}
             </div>
           </div>
 

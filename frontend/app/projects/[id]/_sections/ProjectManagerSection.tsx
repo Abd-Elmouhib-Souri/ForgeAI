@@ -6,6 +6,14 @@ import api from "@/lib/api";
 
 type Language = "fr" | "en" | string;
 
+// Display-only rounding (backend values are untouched): 18.333333 -> 18,3.
+function formatMetric(value: number | null | undefined, language: string): string {
+  if (typeof value !== "number" || Number.isNaN(value)) return "—";
+  return new Intl.NumberFormat(language === "en" ? "en-GB" : "fr-FR", {
+    maximumFractionDigits: 1,
+  }).format(value);
+}
+
 type Story = {
   story_id: string;
   epic_id: string;
@@ -985,7 +993,7 @@ function VelocityChart({
                   <span className="rounded-full bg-sky-100 px-3 py-1 text-sky-800">
                     {text.projected}:{" "}
                     {
-                      projectedVelocity
+                      formatMetric(projectedVelocity, language)
                     }
                   </span>
 
@@ -1774,7 +1782,7 @@ export default function ProjectManagerSection({
                   {label}
                 </dt>
                 <dd className="mt-1 text-lg font-black text-slate-900">
-                  {value}
+                  {typeof value === "number" ? formatMetric(value, language) : value}
                 </dd>
               </div>
             ))}

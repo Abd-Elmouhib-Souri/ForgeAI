@@ -69,6 +69,7 @@ class KrokiClient:
 
     _SUPPORTED_FORMATS = {
         "svg",
+        "png",
     }
 
     _SVG_RE = re.compile(
@@ -502,6 +503,138 @@ class KrokiClient:
             )
 
         return body
+
+    async def render_png(
+        self,
+        *,
+        engine: str,
+        source: str,
+    ) -> bytes:
+        """
+        Comme ``render`` (SVG), mais pour la sortie PNG binaire requise
+        par l'export PDF/DOCX : reportlab et python-docx ne savent pas
+        inserer un SVG directement, contrairement a l'affichage web
+        interactif qui utilise ``render``. Chemin entierement separe
+        de ``render`` : ne modifie jamais son comportement existant.
+        """
+        payload = self._validate_request(
+            engine=engine,
+            source=source,
+            output_format="png",
+        )
+
+        normalized_engine = engine.strip().casefold()
+
+        url = self.base_url + "/" + normalized_engine + "/png"
+
+        headers = {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Accept": "image/png",
+        }
+
+        if self.api_token:
+            headers["Authorization"] = "Bearer " + self.api_token
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.timeout_seconds,
+                transport=self._transport,
+            ) as client:
+                response = await client.post(url, content=payload, headers=headers)
+
+        except (
+            httpx.TimeoutException,
+            httpx.NetworkError,
+            httpx.RequestError,
+        ) as exc:
+            raise KrokiRenderError(
+                "renderer_unavailable",
+                "Kroki renderer is temporarily unavailable.",
+            ) from exc
+
+        status = response.status_code
+
+        if status == 429:
+            raise KrokiRenderError(
+                "renderer_rate_limited",
+                "Kroki renderer rate limit reached.",
+                status_code=status,
+            )
+
+        if status >= 500:
+            raise KrokiRenderError(
+                "renderer_unavailable",
+                "Kroki renderer returned a server-side failure.",
+                status_code=status,
+            )
+
+        if status >= 400:
+            raise KrokiRenderError(
+                "renderer_invalid_request",
+                "Kroki rejected the rendering request.",
+                status_code=status,
+            )
+
+        content_type = (
+            response.headers.get("content-type", "")
+            .split(";", 1)[0]
+            .strip()
+            .casefold()
+        )
+
+        body = response.content or b""
+
+        if content_type != "image/png":
+            raise KrokiRenderError(
+                "renderer_invalid_response",
+                "Kroki response has an unexpected content type.",
+                status_code=status,
+            )
+
+        if not body:
+            raise KrokiRenderError(
+                "renderer_invalid_response",
+                "Kroki returned an empty PNG response.",
+                status_code=status,
+            )
+
+        return body
+
+    async def render_uml_bundle_png(
+        self,
+        bundle: UMLDiagramBundleV1,
+    ) -> dict[str, bytes]:
+        """
+        Comme ``render_uml_bundle`` (SVG), mais ne renvoie que les
+        octets PNG des diagrammes reussis : un diagramme absent du
+        dictionnaire signifie simplement "rendu indisponible", jamais
+        une erreur qui bloque l'export global (meme doctrine que le
+        SVG : Kroki est un moteur de rendu, jamais une autorite).
+        """
+        if not isinstance(bundle, UMLDiagramBundleV1):
+            raise TypeError("bundle must be a UMLDiagramBundleV1")
+
+        ordered = (
+            ("use_case", bundle.use_case),
+            ("class_diagram", bundle.class_diagram),
+            ("sequence", bundle.sequence),
+            ("activity", bundle.activity),
+        )
+
+        output: dict[str, bytes] = {}
+
+        for diagram_type, diagram in ordered:
+            try:
+                output[diagram_type] = await self.render_png(
+                    engine="plantuml",
+                    source=diagram.source,
+                )
+            except KrokiRenderError:
+                # Absence silencieuse : pdf_builder.py affiche un texte
+                # de repli plutot qu'une image cassee.
+                continue
+
+        return output
 
     async def render_uml_bundle(
         self,

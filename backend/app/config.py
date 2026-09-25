@@ -64,12 +64,25 @@ class Settings(BaseSettings):
 
     GROQ_API_KEY: str = ""
     GROQ_API_BASE: str = ""
-    GROQ_MODEL: str = "llama-3.3-70b-versatile"
-    GROQ_FALLBACK_MODEL: str = "llama-3.1-8b-instant"
+    # Defaults only apply when .env leaves them empty. llama-3.3-70b-versatile,
+    # llama-3.1-8b-instant and groq/compound(-mini) are decommissioned by Groq
+    # (HTTP 404 model_not_found): verify with GET /openai/v1/models.
+    GROQ_MODEL: str = "openai/gpt-oss-120b"
+    GROQ_FALLBACK_MODEL: str = "qwen/qwen3.8-27b"
 
     LLM_PRIMARY_PROVIDER: str = "gemini"
     LLM_FALLBACK_PROVIDER: str = "groq"
     LLM_REQUEST_TIMEOUT_SECONDS: int = 90
+    # Groq free tier answers 429 "Please try again in 7.6s" when the
+    # per-minute token budget is spent: wait that long (bounded) instead of
+    # failing the whole generation. 0 disables in-call waiting.
+    LLM_RATE_LIMIT_MAX_WAIT_SECONDS: float = 20.0
+    # Smallest useful answer budget: below it a structured JSON answer would
+    # be truncated, so the model is skipped instead of producing junk.
+    LLM_MIN_OUTPUT_TOKENS: int = 1200
+    # gpt-oss models spend hidden reasoning tokens that count against the
+    # per-minute budget; "low" keeps them small. Empty string disables.
+    GROQ_REASONING_EFFORT: str = "low"
     LLM_CIRCUIT_FAILURES: int = 3
     LLM_CIRCUIT_COOLDOWN_SECONDS: int = 180
 

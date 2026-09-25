@@ -11,6 +11,7 @@ from app.database import get_db
 from app.integrations.kroki_client import KrokiClient
 from app.models import Project, User
 from app.security import get_current_user
+from app.services.llm_failure_classifier import classify
 from app.services.solution_architecture_plan_service import (
     ANALYSIS_DATA_KEY,
     SolutionArchitecturePlanError,
@@ -83,9 +84,17 @@ def _raise_plan_error(exc: SolutionArchitecturePlanError) -> None:
         if exc.code == "generation_temporarily_unavailable"
         else status.HTTP_422_UNPROCESSABLE_ENTITY
     )
+    # "reason" tells the UI WHY (quota, broken model id, invalid output)
+    # instead of one generic "temporarily unavailable" for every cause.
+    info = classify(exc)
     raise HTTPException(
         status_code=status_code,
-        detail={"code": exc.code, "message": str(exc)},
+        detail={
+            "code": exc.code,
+            "message": str(exc),
+            "reason": info.code,
+            "misconfigured_models": list(info.misconfigured_models),
+        },
     ) from exc
 
 
