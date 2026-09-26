@@ -18,6 +18,7 @@ from app.services.export.pdf_builder import build_full_flow
 from app.services.export.pdf_design import build_document, build_styles
 from app.services.export import storage
 from app.services.export.docx_builder import build_docx
+from app.services.export.pptx_builder import build_pptx
 from app.services.export.labels import labels_for
 from app.services.solution_architecture_plan_service import (
     ANALYSIS_DATA_KEY as SOLUTION_ARCHITECTURE_KEY,
@@ -121,10 +122,21 @@ def _render_word(data: dict, title: str, labels: dict, diagram_images: dict, gen
     return _render
 
 
-# format public -> (enum stocke, extension, renderer)
+def _render_powerpoint(data: dict, title: str, labels: dict, diagram_images: dict, generated_at: str):
+    """Returns the sync renderer for storage.write_atomically (PPTX)."""
+
+    def _render(temp_path: str) -> None:
+        # python-pptx est synchrone : meme traitement hors event loop.
+        build_pptx(data, generated_at, diagram_images, temp_path)
+
+    return _render
+
+
+# format public -> (enum stocke, extension, nom du document, renderer)
 _FORMATS = {
-    "pdf": (ExportFormat.PDF, "pdf", _render_pdf),
-    "word": (ExportFormat.WORD, "docx", _render_word),
+    "pdf": (ExportFormat.PDF, "pdf", "business_plan", _render_pdf),
+    "word": (ExportFormat.WORD, "docx", "business_plan", _render_word),
+    "powerpoint": (ExportFormat.POWERPOINT, "pptx", "pitch_deck", _render_powerpoint),
 }
 
 
@@ -139,7 +151,7 @@ async def _generate_export(
     fois, rendu hors event loop, fichier prive a cle aleatoire, ligne
     Export creee seulement apres un fichier complet.
     """
-    export_format, extension, renderer = _FORMATS[fmt]
+    export_format, extension, document_name, renderer = _FORMATS[fmt]
     project = await _get_project_or_404(project_id, db, current_user)
     analysis_data = project.analysis_data if isinstance(project.analysis_data, dict) else {}
     language = getattr(project, "output_language", None)
@@ -181,7 +193,7 @@ async def _generate_export(
         "export_id": export_row.id,
         "format": fmt,
         "download_url": _download_url(project_id, export_row.id),
-        "file_name": storage.download_filename(project.title, "business_plan", extension),
+        "file_name": storage.download_filename(project.title, document_name, extension),
         "created_at": export_row.created_at,
     }
 
@@ -193,6 +205,15 @@ async def export_project_pdf(
     db: AsyncSession = Depends(get_db),
 ):
     return await _generate_export("pdf", project_id, current_user, db)
+
+
+@router.post("/{project_id}/export/powerpoint")
+async def export_project_pitch_deck(
+    project_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _generate_export("powerpoint", project_id, current_user, db)
 
 
 @router.post("/{project_id}/export/word")

@@ -22,32 +22,34 @@ type DownloadTarget = {
 };
 
 // Formats served by POST /projects/{id}/export/{format} (same private flow).
-type ExportFormat = "pdf" | "word";
+type ExportFormat = "pdf" | "word" | "powerpoint";
 
 const copy = {
   fr: {
     title: "Export",
     intro:
-      "Télécharge le rapport complet du projet (13 sections du CDC) en PDF prêt à partager, ou en Word modifiable.",
+      "Télécharge le rapport complet du projet (13 sections du CDC) en PDF prêt à partager ou en Word modifiable, et un pitch deck PowerPoint de 12 slides.",
     exportPdf: "Exporter en PDF",
     exportWord: "Exporter en Word",
+    exportDeck: "Exporter le pitch deck",
     exporting: "Génération en cours…",
     download: "Télécharger à nouveau",
     downloading: "Téléchargement…",
-    ready: { pdf: "Le PDF est prêt. Le téléchargement a démarré.", word: "Le document Word est prêt. Le téléchargement a démarré." },
+    ready: { pdf: "Le PDF est prêt. Le téléchargement a démarré.", word: "Le document Word est prêt. Le téléchargement a démarré.", powerpoint: "Le pitch deck est prêt. Le téléchargement a démarré." },
     error: "L'export a échoué. Réessayez dans quelques instants.",
     downloadError: "Le téléchargement a échoué. Relancez l'export.",
   },
   en: {
     title: "Export",
     intro:
-      "Download the complete project report (13 CDC sections) as a ready-to-share PDF or an editable Word document.",
+      "Download the complete project report (13 CDC sections) as a ready-to-share PDF or an editable Word document, and a 12-slide PowerPoint pitch deck.",
     exportPdf: "Export as PDF",
     exportWord: "Export as Word",
+    exportDeck: "Export the pitch deck",
     exporting: "Generating…",
     download: "Download again",
     downloading: "Downloading…",
-    ready: { pdf: "The PDF is ready. The download has started.", word: "The Word document is ready. The download has started." },
+    ready: { pdf: "The PDF is ready. The download has started.", word: "The Word document is ready. The download has started.", powerpoint: "The pitch deck is ready. The download has started." },
     error: "Export failed. Please try again shortly.",
     downloadError: "Download failed. Please export again.",
   },
@@ -158,6 +160,14 @@ export default function ExportSection({
               className="rounded-2xl border border-violet-300 bg-white px-5 py-3 text-sm font-black text-violet-800 transition hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {working === "word" ? t.exporting : t.exportWord}
+            </button>
+            <button
+              type="button"
+              disabled={working !== null}
+              onClick={() => void runExport("powerpoint")}
+              className="rounded-2xl border border-violet-300 bg-white px-5 py-3 text-sm font-black text-violet-800 transition hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {working === "powerpoint" ? t.exporting : t.exportDeck}
             </button>
           </div>
         </div>
