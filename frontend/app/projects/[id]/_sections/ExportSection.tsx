@@ -6,22 +6,33 @@ import api from "@/lib/api";
 
 type Language = "fr" | "en" | string;
 
+// Backend contract (Sprint 6.1 hardening): no public file URL anymore,
+// only an authenticated download endpoint relative to the API root.
 type ExportResponse = {
   export_id: number;
   format: string;
-  file_path: string;
+  download_url: string;
+  file_name: string;
   created_at: string;
+};
+
+type DownloadTarget = {
+  url: string;
+  fileName: string;
 };
 
 const copy = {
   fr: {
     title: "Export",
     intro:
-      "Telecharge le rapport complet du projet (13 sections du CDC) en document PDF pret a partager.",
+      "Télécharge le rapport complet du projet (13 sections du CDC) en document PDF prêt à partager.",
     exportPdf: "Exporter en PDF",
-    exporting: "Generation du PDF en cours…",
-    download: "Telecharger le PDF",
-    error: "L'export a echoue. Reessayez dans quelques instants.",
+    exporting: "Génération du PDF en cours…",
+    download: "Télécharger le PDF",
+    downloading: "Téléchargement…",
+    ready: "Le PDF est prêt. Le téléchargement a démarré.",
+    error: "L'export a échoué. Réessayez dans quelques instants.",
+    downloadError: "Le téléchargement a échoué. Relancez l'export.",
   },
   en: {
     title: "Export",
@@ -30,7 +41,10 @@ const copy = {
     exportPdf: "Export as PDF",
     exporting: "Generating PDF…",
     download: "Download the PDF",
+    downloading: "Downloading…",
+    ready: "The PDF is ready. The download has started.",
     error: "Export failed. Please try again shortly.",
+    downloadError: "Download failed. Please export again.",
   },
 };
 
@@ -43,6 +57,19 @@ function messageFrom(error: unknown, fallback: string) {
   return fallback;
 }
 
+// Saves a Blob under the given name without navigating away.
+function saveBlob(blob: Blob, fileName: string) {
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  // Release the in-memory copy once the browser has taken the file.
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+}
+
 export default function ExportSection({
   projectId,
   language,
@@ -53,8 +80,24 @@ export default function ExportSection({
   const t = language === "en" ? copy.en : copy.fr;
 
   const [working, setWorking] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState("");
-  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+  const [download, setDownload] = useState<DownloadTarget | null>(null);
+
+  // The bearer token lives in the axios instance: a plain <a href> could
+  // not authenticate, so the file is fetched as a Blob through `api`.
+  const fetchAndSave = async (target: DownloadTarget) => {
+    setDownloading(true);
+    try {
+      const response = await api.get<Blob>(target.url, { responseType: "blob" });
+      saveBlob(response.data, target.fileName);
+    } catch (requestError) {
+      // A Blob error body cannot be read as JSON detail: generic message.
+      setError(messageFrom(requestError, t.downloadError));
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   const runExport = async () => {
     setWorking(true);
@@ -63,11 +106,15 @@ export default function ExportSection({
       const response = await api.post<ExportResponse>(
         `/projects/${projectId}/export/pdf`,
       );
-      const base = process.env.NEXT_PUBLIC_API_URL ?? "";
-      setDownloadUrl(`${base}${response.data.file_path}`);
+      const target = {
+        url: response.data.download_url,
+        fileName: response.data.file_name,
+      };
+      setDownload(target);
+      await fetchAndSave(target);
     } catch (requestError) {
       setError(messageFrom(requestError, t.error));
-      setDownloadUrl(null);
+      setDownload(null);
     } finally {
       setWorking(false);
     }
@@ -104,16 +151,17 @@ export default function ExportSection({
           </p>
         )}
 
-        {downloadUrl && (
-          <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-            <a
-              href={downloadUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-sm font-black text-emerald-800 underline"
+        {download && !error && (
+          <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm font-semibold text-emerald-800">{t.ready}</p>
+            <button
+              type="button"
+              disabled={downloading}
+              onClick={() => void fetchAndSave(download)}
+              className="shrink-0 rounded-xl border border-emerald-300 bg-white px-4 py-2 text-sm font-black text-emerald-800 transition hover:bg-emerald-100 disabled:opacity-60"
             >
-              {t.download}
-            </a>
+              {downloading ? t.downloading : t.download}
+            </button>
           </div>
         )}
       </div>

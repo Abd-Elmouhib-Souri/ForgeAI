@@ -255,7 +255,11 @@ class ProjectManagementPlanService:
             )
 
         try:
-            advice = await AIScrumMasterAgent().generate_advice(
+            # Advice rationales follow the project language, like the
+            # Product Owner stories and the deterministic fallback.
+            advice = await AIScrumMasterAgent(
+                output_language=context.language,
+            ).generate_advice(
                 estimated,
                 graph,
                 effective_settings,

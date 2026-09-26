@@ -12,10 +12,8 @@ warnings.filterwarnings(
 )
 from contextlib import asynccontextmanager
 import logging
-from pathlib import Path
 from fastapi import FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy.sql import text
 from app.routers.admin import router as admin_router
@@ -87,13 +85,10 @@ app.include_router(export_router)
 app.include_router(pipeline_router)
 app.include_router(admin_router)
 
-# Sert les fichiers d'export (PDF, puis DOCX/PPTX) ecrits par
-# app/routers/export.py sur disque, a l'URL publique documentee au CDC
-# (file_path=f"/exports/{project.id}/...") ; le dossier est cree ici au
-# demarrage s'il n'existe pas encore (premier export de l'instance).
-EXPORTS_DIR = Path("/app/exports")
-EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
-app.mount("/exports", StaticFiles(directory=str(EXPORTS_DIR)), name="exports")
+# Sprint 6.1 hardening : les exports ne sont PLUS servis publiquement.
+# Ils sont stockes dans settings.EXPORTS_DIR et telecharges uniquement via
+# GET /projects/{id}/exports/{export_id}/download (authentifie, filtre
+# sur le proprietaire). Voir app/services/export/storage.py.
 
 @app.get("/", status_code=status.HTTP_200_OK, tags=["System"])
 async def root():

@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     # per-minute token budget is spent: wait that long (bounded) instead of
     # failing the whole generation. 0 disables in-call waiting.
     LLM_RATE_LIMIT_MAX_WAIT_SECONDS: float = 20.0
+    # Private folder holding generated exports (PDF/DOCX/PPTX). Never
+    # served statically: files are streamed by the owner-filtered
+    # /projects/{id}/exports/{export_id}/download endpoint only.
+    EXPORTS_DIR: str = "/app/exports"
     # Smallest useful answer budget: below it a structured JSON answer would
     # be truncated, so the model is skipped instead of producing junk.
     LLM_MIN_OUTPUT_TOKENS: int = 1200

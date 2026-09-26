@@ -10,6 +10,7 @@ from app.llm.json_response import (
     JSONResponseError,
     extract_json_object,
 )
+from app.llm.output_language import structured_output_language_rules
 from app.llm.provider import LLMProvider
 from app.schemas.project_management import (
     CanonicalBacklogV1,
@@ -92,6 +93,7 @@ class AIScrumMasterAgent:
     def __init__(
         self,
         llm: LLMProvider | None = None,
+        output_language: str = "",
     ) -> None:
         # Composition follows AIProductOwnerAgent.
         #
@@ -101,6 +103,11 @@ class AIScrumMasterAgent:
         # Provider fallback/rate-limit behavior remains centralized in
         # LLMProvider and must never be duplicated here.
         self._llm = llm
+
+        # Project output language ("fr"/"en"). Passed at construction so
+        # build_prompt/generate_advice keep their single canonical input
+        # shape. Empty keeps the legacy prompt (no language block).
+        self._output_language = str(output_language or "").strip()
 
     @staticmethod
     def _validate_inputs(
@@ -216,6 +223,18 @@ class AIScrumMasterAgent:
             separators=(",", ":"),
         )
 
+        # Only the rationale is human-readable; recommendation_type values
+        # and canonical story IDs must stay verbatim.
+        language_rules = (
+            structured_output_language_rules(
+                self._output_language,
+                translatable_fields=["recommendations[].rationale", "warnings"],
+            )
+            + "\n"
+            if self._output_language
+            else ""
+        )
+
         return (
             "You are the AI Scrum Master advisory agent for ForgeAI.\n"
             "\n"
@@ -265,6 +284,7 @@ class AIScrumMasterAgent:
             "- Return JSON only.\n"
             "- Do not wrap the response in Markdown fences.\n"
             "\n"
+            f"{language_rules}"
             "EXACT OUTPUT SHAPE (replace values only; preserve all keys)\n"
             f"{output_shape_json}\n"
             "\n"
