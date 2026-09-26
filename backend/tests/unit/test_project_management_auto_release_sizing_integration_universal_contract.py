@@ -66,7 +66,8 @@ async def _run_pipeline(
     )
 
     context = SimpleNamespace(
-        project_id="700"
+        project_id="700",
+        language="fr",
     )
 
     candidate = object()

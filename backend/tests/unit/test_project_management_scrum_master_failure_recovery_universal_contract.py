@@ -53,7 +53,7 @@ def _wire_pipeline_to_scrum_boundary(
     project, provider, country, sector or backlog shape.
     """
 
-    context = object()
+    context = SimpleNamespace(language="fr")
     candidate = object()
     canonical = object()
     prioritized = object()
