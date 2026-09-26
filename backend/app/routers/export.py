@@ -17,6 +17,8 @@ from app.services.export.data_assembly import assemble_export_data
 from app.services.export.pdf_builder import build_full_flow
 from app.services.export.pdf_design import build_document, build_styles
 from app.services.export import storage
+from app.services.export.docx_builder import build_docx
+from app.services.export.labels import labels_for
 from app.services.solution_architecture_plan_service import (
     ANALYSIS_DATA_KEY as SOLUTION_ARCHITECTURE_KEY,
     deserialize_current,
@@ -97,42 +99,72 @@ def _download_url(project_id: int, export_id: int) -> str:
     return f"/projects/{project_id}/exports/{export_id}/download"
 
 
-@router.post("/{project_id}/export/pdf")
-async def export_project_pdf(
+def _render_pdf(data: dict, title: str, labels: dict, diagram_images: dict, generated_at: str):
+    """Returns the sync renderer for storage.write_atomically (PDF)."""
+    styles = build_styles()
+    flow = build_full_flow(data, styles, generated_at, diagram_images)
+
+    def _render(temp_path: str) -> None:
+        # ReportLab est synchrone et CPU-bound.
+        build_document(temp_path, title, labels).multiBuild(flow)
+
+    return _render
+
+
+def _render_word(data: dict, title: str, labels: dict, diagram_images: dict, generated_at: str):
+    """Returns the sync renderer for storage.write_atomically (DOCX)."""
+
+    def _render(temp_path: str) -> None:
+        # python-docx est synchrone : meme traitement hors event loop.
+        build_docx(data, generated_at, diagram_images, temp_path)
+
+    return _render
+
+
+# format public -> (enum stocke, extension, renderer)
+_FORMATS = {
+    "pdf": (ExportFormat.PDF, "pdf", _render_pdf),
+    "word": (ExportFormat.WORD, "docx", _render_word),
+}
+
+
+async def _generate_export(
+    fmt: str,
     project_id: int,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
+    current_user: User,
+    db: AsyncSession,
+) -> dict:
+    """
+    Chemin unique PDF / Word : propriete verifiee, donnees assemblees une
+    fois, rendu hors event loop, fichier prive a cle aleatoire, ligne
+    Export creee seulement apres un fichier complet.
+    """
+    export_format, extension, renderer = _FORMATS[fmt]
     project = await _get_project_or_404(project_id, db, current_user)
     analysis_data = project.analysis_data if isinstance(project.analysis_data, dict) else {}
+    language = getattr(project, "output_language", None)
 
     data = assemble_export_data(
         analysis_data=analysis_data,
         project_name=project.title,
+        output_language=language,
     )
     diagram_images = await _fetch_diagram_images(analysis_data)
 
     # Nouvelle cle a chaque export : l'historique ne pointe jamais vers un
     # fichier ecrase par un export plus recent.
-    storage_key = storage.new_storage_key(project_id, "pdf")
+    storage_key = storage.new_storage_key(project_id, extension)
     target = storage.path_for_key(storage_key)
-
-    styles = build_styles()
     generated_at = datetime.datetime.now().strftime("%d/%m/%Y")
-    flow = build_full_flow(data, styles, generated_at, diagram_images)
-
-    def _render(temp_path: str) -> None:
-        # ReportLab est synchrone et CPU-bound.
-        build_document(temp_path, project.title).multiBuild(flow)
+    render = renderer(data, project.title, labels_for(language), diagram_images, generated_at)
 
     # Hors event loop : l'API reste reactive pendant la generation.
-    # Ecriture atomique : jamais de PDF partiel sur disque.
-    await asyncio.to_thread(storage.write_atomically, target, _render)
+    # Ecriture atomique : jamais de document partiel sur disque.
+    await asyncio.to_thread(storage.write_atomically, target, render)
 
-    # La ligne Export n'est creee qu'apres un fichier complet.
     export_row = Export(
         project_id=project_id,
-        format=ExportFormat.PDF,
+        format=export_format,
         file_path=storage_key,
         template_used="business",
     )
@@ -147,11 +179,29 @@ async def export_project_pdf(
 
     return {
         "export_id": export_row.id,
-        "format": "pdf",
+        "format": fmt,
         "download_url": _download_url(project_id, export_row.id),
-        "file_name": storage.download_filename(project.title, "business_plan", "pdf"),
+        "file_name": storage.download_filename(project.title, "business_plan", extension),
         "created_at": export_row.created_at,
     }
+
+
+@router.post("/{project_id}/export/pdf")
+async def export_project_pdf(
+    project_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _generate_export("pdf", project_id, current_user, db)
+
+
+@router.post("/{project_id}/export/word")
+async def export_project_word(
+    project_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await _generate_export("word", project_id, current_user, db)
 
 
 # Nom lisible du document selon le format (Word / pitch deck en 6.2 / 6.3).

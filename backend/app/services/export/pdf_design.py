@@ -49,7 +49,7 @@ MARGIN_BOTTOM = 2.4 * cm
 CONTENT_WIDTH = PAGE_SIZE[0] - MARGIN_LEFT - MARGIN_RIGHT
 LANDSCAPE_CONTENT_WIDTH = LANDSCAPE_PAGE_SIZE[0] - MARGIN_LEFT - MARGIN_RIGHT
 
-FOOTER_TEXT = "Genere par DotJcom ForgeAI"
+# Page furniture text now comes from labels.py (accented, per language).
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +103,9 @@ def build_styles() -> dict[str, ParagraphStyle]:
             textColor=TEXT_DARK,
             spaceBefore=10,
             spaceAfter=6,
+            # Never leave a subsection title alone at the bottom of a page
+            # (observed: "Base de donnees" orphaned from its table).
+            keepWithNext=1,
         ),
         "Body": ParagraphStyle(
             "Body",
@@ -175,7 +178,12 @@ def build_styles() -> dict[str, ParagraphStyle]:
 # numerotation. Deux gabarits de page distincts geres par BaseDocTemplate.
 # ---------------------------------------------------------------------------
 
-def make_page_callbacks(project_title: str):
+def make_page_callbacks(project_title: str, labels: dict[str, str] | None = None):
+    from .labels import FR
+
+    labels = labels or FR
+    footer_text = f"{labels['generated_by']} DotJcom ForgeAI"
+
     def _on_cover_page(canvas: Canvas, doc: BaseDocTemplate) -> None:
         # Bandeau violet en pied de la couverture, sans numero de page.
         canvas.saveState()
@@ -183,7 +191,7 @@ def make_page_callbacks(project_title: str):
         canvas.rect(0, 0, PAGE_SIZE[0], 0.9 * cm, stroke=0, fill=1)
         canvas.setFillColor(WHITE)
         canvas.setFont("Helvetica", 8)
-        canvas.drawCentredString(PAGE_SIZE[0] / 2, 0.32 * cm, FOOTER_TEXT)
+        canvas.drawCentredString(PAGE_SIZE[0] / 2, 0.32 * cm, footer_text)
         canvas.restoreState()
 
     def _on_content_page(canvas: Canvas, doc: BaseDocTemplate) -> None:
@@ -199,7 +207,7 @@ def make_page_callbacks(project_title: str):
         canvas.drawRightString(
             PAGE_SIZE[0] - MARGIN_RIGHT,
             PAGE_SIZE[1] - 1.3 * cm,
-            "Document confidentiel",
+            labels["confidential_document"],
         )
         canvas.setFillColor(TEXT_MUTED)
         canvas.setFont("Helvetica", 8.5)
@@ -221,10 +229,10 @@ def make_page_callbacks(project_title: str):
         canvas.drawCentredString(
             PAGE_SIZE[0] / 2,
             1.2 * cm,
-            f"Rapport ForgeAI — {project_title}",
+            f"{labels['report_footer']} — {project_title}",
         )
         canvas.drawRightString(
-            PAGE_SIZE[0] - MARGIN_RIGHT, 1.2 * cm, f"Page {doc.page}"
+            PAGE_SIZE[0] - MARGIN_RIGHT, 1.2 * cm, f"{labels['page']} {doc.page}"
         )
         canvas.restoreState()
 
@@ -253,9 +261,9 @@ def make_page_callbacks(project_title: str):
 
         canvas.setFont("Helvetica", 8)
         canvas.setFillColor(TEXT_FAINT)
-        canvas.drawString(MARGIN_LEFT, 1.2 * cm, FOOTER_TEXT)
+        canvas.drawString(MARGIN_LEFT, 1.2 * cm, footer_text)
         canvas.drawRightString(
-            LANDSCAPE_PAGE_SIZE[0] - MARGIN_RIGHT, 1.2 * cm, f"Page {doc.page}"
+            LANDSCAPE_PAGE_SIZE[0] - MARGIN_RIGHT, 1.2 * cm, f"{labels['page']} {doc.page}"
         )
         canvas.restoreState()
 
@@ -282,7 +290,11 @@ class _ExportDocTemplate(BaseDocTemplate):
             self.notify("TOCEntry", (level, text, self.page))
 
 
-def build_document(file_path: str, project_title: str) -> BaseDocTemplate:
+def build_document(
+    file_path: str,
+    project_title: str,
+    labels: dict[str, str] | None = None,
+) -> BaseDocTemplate:
     """
     Construit un BaseDocTemplate a trois gabarits : "Cover" (une page,
     sans en-tete/pied), "Content" (portrait, la majorite des pages) et
@@ -291,7 +303,7 @@ def build_document(file_path: str, project_title: str) -> BaseDocTemplate:
     entre eux via NextPageTemplate(...).
     """
     on_cover_page, on_content_page, on_content_landscape_page = (
-        make_page_callbacks(project_title)
+        make_page_callbacks(project_title, labels)
     )
 
     frame_cover = Frame(

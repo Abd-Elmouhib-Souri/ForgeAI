@@ -31,6 +31,6 @@ test("no public export URL is ever built", () => {
 
 test("export labels are properly accented French", () => {
   assert.match(section, /Télécharge le rapport complet/);
-  assert.match(section, /Génération du PDF en cours/);
+  assert.match(section, /Génération en cours/);
   assert.doesNotMatch(section, /Telecharge|Generation du|echoue|Reessayez/);
 });

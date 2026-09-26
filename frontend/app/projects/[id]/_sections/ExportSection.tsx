@@ -21,28 +21,33 @@ type DownloadTarget = {
   fileName: string;
 };
 
+// Formats served by POST /projects/{id}/export/{format} (same private flow).
+type ExportFormat = "pdf" | "word";
+
 const copy = {
   fr: {
     title: "Export",
     intro:
-      "Télécharge le rapport complet du projet (13 sections du CDC) en document PDF prêt à partager.",
+      "Télécharge le rapport complet du projet (13 sections du CDC) en PDF prêt à partager, ou en Word modifiable.",
     exportPdf: "Exporter en PDF",
-    exporting: "Génération du PDF en cours…",
-    download: "Télécharger le PDF",
+    exportWord: "Exporter en Word",
+    exporting: "Génération en cours…",
+    download: "Télécharger à nouveau",
     downloading: "Téléchargement…",
-    ready: "Le PDF est prêt. Le téléchargement a démarré.",
+    ready: { pdf: "Le PDF est prêt. Le téléchargement a démarré.", word: "Le document Word est prêt. Le téléchargement a démarré." },
     error: "L'export a échoué. Réessayez dans quelques instants.",
     downloadError: "Le téléchargement a échoué. Relancez l'export.",
   },
   en: {
     title: "Export",
     intro:
-      "Download the complete project report (13 CDC sections) as a ready-to-share PDF document.",
+      "Download the complete project report (13 CDC sections) as a ready-to-share PDF or an editable Word document.",
     exportPdf: "Export as PDF",
-    exporting: "Generating PDF…",
-    download: "Download the PDF",
+    exportWord: "Export as Word",
+    exporting: "Generating…",
+    download: "Download again",
     downloading: "Downloading…",
-    ready: "The PDF is ready. The download has started.",
+    ready: { pdf: "The PDF is ready. The download has started.", word: "The Word document is ready. The download has started." },
     error: "Export failed. Please try again shortly.",
     downloadError: "Download failed. Please export again.",
   },
@@ -79,10 +84,11 @@ export default function ExportSection({
 }) {
   const t = language === "en" ? copy.en : copy.fr;
 
-  const [working, setWorking] = useState(false);
+  // Format being generated (null = idle): one export at a time.
+  const [working, setWorking] = useState<ExportFormat | null>(null);
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState("");
-  const [download, setDownload] = useState<DownloadTarget | null>(null);
+  const [download, setDownload] = useState<(DownloadTarget & { format: ExportFormat }) | null>(null);
 
   // The bearer token lives in the axios instance: a plain <a href> could
   // not authenticate, so the file is fetched as a Blob through `api`.
@@ -99,16 +105,17 @@ export default function ExportSection({
     }
   };
 
-  const runExport = async () => {
-    setWorking(true);
+  const runExport = async (format: ExportFormat) => {
+    setWorking(format);
     setError("");
     try {
       const response = await api.post<ExportResponse>(
-        `/projects/${projectId}/export/pdf`,
+        `/projects/${projectId}/export/${format}`,
       );
       const target = {
         url: response.data.download_url,
         fileName: response.data.file_name,
+        format,
       };
       setDownload(target);
       await fetchAndSave(target);
@@ -116,7 +123,7 @@ export default function ExportSection({
       setError(messageFrom(requestError, t.error));
       setDownload(null);
     } finally {
-      setWorking(false);
+      setWorking(null);
     }
   };
 
@@ -135,14 +142,24 @@ export default function ExportSection({
               {t.intro}
             </p>
           </div>
-          <button
-            type="button"
-            disabled={working}
-            onClick={() => void runExport()}
-            className="shrink-0 rounded-2xl bg-violet-700 px-5 py-3 text-sm font-black text-white transition hover:bg-violet-800 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {working ? t.exporting : t.exportPdf}
-          </button>
+          <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+            <button
+              type="button"
+              disabled={working !== null}
+              onClick={() => void runExport("pdf")}
+              className="rounded-2xl bg-violet-700 px-5 py-3 text-sm font-black text-white transition hover:bg-violet-800 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {working === "pdf" ? t.exporting : t.exportPdf}
+            </button>
+            <button
+              type="button"
+              disabled={working !== null}
+              onClick={() => void runExport("word")}
+              className="rounded-2xl border border-violet-300 bg-white px-5 py-3 text-sm font-black text-violet-800 transition hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {working === "word" ? t.exporting : t.exportWord}
+            </button>
+          </div>
         </div>
 
         {error && (
@@ -153,7 +170,7 @@ export default function ExportSection({
 
         {download && !error && (
           <div className="mt-4 flex flex-col gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-sm font-semibold text-emerald-800">{t.ready}</p>
+            <p className="text-sm font-semibold text-emerald-800">{t.ready[download.format]}</p>
             <button
               type="button"
               disabled={downloading}
