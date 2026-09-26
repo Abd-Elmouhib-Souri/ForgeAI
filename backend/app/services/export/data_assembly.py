@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.services.domain_integrity_guard import normalize_output_language
 from typing import Any, Mapping
 
 
@@ -333,38 +334,125 @@ def _assemble_sprint_planning(analysis_data: Mapping[str, Any]) -> dict[str, Any
     }
 
 
+def _string_list(value: Any) -> list[str]:
+    """Clean list of non-empty strings (tolerates None / scalars)."""
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item or "").strip()]
+
+
 def _assemble_solution_architecture(
     analysis_data: Mapping[str, Any],
 ) -> dict[str, Any] | None:
-    # ANALYSIS_DATA_KEY dans solution_architecture_plan_service.py = "solution_architecture".
-    # Absent pour tout projet ou la generation n'a pas encore reussi ; l'export
-    # doit alors afficher une section "non disponible", jamais planter.
+    """
+    Every element of the "Architecture technique" page, for the exports.
+
+    Persisted shape (solution_architecture_plan_service.serialize):
+        analysis_data["solution_architecture"] = {
+            "envelope_version": 1,
+            "canonical": CanonicalSolutionArchitectureV1 (model_dump),
+            "generated_at": ...,
+        }
+
+    Observed RED (project 31, 27 Sept 2026): the export read the fields at
+    the envelope ROOT, found nothing, and printed an empty "Architecture
+    technique" page with no diagrams. The canonical payload is read here;
+    a legacy root-level payload is still accepted.
+    """
     envelope = analysis_data.get("solution_architecture")
     if not isinstance(envelope, dict):
         return None
+    canonical = envelope.get("canonical")
+    if not isinstance(canonical, dict):
+        # Legacy / hand-seeded payloads stored the fields at the root.
+        canonical = envelope
+    if not any(isinstance(canonical.get(key), dict) for key in ("architecture", "stack", "uml", "database")):
+        return None
 
-    architecture = _section(envelope, "architecture")
-    stack = _section(envelope, "stack")
-    uml = _section(envelope, "uml")
-    database = _section(envelope, "database")
+    architecture = _section(canonical, "architecture")
+    stack = _section(canonical, "stack")
+    uml = _section(canonical, "uml")
+    database = _section(canonical, "database")
 
+    # Core layers first, then project-specific layers (e.g. real-time
+    # messaging): the frontend shows them, the export must not drop them.
+    stack_layers: list[dict[str, Any]] = []
+    for layer in ("frontend", "backend", "database", "infrastructure"):
+        spec = stack.get(layer)
+        if isinstance(spec, dict):
+            stack_layers.append({"layer": layer, **spec})
+    additional = stack.get("additional_layers")
+    if isinstance(additional, dict):
+        for layer, spec in additional.items():
+            if isinstance(spec, dict):
+                stack_layers.append({"layer": str(layer), **spec})
+    stack_layers = [
+        {
+            "layer": item["layer"],
+            "status": item.get("status") or "",
+            "technology": item.get("technology") or "",
+            "justification": item.get("justification") or "",
+            "alternatives": _string_list(item.get("alternatives")),
+        }
+        for item in stack_layers
+    ]
+
+    tables: list[dict[str, Any]] = []
+    for raw in database.get("table_definitions") or []:
+        if not isinstance(raw, dict):
+            continue
+        tables.append(
+            {
+                "name": raw.get("name") or "",
+                "description": raw.get("description") or "",
+                "columns": [
+                    {
+                        "name": col.get("name") or "",
+                        "data_type": col.get("data_type") or "",
+                        "primary_key": bool(col.get("primary_key")),
+                        "nullable": bool(col.get("nullable", True)),
+                    }
+                    for col in raw.get("columns") or []
+                    if isinstance(col, dict)
+                ],
+                "foreign_keys": [
+                    f"{fk.get('column')} -> {fk.get('references_table')}.{fk.get('references_column')}"
+                    for fk in raw.get("foreign_keys") or []
+                    if isinstance(fk, dict)
+                ],
+            }
+        )
+
+    confidence = canonical.get("confidence")
     return {
         "available": True,
         "style": architecture.get("style") or "",
-        "rationale": architecture.get("rationale") or [],
+        "rationale": _string_list(architecture.get("rationale")),
+        "quality_attributes": _string_list(architecture.get("quality_attributes")),
+        "constraints_addressed": _string_list(architecture.get("constraints_addressed")),
+        "risks": _string_list(architecture.get("risks")),
+        "alternatives": _string_list(architecture.get("alternatives")),
+        "conditions": _string_list(architecture.get("conditions")),
+        # Simple {layer: technology} view kept for existing consumers.
         "stack": {
-            layer: stack.get(layer, {}).get("technology")
-            for layer in ("frontend", "backend", "database", "infrastructure")
-            if isinstance(stack.get(layer), dict)
-            and stack.get(layer, {}).get("technology")
+            item["layer"]: item["technology"]
+            for item in stack_layers
+            if item["technology"]
         },
+        "stack_layers": stack_layers,
         "uml_diagrams": {
             diagram_type: (uml.get(diagram_type) or {}).get("source", "")
             for diagram_type in ("use_case", "class_diagram", "sequence", "activity")
             if isinstance(uml.get(diagram_type), dict)
         },
-        "database_sql": database.get("sql") or "",
         "database_status": database.get("status") or "",
+        "database_dialect": database.get("dialect") or "",
+        "database_sql": database.get("sql") or "",
+        "database_tables": tables,
+        "database_relationships": _string_list(database.get("relationships")),
+        "assumptions": _string_list(canonical.get("assumptions")),
+        "warnings": _string_list(canonical.get("warnings")),
+        "confidence": confidence if isinstance(confidence, (int, float)) else None,
     }
 
 
@@ -465,6 +553,7 @@ def assemble_export_data(
     *,
     analysis_data: Mapping[str, Any] | None,
     project_name: str,
+    output_language: str | None = None,
 ) -> dict[str, Any]:
     """
     Point d'entree unique de la couche d'export : lit analysis_data (le
@@ -483,6 +572,9 @@ def assemble_export_data(
     startup_score = _section(data, "startup_score")
 
     return {
+        # Project output language: builders pick their labels from it
+        # (labels.labels_for), never hard-code them.
+        "language": normalize_output_language(output_language),
         "cover": _assemble_cover(data, final_report, project_name),
         "executive_summary": _assemble_executive_summary(final_report),
         "description": _assemble_description(data, startup_score),

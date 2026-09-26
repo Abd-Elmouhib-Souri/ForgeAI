@@ -11,13 +11,77 @@ from reportlab.platypus import (
     KeepTogether,
     NextPageTemplate,
     PageBreak,
-    Paragraph,
+    Paragraph as _ReportLabParagraph,
     Spacer,
     Table,
     TableStyle,
 )
 
 from . import pdf_design as design
+from contextvars import ContextVar
+
+from .labels import (
+    DIAGRAM_ORDER,
+    FR,
+    category_label,
+    criteria_label,
+    labels_for,
+    layer_label,
+    status_label,
+)
+
+# Labels of the report being built. Set by build_full_flow() for the whole
+# (synchronous) flow construction; a ContextVar is isolated per thread and
+# per task, so concurrent FR and EN exports never mix their labels.
+_LABELS: ContextVar[dict[str, str]] = ContextVar("export_labels", default=FR)
+
+
+# Built-in PDF fonts (Helvetica / Courier) only cover Windows-1252: any
+# other character is drawn as a black box. LLM text often carries these
+# typographic variants (observed on project 31: U+2011 non-breaking hyphen
+# in "Wi-Fi", U+202F narrow no-break space in "< 2 s"). Map each one to a
+# visually equivalent Windows-1252 character. Unknown scripts are kept as
+# is: they need an embedded Unicode font, never a silent deletion.
+_PDF_SAFE_MAP = str.maketrans(
+    {
+        "\u2010": "-",       # hyphen
+        "\u2011": "-",       # non-breaking hyphen
+        "\u2012": "-",       # figure dash
+        "\u2212": "-",       # minus sign
+        "\u202f": "\u00a0",  # narrow no-break space -> no-break space
+        "\u2007": "\u00a0",  # figure space -> no-break space
+        "\u2009": " ",       # thin space
+        "\u200a": " ",       # hair space
+        "\u2002": " ",       # en space
+        "\u2003": " ",       # em space
+        "\u200b": "",        # zero-width space
+        "\u2060": "",        # word joiner
+        "\u2192": "->",      # rightwards arrow
+        "\u2190": "<-",      # leftwards arrow
+        "\u2264": "<=",
+        "\u2265": ">=",
+        "\u2248": "~",
+    }
+)
+
+
+def pdf_safe_text(text: Any) -> Any:
+    """Printable version of ``text`` for the built-in PDF fonts."""
+    if not isinstance(text, str):
+        return text
+    return text.translate(_PDF_SAFE_MAP)
+
+
+class Paragraph(_ReportLabParagraph):
+    """ReportLab Paragraph whose text is always made printable first."""
+
+    def __init__(self, text, *args, **kwargs):
+        super().__init__(pdf_safe_text(text), *args, **kwargs)
+
+
+def _t(key: str) -> str:
+    """Label of the current report language (see labels.py)."""
+    return _LABELS.get()[key]
 
 
 def _bullet_list(items: list[Any], styles: dict) -> list[Paragraph]:
@@ -40,7 +104,7 @@ def _section_heading(title: str, styles: dict) -> Paragraph:
 
 
 def _empty_note(styles: dict) -> Paragraph:
-    return Paragraph("Aucune donnee disponible pour cette section.", styles["Caption"])
+    return Paragraph(_t("no_data"), styles["Caption"])
 
 
 # ---------------------------------------------------------------------------
@@ -79,9 +143,9 @@ def _build_cover(data: dict[str, Any], styles: dict, generated_at: str) -> list[
     cover = data["cover"]
     flow: list[Any] = [
         Spacer(1, 1.8 * cm),
-        Paragraph("FORGEAI", styles["CoverMeta"]),
+        Paragraph(_t("brand"), styles["CoverMeta"]),
         Spacer(1, 0.2 * cm),
-        Paragraph("RAPPORT DE PROJET", styles["CoverMeta"]),
+        Paragraph(_t("report_kind"), styles["CoverMeta"]),
         Spacer(1, 1 * cm),
         Paragraph(cover["title"], styles["CoverTitle"]),
         Spacer(1, 0.2 * cm),
@@ -93,12 +157,12 @@ def _build_cover(data: dict[str, Any], styles: dict, generated_at: str) -> list[
     flow.append(Spacer(1, 1 * cm))
 
     identity_rows = [
-        _identity_row("Projet", cover["title"], styles),
-        _identity_row("Type", "Rapport d'analyse strategique et technique", styles),
-        _identity_row("Entreprise", "DotJcom Ltd — Soliman, Nabeul, Tunisie", styles),
-        _identity_row("Date", generated_at, styles),
-        _identity_row("Classification", "Confidentiel", styles),
-        _identity_row("Genere par", "DotJcom ForgeAI", styles),
+        _identity_row(_t("project"), cover["title"], styles),
+        _identity_row(_t("type"), _t("report_type"), styles),
+        _identity_row(_t("company"), "DotJcom Ltd — Soliman, Nabeul, Tunisie", styles),
+        _identity_row(_t("date"), generated_at, styles),
+        _identity_row(_t("classification"), _t("confidential"), styles),
+        _identity_row(_t("generated_by"), "DotJcom ForgeAI", styles),
     ]
     identity_table = Table(
         identity_rows,
@@ -121,10 +185,10 @@ def _build_cover(data: dict[str, Any], styles: dict, generated_at: str) -> list[
     score = data["startup_score"].get("score_out_of_10")
     score_text = f"{score:.1f}/10" if isinstance(score, (int, float)) else "—"
     stats = [
-        (score_text, "Startup Score"),
-        (str(len(data["personas"])), "Personas"),
-        (str(len(data["backlog"]["stories"])), "User stories"),
-        (str(len(data["sources"])), "Sources verifiees"),
+        (score_text, _t("startup_score")),
+        (str(len(data["personas"])), _t("personas")),
+        (str(len(data["backlog"]["stories"])), _t("stat_user_stories")),
+        (str(len(data["sources"])), _t("stat_verified_sources")),
     ]
     stat_w = design.CONTENT_WIDTH / 4
     stat_row = Table(
@@ -148,7 +212,7 @@ def _build_cover(data: dict[str, Any], styles: dict, generated_at: str) -> list[
     # qu'apres le premier passage de mise en page ; doc.multiBuild()
     # (utilise par le routeur, pas doc.build()) refait la pagination
     # jusqu'a ce que le sommaire soit stable.
-    flow.append(Paragraph("Sommaire", styles["SectionTitle"]))
+    flow.append(Paragraph(_t("table_of_contents"), styles["SectionTitle"]))
     flow.append(design.build_toc())
     flow.append(PageBreak())
     return flow
@@ -158,24 +222,23 @@ def _build_cover(data: dict[str, Any], styles: dict, generated_at: str) -> list[
 # 2. Resume executif
 # ---------------------------------------------------------------------------
 
-_VERDICT_LABELS = {
-    "STRONG_GO": ("Fort GO", design.SUCCESS, design.SUCCESS_LIGHT),
-    "GO": ("GO", design.SUCCESS, design.SUCCESS_LIGHT),
-    "CONDITIONAL_GO": ("GO conditionnel", design.WARNING, design.WARNING_LIGHT),
-    "NO_GO": ("NO-GO", design.DANGER, design.DANGER_LIGHT),
-    "INSUFFICIENT_EVIDENCE": (
-        "Preuves insuffisantes",
-        design.WARNING,
-        design.WARNING_LIGHT,
-    ),
+_VERDICT_STYLES = {
+    # code -> (label key, colour, background); "GO" keeps its own text.
+    "STRONG_GO": ("verdict_strong_go", design.SUCCESS, design.SUCCESS_LIGHT),
+    "GO": (None, design.SUCCESS, design.SUCCESS_LIGHT),
+    "CONDITIONAL_GO": ("verdict_conditional_go", design.WARNING, design.WARNING_LIGHT),
+    "NO_GO": ("verdict_no_go", design.DANGER, design.DANGER_LIGHT),
+    "INSUFFICIENT_EVIDENCE": ("verdict_insufficient_evidence", design.WARNING, design.WARNING_LIGHT),
 }
 
 
 def _verdict_badge(verdict_code: str, styles: dict) -> Table:
-    label, color, bg = _VERDICT_LABELS.get(
-        str(verdict_code or "").upper(),
-        (verdict_code or "Non disponible", design.TEXT_MUTED, design.SURFACE),
-    )
+    code = str(verdict_code or "").upper()
+    if code in _VERDICT_STYLES:
+        key, color, bg = _VERDICT_STYLES[code]
+        label = _t(key) if key else code
+    else:
+        label, color, bg = (verdict_code or _t("not_available"), design.TEXT_MUTED, design.SURFACE)
     table = Table([[Paragraph(label, styles["TableHeader"])]], colWidths=[6 * cm])
     table.setStyle(
         TableStyle(
@@ -194,7 +257,7 @@ def _verdict_badge(verdict_code: str, styles: dict) -> Table:
 
 def _build_executive_summary(data: dict[str, Any], styles: dict) -> list[Any]:
     summary = data["executive_summary"]
-    flow: list[Any] = [_section_heading("Resume executif", styles)]
+    flow: list[Any] = [_section_heading(_t("executive_summary"), styles)]
 
     flow.append(_verdict_badge(summary.get("verdict_code", ""), styles))
     flow.append(Spacer(1, 0.4 * cm))
@@ -203,15 +266,15 @@ def _build_executive_summary(data: dict[str, Any], styles: dict) -> list[Any]:
         flow.append(Paragraph(summary["final_recommendation"], styles["Body"]))
 
     if summary.get("debate_synthesis"):
-        flow.append(Paragraph("Synthese du comite strategique", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("committee_synthesis"), styles["SubsectionTitle"]))
         flow.append(Paragraph(summary["debate_synthesis"], styles["Body"]))
 
     if summary.get("critical_risks"):
-        flow.append(Paragraph("Risques critiques", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("critical_risks"), styles["SubsectionTitle"]))
         flow.extend(_bullet_list(summary["critical_risks"], styles))
 
     if summary.get("next_actions"):
-        flow.append(Paragraph("Prochaines actions", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("next_actions"), styles["SubsectionTitle"]))
         flow.extend(_bullet_list(summary["next_actions"], styles))
 
     flow.append(PageBreak())
@@ -224,19 +287,19 @@ def _build_executive_summary(data: dict[str, Any], styles: dict) -> list[Any]:
 
 def _build_description(data: dict[str, Any], styles: dict) -> list[Any]:
     desc = data["description"]
-    flow: list[Any] = [_section_heading("Description de l'idee", styles)]
+    flow: list[Any] = [_section_heading(_t("idea_description"), styles)]
 
     if desc.get("problem"):
-        flow.append(Paragraph("Probleme", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("problem"), styles["SubsectionTitle"]))
         flow.append(Paragraph(desc["problem"], styles["Body"]))
 
     if desc.get("solution"):
-        flow.append(Paragraph("Solution proposee", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("proposed_solution"), styles["SubsectionTitle"]))
         flow.append(Paragraph(desc["solution"], styles["Body"]))
 
     score = desc.get("innovation_breakdown_score") or desc.get("innovation_score")
     if score is not None:
-        flow.append(Paragraph("Score d'innovation", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("innovation_score"), styles["SubsectionTitle"]))
         flow.append(
             Paragraph(f"{score:.1f} / 10" if isinstance(score, float) else f"{score} / 10", styles["Body"])
         )
@@ -251,33 +314,33 @@ def _build_description(data: dict[str, Any], styles: dict) -> list[Any]:
 
 def _build_market_study(data: dict[str, Any], styles: dict) -> list[Any]:
     market = data["market_study"]
-    flow: list[Any] = [_section_heading("Etude de marche", styles)]
+    flow: list[Any] = [_section_heading(_t("market_study"), styles)]
 
     if market.get("summary"):
         flow.append(Paragraph(market["summary"], styles["Body"]))
 
     if market.get("market_size"):
-        flow.append(Paragraph("Taille du marche", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("market_size"), styles["SubsectionTitle"]))
         flow.append(Paragraph(market["market_size"], styles["Body"]))
 
     if market.get("target_market"):
-        flow.append(Paragraph("Marche cible", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("target_market"), styles["SubsectionTitle"]))
         flow.append(Paragraph(market["target_market"], styles["Body"]))
 
     if market.get("customer_segments"):
-        flow.append(Paragraph("Segments clients", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("customer_segments"), styles["SubsectionTitle"]))
         flow.extend(_bullet_list(market["customer_segments"], styles))
 
     if market.get("market_trends"):
-        flow.append(Paragraph("Tendances du marche", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("market_trends"), styles["SubsectionTitle"]))
         flow.extend(_bullet_list(market["market_trends"], styles))
 
     if market.get("adoption_barriers"):
-        flow.append(Paragraph("Freins a l'adoption", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("adoption_barriers"), styles["SubsectionTitle"]))
         flow.extend(_bullet_list(market["adoption_barriers"], styles))
 
     if market.get("recommendations"):
-        flow.append(Paragraph("Recommandations", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("recommendations"), styles["SubsectionTitle"]))
         flow.extend(_bullet_list(market["recommendations"], styles))
 
     flow.append(PageBreak())
@@ -325,7 +388,7 @@ def _swot_cell(title: str, items: list[str], color, bg, styles: dict, width) -> 
 
 def _build_swot(data: dict[str, Any], styles: dict) -> list[Any]:
     swot = data["swot"]
-    flow: list[Any] = [_section_heading("Analyse SWOT", styles)]
+    flow: list[Any] = [_section_heading(_t("swot"), styles)]
 
     if swot.get("summary"):
         flow.append(Paragraph(swot["summary"], styles["Body"]))
@@ -338,7 +401,7 @@ def _build_swot(data: dict[str, Any], styles: dict) -> list[Any]:
         [
             [
                 _swot_cell(
-                    "FORCES",
+                    _t("strengths").upper(),
                     swot.get("strengths", []),
                     design.SUCCESS,
                     design.SUCCESS_LIGHT,
@@ -346,7 +409,7 @@ def _build_swot(data: dict[str, Any], styles: dict) -> list[Any]:
                     inner_w,
                 ),
                 _swot_cell(
-                    "FAIBLESSES",
+                    _t("weaknesses").upper(),
                     swot.get("weaknesses", []),
                     design.DANGER,
                     design.DANGER_LIGHT,
@@ -356,7 +419,7 @@ def _build_swot(data: dict[str, Any], styles: dict) -> list[Any]:
             ],
             [
                 _swot_cell(
-                    "OPPORTUNITES",
+                    _t("opportunities").upper(),
                     swot.get("opportunities", []),
                     design.PRIMARY,
                     design.PRIMARY_LIGHT,
@@ -364,7 +427,7 @@ def _build_swot(data: dict[str, Any], styles: dict) -> list[Any]:
                     inner_w,
                 ),
                 _swot_cell(
-                    "MENACES",
+                    _t("threats").upper(),
                     swot.get("threats", []),
                     design.WARNING,
                     design.WARNING_LIGHT,
@@ -391,7 +454,7 @@ def _build_swot(data: dict[str, Any], styles: dict) -> list[Any]:
     if swot.get("strategic_recommendations"):
         recap = [
             Spacer(1, 0.3 * cm),
-            Paragraph("Recommandations strategiques", styles["SubsectionTitle"]),
+            Paragraph(_t("strategic_recommendations"), styles["SubsectionTitle"]),
         ]
         recap.extend(_bullet_list(swot["strategic_recommendations"], styles))
         # KeepTogether : un bloc court qui ne tiendrait pas en bas de la
@@ -449,11 +512,10 @@ def _bmc_pillar(
 
 def _build_business_model_canvas(data: dict[str, Any], styles: dict) -> list[Any]:
     bmc = data["business_model_canvas"]
-    flow: list[Any] = [_section_heading("Business Model Canvas", styles)]
+    flow: list[Any] = [_section_heading(_t("business_model_canvas"), styles)]
     flow.append(
         Paragraph(
-            "Les 9 blocs du canevas, regroupes selon les 4 piliers "
-            "classiques du Business Model Canvas (Osterwalder).",
+            _t("bmc_intro"),
             styles["BodyMuted"],
         )
     )
@@ -465,18 +527,18 @@ def _build_business_model_canvas(data: dict[str, Any], styles: dict) -> list[Any
         [
             [
                 _bmc_pillar(
-                    "INFRASTRUCTURE",
+                    _t("bmc_pillar_infrastructure"),
                     [
-                        ("Partenaires cles", bmc.get("key_partnerships", [])),
-                        ("Activites cles", bmc.get("key_activities", [])),
-                        ("Ressources cles", bmc.get("key_resources", [])),
+                        (_t("key_partnerships"), bmc.get("key_partnerships", [])),
+                        (_t("key_activities"), bmc.get("key_activities", [])),
+                        (_t("key_resources"), bmc.get("key_resources", [])),
                     ],
                     styles,
                     col_w,
                 ),
                 _bmc_pillar(
-                    "OFFRE",
-                    [("Proposition de valeur", bmc.get("value_proposition", []))],
+                    _t("bmc_pillar_offer"),
+                    [(_t("value_proposition"), bmc.get("value_proposition", []))],
                     styles,
                     col_w,
                 ),
@@ -501,20 +563,20 @@ def _build_business_model_canvas(data: dict[str, Any], styles: dict) -> list[Any
         [
             [
                 _bmc_pillar(
-                    "CLIENTS",
+                    _t("bmc_pillar_customers"),
                     [
-                        ("Relation client", bmc.get("customer_relationships", [])),
-                        ("Canaux", bmc.get("channels", [])),
-                        ("Segments clients", bmc.get("customer_segments", [])),
+                        (_t("customer_relationships"), bmc.get("customer_relationships", [])),
+                        (_t("channels"), bmc.get("channels", [])),
+                        (_t("customer_segments"), bmc.get("customer_segments", [])),
                     ],
                     styles,
                     col_w,
                 ),
                 _bmc_pillar(
-                    "FINANCES",
+                    _t("bmc_pillar_finances"),
                     [
-                        ("Structure de couts", bmc.get("cost_structure", [])),
-                        ("Sources de revenus", bmc.get("revenue_streams", [])),
+                        (_t("cost_structure"), bmc.get("cost_structure", [])),
+                        (_t("revenue_streams"), bmc.get("revenue_streams", [])),
                     ],
                     styles,
                     col_w,
@@ -562,29 +624,29 @@ def build_part1_flow(data: dict[str, Any], styles: dict, generated_at: str) -> l
 
 def _build_competitive_analysis(data: dict[str, Any], styles: dict) -> list[Any]:
     comp = data["competitive_analysis"]
-    flow: list[Any] = [_section_heading("Analyse concurrentielle", styles)]
+    flow: list[Any] = [_section_heading(_t("competitive_analysis"), styles)]
 
     if comp.get("market_gap"):
         flow.append(Paragraph(comp["market_gap"], styles["Body"]))
 
     if comp.get("local_competitors"):
-        flow.append(Paragraph("Concurrents locaux", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("local_competitors"), styles["SubsectionTitle"]))
         flow.extend(_bullet_list(comp["local_competitors"], styles))
 
     if comp.get("local_adjacent_solutions"):
-        flow.append(Paragraph("Solutions adjacentes locales", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("local_adjacent_solutions"), styles["SubsectionTitle"]))
         flow.extend(_bullet_list(comp["local_adjacent_solutions"], styles))
 
     if comp.get("international_benchmarks"):
-        flow.append(Paragraph("Benchmarks internationaux", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("international_benchmarks"), styles["SubsectionTitle"]))
         flow.extend(_bullet_list(comp["international_benchmarks"], styles))
 
     if comp.get("competitive_advantages"):
-        flow.append(Paragraph("Avantages concurrentiels", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("competitive_advantages"), styles["SubsectionTitle"]))
         flow.extend(_bullet_list(comp["competitive_advantages"], styles))
 
     if comp.get("limitations"):
-        flow.append(Paragraph("Limites de l'analyse", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("analysis_limitations"), styles["SubsectionTitle"]))
         flow.extend(_bullet_list(comp["limitations"], styles))
 
     flow.append(PageBreak())
@@ -595,18 +657,11 @@ def _build_competitive_analysis(data: dict[str, Any], styles: dict) -> list[Any]
 # Sources et preuves (ForgeCrawler) — tracabilite des affirmations
 # ---------------------------------------------------------------------------
 
-_CATEGORY_LABELS = {
-    "direct_competitor": "Concurrent direct",
-    "adjacent_solution": "Solution adjacente",
-    "technology_benchmark": "Benchmark technologique",
-    "market_evidence": "Preuve de marche",
-    "ecosystem_actor": "Acteur ecosysteme",
-}
 
 
 def _build_sources(data: dict[str, Any], styles: dict) -> list[Any]:
     sources = data["sources"]
-    flow: list[Any] = [_section_heading("Sources et preuves", styles)]
+    flow: list[Any] = [_section_heading(_t("sources"), styles)]
 
     if not sources:
         flow.append(_empty_note(styles))
@@ -615,17 +670,16 @@ def _build_sources(data: dict[str, Any], styles: dict) -> list[Any]:
 
     flow.append(
         Paragraph(
-            "Sources verifiees ayant contribue aux affirmations de ce rapport, "
-            "retenues par ForgeCrawler apres filtrage de pertinence et de fiabilite.",
+            _t("sources_intro"),
             styles["BodyMuted"],
         )
     )
     flow.append(Spacer(1, 0.2 * cm))
 
     header = [
-        Paragraph("Source", styles["TableHeader"]),
-        Paragraph("Categorie", styles["TableHeader"]),
-        Paragraph("Pertinence", styles["TableHeader"]),
+        Paragraph(_t("source"), styles["TableHeader"]),
+        Paragraph(_t("category"), styles["TableHeader"]),
+        Paragraph(_t("relevance"), styles["TableHeader"]),
     ]
     rows = [header]
     for source in sources:
@@ -634,7 +688,7 @@ def _build_sources(data: dict[str, Any], styles: dict) -> list[Any]:
             f"<font size=7.5 color='#7c3aed'>{source['url']}</font>",
             styles["TableCell"],
         )
-        category = _CATEGORY_LABELS.get(source["category"], source["category"])
+        category = category_label(_LABELS.get(), source["category"])
         score = source.get("relevance_score")
         score_text = f"{score:.0%}" if isinstance(score, (int, float)) else "—"
         rows.append(
@@ -673,22 +727,11 @@ def _build_sources(data: dict[str, Any], styles: dict) -> list[Any]:
     flow.append(PageBreak())
     return flow
 
-_CRITERIA_LABELS = {
-    "problem_solution_fit": "Adequation\nprobleme",
-    "market_potential": "Potentiel\nmarche",
-    "execution_feasibility": "Faisabilite",
-    "business_model_strength": "Modele\neconomique",
-    "competitive_advantage": "Avantage\nconcurrentiel",
-    "innovation": "Innovation",
-    "scalability": "Scalabilite",
-    "financial_viability": "Viabilite\nfinanciere",
-    "risk_management": "Gestion\ndes risques",
-}
 
 
 def _score_bar_chart(breakdown: dict[str, float]) -> Drawing:
     labels = [
-        _CRITERIA_LABELS.get(key, key) for key in breakdown if breakdown.get(key) is not None
+        criteria_label(_LABELS.get(), key) for key in breakdown if breakdown.get(key) is not None
     ]
     values = [v for v in breakdown.values() if v is not None]
 
@@ -713,7 +756,7 @@ def _score_bar_chart(breakdown: dict[str, float]) -> Drawing:
 
 def _build_startup_score(data: dict[str, Any], styles: dict) -> list[Any]:
     score = data["startup_score"]
-    flow: list[Any] = [_section_heading("Startup Score", styles)]
+    flow: list[Any] = [_section_heading(_t("startup_score"), styles)]
 
     value = score.get("score_out_of_10")
     if value is not None:
@@ -729,19 +772,19 @@ def _build_startup_score(data: dict[str, Any], styles: dict) -> list[Any]:
 
     breakdown = {k: v for k, v in score.get("breakdown", {}).items() if v is not None}
     if breakdown:
-        flow.append(Paragraph("Repartition par critere", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("score_breakdown"), styles["SubsectionTitle"]))
         flow.append(_score_bar_chart(breakdown))
 
     if score.get("strengths"):
-        flow.append(Paragraph("Forces", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("strengths"), styles["SubsectionTitle"]))
         flow.extend(_bullet_list(score["strengths"], styles))
 
     if score.get("weaknesses"):
-        flow.append(Paragraph("Faiblesses", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("weaknesses"), styles["SubsectionTitle"]))
         flow.extend(_bullet_list(score["weaknesses"], styles))
 
     if score.get("recommendations"):
-        recap = [Paragraph("Recommandations", styles["SubsectionTitle"])]
+        recap = [Paragraph(_t("recommendations"), styles["SubsectionTitle"])]
         recap.extend(_bullet_list(score["recommendations"], styles))
         flow.append(KeepTogether(recap))
 
@@ -788,7 +831,7 @@ def _metric_card(label: str, value: Any, styles: dict, width) -> Table:
 
 def _build_debate_room(data: dict[str, Any], styles: dict) -> list[Any]:
     debate = data["debate_room"]
-    flow: list[Any] = [_section_heading("Session strategique du comite", styles)]
+    flow: list[Any] = [_section_heading(_t("debate_room"), styles)]
 
     if not debate.get("votes") and not debate.get("committee"):
         flow.append(_empty_note(styles))
@@ -797,8 +840,8 @@ def _build_debate_room(data: dict[str, Any], styles: dict) -> list[Any]:
 
     flow.append(
         Paragraph(
-            f"{debate.get('rounds_count', 0)} tours de debat · "
-            f"{len(debate.get('committee', []))} membres du comite",
+            f"{debate.get('rounds_count', 0)} {_t('debate_rounds')} · "
+            f"{len(debate.get('committee', []))} {_t('committee_members')}",
             styles["BodyMuted"],
         )
     )
@@ -810,10 +853,10 @@ def _build_debate_room(data: dict[str, Any], styles: dict) -> list[Any]:
     metrics = Table(
         [
             [
-                _metric_card("Potentiel strategique", debate.get("potential_score"), styles, metric_w),
-                _metric_card("Confiance preuves", debate.get("confidence_score"), styles, metric_w),
-                _metric_card("Preparation execution", debate.get("execution_readiness_score"), styles, metric_w),
-                _metric_card("Attractivite investissement", debate.get("investment_attractiveness_score"), styles, metric_w),
+                _metric_card(_t("potential_score"), debate.get("potential_score"), styles, metric_w),
+                _metric_card(_t("confidence_score"), debate.get("confidence_score"), styles, metric_w),
+                _metric_card(_t("execution_readiness_score"), debate.get("execution_readiness_score"), styles, metric_w),
+                _metric_card(_t("investment_attractiveness_score"), debate.get("investment_attractiveness_score"), styles, metric_w),
             ]
         ],
         colWidths=[metric_w] * 4,
@@ -826,15 +869,15 @@ def _build_debate_room(data: dict[str, Any], styles: dict) -> list[Any]:
         flow.append(Paragraph(debate["debate_synthesis"], styles["Body"]))
 
     if debate.get("committee"):
-        flow.append(Paragraph("Composition du comite", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("committee_composition"), styles["SubsectionTitle"]))
         header = [
-            Paragraph("Role", styles["TableHeader"]),
-            Paragraph("Mandat", styles["TableHeader"]),
+            Paragraph(_t("role"), styles["TableHeader"]),
+            Paragraph(_t("mandate"), styles["TableHeader"]),
         ]
         rows = [header]
         for member in debate["committee"]:
             role_label = member["role"] + (
-                "" if member["voting_member"] else " (consultatif)"
+                "" if member["voting_member"] else f" ({_t('consultative')})"
             )
             rows.append(
                 [
@@ -866,12 +909,12 @@ def _build_debate_room(data: dict[str, Any], styles: dict) -> list[Any]:
         flow.append(Spacer(1, 0.3 * cm))
 
     if debate.get("votes"):
-        flow.append(Paragraph("Votes individuels du comite", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("committee_votes"), styles["SubsectionTitle"]))
         header = [
-            Paragraph("Membre", styles["TableHeader"]),
-            Paragraph("Vote", styles["TableHeader"]),
-            Paragraph("Confiance", styles["TableHeader"]),
-            Paragraph("Justification", styles["TableHeader"]),
+            Paragraph(_t("member"), styles["TableHeader"]),
+            Paragraph(_t("vote"), styles["TableHeader"]),
+            Paragraph(_t("confidence"), styles["TableHeader"]),
+            Paragraph(_t("justification"), styles["TableHeader"]),
         ]
         rows = [header]
         for vote in debate["votes"]:
@@ -912,30 +955,30 @@ def _build_debate_room(data: dict[str, Any], styles: dict) -> list[Any]:
     flow.append(PageBreak())
 
     if debate.get("critical_risks") or debate.get("missing_evidence"):
-        flow.append(_section_heading("Risques et preuves manquantes", styles))
+        flow.append(_section_heading(_t("risks_and_missing_evidence"), styles))
         if debate.get("critical_risks"):
-            flow.append(Paragraph("Risques critiques", styles["SubsectionTitle"]))
+            flow.append(Paragraph(_t("critical_risks"), styles["SubsectionTitle"]))
             flow.extend(_bullet_list(debate["critical_risks"], styles))
         if debate.get("missing_evidence"):
-            flow.append(Paragraph("Preuves manquantes", styles["SubsectionTitle"]))
+            flow.append(Paragraph(_t("missing_evidence"), styles["SubsectionTitle"]))
             flow.extend(_bullet_list(debate["missing_evidence"], styles))
 
     if debate.get("go_conditions") or debate.get("no_go_conditions"):
         if debate.get("go_conditions"):
-            flow.append(Paragraph("Conditions GO", styles["SubsectionTitle"]))
+            flow.append(Paragraph(_t("go_conditions"), styles["SubsectionTitle"]))
             flow.extend(_bullet_list(debate["go_conditions"], styles))
         if debate.get("no_go_conditions"):
-            flow.append(Paragraph("Conditions NO-GO", styles["SubsectionTitle"]))
+            flow.append(Paragraph(_t("no_go_conditions"), styles["SubsectionTitle"]))
             flow.extend(_bullet_list(debate["no_go_conditions"], styles))
 
     if debate.get("final_recommendation") or debate.get("improved_idea"):
-        flow.append(Paragraph("Recommandation finale du comite", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("committee_final_recommendation"), styles["SubsectionTitle"]))
         recap_rows = []
         if debate.get("final_recommendation"):
             recap_rows.append([Paragraph(debate["final_recommendation"], styles["Body"])])
         if debate.get("improved_idea"):
             recap_rows.append(
-                [Paragraph(f"<b>Idee amelioree :</b> {debate['improved_idea']}", styles["Body"])]
+                [Paragraph(f"<b>{_t('improved_idea')} :</b> {debate['improved_idea']}", styles["Body"])]
             )
         recap = Table(recap_rows, colWidths=[design.CONTENT_WIDTH])
         recap.setStyle(
@@ -962,19 +1005,19 @@ def _build_debate_room(data: dict[str, Any], styles: dict) -> list[Any]:
 
 def _persona_card(persona: dict[str, Any], styles: dict) -> Table:
     rows = [
-        [Paragraph(persona.get("name") or "Persona", styles["SubsectionTitle"])],
+        [Paragraph(persona.get("name") or _t("persona"), styles["SubsectionTitle"])],
     ]
     if persona.get("role"):
         rows.append([Paragraph(persona["role"], styles["BodyMuted"])])
     if persona.get("profile"):
         rows.append([Paragraph(persona["profile"], styles["Body"])])
     if persona.get("main_pain"):
-        rows.append([Paragraph(f"<b>Douleur principale :</b> {persona['main_pain']}", styles["Body"])])
+        rows.append([Paragraph(f"<b>{_t('main_pain')} :</b> {persona['main_pain']}", styles["Body"])])
     if persona.get("goals"):
-        rows.append([Paragraph("<b>Objectifs</b>", styles["Body"])])
+        rows.append([Paragraph(f"<b>{_t('goals')}</b>", styles["Body"])])
         rows.extend([[p] for p in _bullet_list(persona["goals"], styles)])
     if persona.get("frustrations"):
-        rows.append([Paragraph("<b>Frustrations</b>", styles["Body"])])
+        rows.append([Paragraph(f"<b>{_t('frustrations')}</b>", styles["Body"])])
         rows.extend([[p] for p in _bullet_list(persona["frustrations"], styles)])
 
     table = Table(rows, colWidths=[design.CONTENT_WIDTH])
@@ -995,7 +1038,7 @@ def _persona_card(persona: dict[str, Any], styles: dict) -> Table:
 
 def _build_personas(data: dict[str, Any], styles: dict) -> list[Any]:
     personas = data["personas"]
-    flow: list[Any] = [_section_heading("Personas", styles)]
+    flow: list[Any] = [_section_heading(_t("personas"), styles)]
 
     if not personas:
         flow.append(_empty_note(styles))
@@ -1013,7 +1056,7 @@ def _build_personas(data: dict[str, Any], styles: dict) -> list[Any]:
 
 def _build_backlog(data: dict[str, Any], styles: dict) -> list[Any]:
     backlog = data["backlog"]
-    flow: list[Any] = [_section_heading("Product Backlog", styles)]
+    flow: list[Any] = [_section_heading(_t("product_backlog"), styles)]
 
     stories = backlog.get("stories", [])
     if not stories:
@@ -1022,10 +1065,10 @@ def _build_backlog(data: dict[str, Any], styles: dict) -> list[Any]:
         return flow
 
     header = [
-        Paragraph("ID", styles["TableHeader"]),
-        Paragraph("User story", styles["TableHeader"]),
-        Paragraph("Priorite", styles["TableHeader"]),
-        Paragraph("Points", styles["TableHeader"]),
+        Paragraph(_t("id"), styles["TableHeader"]),
+        Paragraph(_t("user_story"), styles["TableHeader"]),
+        Paragraph(_t("priority"), styles["TableHeader"]),
+        Paragraph(_t("points"), styles["TableHeader"]),
     ]
     rows = [header]
     for story in stories:
@@ -1101,8 +1144,8 @@ def _burndown_chart(ideal: list[float], planned: list[float]) -> Drawing:
     legend.x = design.CONTENT_WIDTH - 90
     legend.y = 5.6 * cm
     legend.colorNamePairs = [
-        (design.PRIMARY, "Planifie"),
-        (design.WARNING, "Ideal"),
+        (design.PRIMARY, _t("planned")),
+        (design.WARNING, _t("ideal")),
     ]
     legend.fontSize = 7
     legend.columnMaximum = 1
@@ -1113,24 +1156,24 @@ def _burndown_chart(ideal: list[float], planned: list[float]) -> Drawing:
 
 def _build_sprint_planning(data: dict[str, Any], styles: dict) -> list[Any]:
     sprint = data["sprint_planning"]
-    flow: list[Any] = [_section_heading("Sprint Planning", styles)]
+    flow: list[Any] = [_section_heading(_t("sprint_planning"), styles)]
 
     settings_bits = []
     if sprint.get("sprint_count"):
-        settings_bits.append(f"{sprint['sprint_count']} sprints")
+        settings_bits.append(f"{sprint['sprint_count']} {_t('sprints')}")
     if sprint.get("sprint_duration_days"):
-        settings_bits.append(f"{sprint['sprint_duration_days']} jours/sprint")
+        settings_bits.append(f"{sprint['sprint_duration_days']} {_t('days_per_sprint')}")
     if sprint.get("planned_velocity"):
-        settings_bits.append(f"velocite prevue {sprint['planned_velocity']} pts")
+        settings_bits.append(f"{_t('planned_velocity')} {sprint['planned_velocity']} {_t('story_points_short')}")
     if sprint.get("team_size"):
-        settings_bits.append(f"equipe de {sprint['team_size']}")
+        settings_bits.append(f"{_t('team_of')} {sprint['team_size']}")
     if settings_bits:
         flow.append(Paragraph(" · ".join(settings_bits), styles["BodyMuted"]))
 
     for s in sprint.get("sprints", []):
         flow.append(
             Paragraph(
-                f"Sprint {s.get('sprint_number')} — {s.get('planned_story_points')} points",
+                f"{_t('sprint')} {s.get('sprint_number')} — {s.get('planned_story_points')} {_t('points_long')}",
                 styles["SubsectionTitle"],
             )
         )
@@ -1139,11 +1182,11 @@ def _build_sprint_planning(data: dict[str, Any], styles: dict) -> list[Any]:
     ideal = sprint.get("ideal_burndown") or []
     planned = sprint.get("planned_burndown") or []
     if ideal and planned:
-        flow.append(Paragraph("Diagramme Burndown", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("burndown"), styles["SubsectionTitle"]))
         flow.append(_burndown_chart(ideal, planned))
 
     if sprint.get("scrum_master_advice"):
-        flow.append(Paragraph("Conseils Scrum Master", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("scrum_master_advice"), styles["SubsectionTitle"]))
         flow.extend(_bullet_list(sprint["scrum_master_advice"], styles))
 
     flow.append(PageBreak())
@@ -1154,12 +1197,48 @@ def _build_sprint_planning(data: dict[str, Any], styles: dict) -> list[Any]:
 # 12-13. Architecture technique + Diagrammes UML
 # ---------------------------------------------------------------------------
 
-_DIAGRAM_LABELS = {
-    "use_case": "Cas d'usage",
-    "class_diagram": "Classes",
-    "sequence": "Sequence",
-    "activity": "Activite",
-}
+def _code_paragraph(code: str, styles: dict) -> Paragraph:
+    """
+    Code block that keeps line breaks and indentation but still wraps long
+    lines inside the page (Preformatted would overflow the margin).
+    Text is escaped: SQL may legitimately contain <, > or &.
+    """
+    from xml.sax.saxutils import escape
+
+    lines = []
+    for line in str(code).splitlines():
+        stripped = line.lstrip(" ")
+        indent = "&nbsp;" * (len(line) - len(stripped))
+        lines.append(indent + escape(stripped))
+    return Paragraph("<br/>".join(lines), styles["Code"])
+
+
+def _labelled_bullets(key: str, items: list[str], styles: dict) -> list[Any]:
+    """Subsection title + bullets, or nothing when the list is empty."""
+    if not items:
+        return []
+    return [Paragraph(_t(key), styles["SubsectionTitle"]), *_bullet_list(items, styles)]
+
+
+def _grid_table(rows: list[list[Any]], col_widths: list[float]) -> Table:
+    """Same visual grammar as the backlog / sources tables."""
+    table = Table(rows, colWidths=col_widths, repeatRows=1)
+    table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), design.PRIMARY),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [design.WHITE, design.SURFACE]),
+                ("BOX", (0, 0), (-1, -1), 0.6, design.BORDER),
+                ("INNERGRID", (0, 0), (-1, -1), 0.4, design.BORDER),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ]
+        )
+    )
+    return table
 
 
 def _build_solution_architecture(
@@ -1168,74 +1247,112 @@ def _build_solution_architecture(
     diagram_images: dict[str, bytes] | None = None,
 ) -> list[Any]:
     """
-    diagram_images : PNG bytes par type de diagramme, deja rendus via
-    Kroki en amont (le rendu reseau ne se fait jamais dans ce module,
-    purement synchrone et sans acces au client Kroki). Absent ou vide
-    pour un diagramme => son image est omise, jamais une image cassee.
+    Every element of the "Architecture technique" page of the app:
+    style + rationale, quality attributes, constraints, risks,
+    alternatives, stack (technology, status, justification), database
+    tables + SQL, the four UML diagrams, assumptions, warnings, confidence.
+
+    diagram_images: PNG bytes per diagram type, rendered by Kroki upstream
+    (never here: this module stays synchronous and network-free). A missing
+    image prints an honest note, never a broken picture.
     """
     arch = data["solution_architecture"]
-    flow: list[Any] = [_section_heading("Architecture technique", styles)]
+    flow: list[Any] = [_section_heading(_t("solution_architecture"), styles)]
 
     if not arch or not arch.get("available"):
-        flow.append(
-            Paragraph(
-                "L'architecture technique n'a pas encore ete generee pour ce projet.",
-                styles["BodyMuted"],
-            )
-        )
+        flow.append(Paragraph(_t("architecture_not_generated"), styles["BodyMuted"]))
         flow.append(PageBreak())
         return flow
 
+    if isinstance(arch.get("confidence"), (int, float)):
+        flow.append(
+            Paragraph(f"{_t('architecture_confidence')} : {arch['confidence']:.0%}", styles["BodyMuted"])
+        )
+
     if arch.get("style"):
-        flow.append(Paragraph("Style d'architecture", styles["SubsectionTitle"]))
+        flow.append(Paragraph(_t("architecture_style"), styles["SubsectionTitle"]))
         flow.append(Paragraph(arch["style"], styles["CoverSubtitle"]))
+    flow.extend(_bullet_list(arch.get("rationale") or [], styles))
+    flow.extend(_labelled_bullets("quality_attributes", arch.get("quality_attributes") or [], styles))
+    flow.extend(_labelled_bullets("constraints_addressed", arch.get("constraints_addressed") or [], styles))
+    flow.extend(_labelled_bullets("architecture_risks", arch.get("risks") or [], styles))
+    flow.extend(_labelled_bullets("architecture_alternatives", arch.get("alternatives") or [], styles))
+    flow.extend(_labelled_bullets("architecture_conditions", arch.get("conditions") or [], styles))
 
-    if arch.get("rationale"):
-        flow.extend(_bullet_list(arch["rationale"], styles))
+    layers = arch.get("stack_layers") or []
+    if layers:
+        flow.append(Paragraph(_t("tech_stack"), styles["SubsectionTitle"]))
+        rows = [[
+            Paragraph(_t("layer"), styles["TableHeader"]),
+            Paragraph(_t("technology"), styles["TableHeader"]),
+            Paragraph(_t("status"), styles["TableHeader"]),
+            Paragraph(_t("justification"), styles["TableHeader"]),
+        ]]
+        for item in layers:
+            rows.append([
+                Paragraph(layer_label(_LABELS.get(), item["layer"]), styles["TableCell"]),
+                Paragraph(item.get("technology") or "—", styles["TableCell"]),
+                Paragraph(status_label(_LABELS.get(), item.get("status") or ""), styles["TableCell"]),
+                Paragraph(item.get("justification") or "", styles["TableCell"]),
+            ])
+        flow.append(_grid_table(rows, [3.2 * cm, 3.6 * cm, 2.6 * cm, design.CONTENT_WIDTH - 9.4 * cm]))
 
-    stack = arch.get("stack") or {}
-    if stack:
-        flow.append(Paragraph("Stack technique", styles["SubsectionTitle"]))
-        for layer, technology in stack.items():
-            flow.append(Paragraph(f"• <b>{layer}</b> : {technology}", styles["Body"]))
-
+    tables = arch.get("database_tables") or []
+    if tables or arch.get("database_sql"):
+        flow.append(Paragraph(_t("database"), styles["SubsectionTitle"]))
+    if tables:
+        rows = [[
+            Paragraph(_t("database_tables"), styles["TableHeader"]),
+            Paragraph(_t("columns"), styles["TableHeader"]),
+            Paragraph(_t("foreign_keys"), styles["TableHeader"]),
+        ]]
+        for table in tables:
+            columns = ", ".join(
+                f"{c['name']} ({c['data_type']}{', PK' if c.get('primary_key') else ''})"
+                for c in table.get("columns") or []
+            )
+            name = f"<b>{table['name']}</b>"
+            if table.get("description"):
+                name += f"<br/><font size=7.5>{table['description']}</font>"
+            rows.append([
+                Paragraph(name, styles["TableCell"]),
+                Paragraph(columns or "—", styles["TableCell"]),
+                Paragraph("<br/>".join(table.get("foreign_keys") or []) or "—", styles["TableCell"]),
+            ])
+        flow.append(_grid_table(rows, [4 * cm, design.CONTENT_WIDTH - 9 * cm, 5 * cm]))
     if arch.get("database_sql"):
-        flow.append(Paragraph("Base de donnees", styles["SubsectionTitle"]))
-        flow.append(Paragraph(arch["database_sql"], styles["Code"]))
+        flow.append(Paragraph(_t("sql_script"), styles["SubsectionTitle"]))
+        flow.append(_code_paragraph(arch["database_sql"], styles))
 
+    flow.extend(_labelled_bullets("assumptions", arch.get("assumptions") or [], styles))
+    flow.extend(_labelled_bullets("warnings", arch.get("warnings") or [], styles))
     flow.append(PageBreak())
 
     uml = arch.get("uml_diagrams") or {}
     images = diagram_images or {}
     if uml:
-        flow.append(_section_heading("Diagrammes UML", styles))
-        for diagram_type, label in _DIAGRAM_LABELS.items():
-            source = uml.get(diagram_type)
-            if not source:
+        flow.append(_section_heading(_t("uml_diagrams"), styles))
+        for diagram_type in DIAGRAM_ORDER:
+            if not uml.get(diagram_type):
                 continue
-            flow.append(Paragraph(label, styles["SubsectionTitle"]))
+            flow.append(Paragraph(_t(f"diagram_{diagram_type}"), styles["SubsectionTitle"]))
             image_bytes = images.get(diagram_type)
             if image_bytes:
                 from reportlab.platypus import Image
                 import io
 
                 img = Image(io.BytesIO(image_bytes))
+                # Fit the page width AND height (tall sequence diagrams).
                 max_width = design.CONTENT_WIDTH
-                if img.drawWidth > max_width:
-                    ratio = max_width / img.drawWidth
-                    img.drawWidth = max_width
-                    img.drawHeight *= ratio
+                max_height = 18 * cm
+                ratio = min(1.0, max_width / img.drawWidth, max_height / img.drawHeight)
+                img.drawWidth *= ratio
+                img.drawHeight *= ratio
                 flow.append(img)
             else:
-                flow.append(
-                    Paragraph(
-                        "Rendu visuel indisponible ; code source omis de l'export.",
-                        styles["Caption"],
-                    )
-                )
+                flow.append(Paragraph(_t("diagram_unavailable"), styles["Caption"]))
             flow.append(Spacer(1, 0.3 * cm))
-
-    flow.append(PageBreak())
+        flow.append(PageBreak())
     return flow
 
 
@@ -1263,8 +1380,12 @@ def build_full_flow(
     diagram_images: dict[str, bytes] | None = None,
 ) -> list[Any]:
     """Point d'entree unique utilise par le router d'export."""
-    flow = build_part1_flow(data, styles, generated_at)
-    flow.extend(build_part2_flow(data, styles, diagram_images))
+    token = _LABELS.set(labels_for(data.get("language")))
+    try:
+        flow = build_part1_flow(data, styles, generated_at)
+        flow.extend(build_part2_flow(data, styles, diagram_images))
+    finally:
+        _LABELS.reset(token)
     # Le dernier PageBreak de build_part2_flow laisse une page finale
     # vide : on le retire, jamais souhaitable en fin de document.
     if flow and type(flow[-1]).__name__ == "PageBreak":
