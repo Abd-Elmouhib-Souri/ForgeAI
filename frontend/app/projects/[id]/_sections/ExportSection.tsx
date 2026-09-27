@@ -24,9 +24,25 @@ type DownloadTarget = {
 // Formats served by POST /projects/{id}/export/{format} (same private flow).
 type ExportFormat = "pdf" | "word" | "powerpoint";
 
+// Sprint 6.4 role templates: they select and order report sections
+// (backend app/services/export/templates.py); no text is generated.
+type ExportTemplate = "business" | "entrepreneur" | "student" | "consultant";
+
+const TEMPLATE_OPTIONS: { value: ExportTemplate; fr: string; en: string; hintFr: string; hintEn: string }[] = [
+  { value: "business", fr: "Rapport complet", en: "Complete report",
+    hintFr: "Les 13 sections du CDC.", hintEn: "All 13 CDC sections." },
+  { value: "entrepreneur", fr: "Entrepreneur", en: "Founder",
+    hintFr: "Marché, business model, concurrence et plan de lancement.", hintEn: "Market, business model, competition and launch plan." },
+  { value: "student", fr: "Étudiant", en: "Student",
+    hintFr: "Conception : personas, backlog, sprints, architecture et UML.", hintEn: "Design: personas, backlog, sprints, architecture and UML." },
+  { value: "consultant", fr: "Consultant", en: "Consultant",
+    hintFr: "Diagnostic : comité, SWOT, risques et recommandations.", hintEn: "Diagnosis: committee, SWOT, risks and recommendations." },
+];
+
 const copy = {
   fr: {
     title: "Export",
+    profile: "Profil du dossier",
     intro:
       "Télécharge le rapport complet du projet (13 sections du CDC) en PDF prêt à partager ou en Word modifiable, et un pitch deck PowerPoint de 12 slides.",
     exportPdf: "Exporter en PDF",
@@ -41,6 +57,7 @@ const copy = {
   },
   en: {
     title: "Export",
+    profile: "Dossier profile",
     intro:
       "Download the complete project report (13 CDC sections) as a ready-to-share PDF or an editable Word document, and a 12-slide PowerPoint pitch deck.",
     exportPdf: "Export as PDF",
@@ -88,6 +105,9 @@ export default function ExportSection({
 
   // Format being generated (null = idle): one export at a time.
   const [working, setWorking] = useState<ExportFormat | null>(null);
+  // Chosen role template, sent with every export request.
+  const [template, setTemplate] = useState<ExportTemplate>("business");
+  const selectedTemplate = TEMPLATE_OPTIONS.find((option) => option.value === template) ?? TEMPLATE_OPTIONS[0];
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState("");
   const [download, setDownload] = useState<(DownloadTarget & { format: ExportFormat }) | null>(null);
@@ -112,7 +132,7 @@ export default function ExportSection({
     setError("");
     try {
       const response = await api.post<ExportResponse>(
-        `/projects/${projectId}/export/${format}`,
+        `/projects/${projectId}/export/${format}?template=${template}`,
       );
       const target = {
         url: response.data.download_url,
@@ -132,7 +152,7 @@ export default function ExportSection({
   return (
     <section className="scroll-mt-28 space-y-4" id="export">
       <div className="rounded-3xl border border-violet-100 bg-gradient-to-br from-violet-50 via-white to-sky-50 p-6 shadow-sm">
-        <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
+        <div className="flex flex-col gap-4">
           <div>
             <p className="text-xs font-black uppercase tracking-[0.18em] text-violet-600">
               {t.title}
@@ -143,8 +163,27 @@ export default function ExportSection({
             <p className="mt-2 max-w-3xl text-sm font-medium leading-6 text-slate-600">
               {t.intro}
             </p>
+            <label className="mt-4 block text-xs font-black uppercase tracking-[0.14em] text-slate-500" htmlFor="export-template">
+              {t.profile}
+            </label>
+            <select
+              id="export-template"
+              value={template}
+              disabled={working !== null}
+              onChange={(event) => setTemplate(event.target.value as ExportTemplate)}
+              className="mt-1 rounded-xl border border-violet-200 bg-white px-3 py-2 text-sm font-semibold text-slate-800"
+            >
+              {TEMPLATE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {language === "en" ? option.en : option.fr}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs font-medium text-slate-500">
+              {language === "en" ? selectedTemplate.hintEn : selectedTemplate.hintFr}
+            </p>
           </div>
-          <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
             <button
               type="button"
               disabled={working !== null}

@@ -56,11 +56,11 @@ def send_verification_email(to_email: str, verification_link: str) -> None:
     Envoie l'email de vérification.
     """
 
-    subject = "Vérifiez votre adresse email — DotJcom ForgeAI"
+    subject = "Vérifiez votre adresse email — ForgeAI"
 
     text_body = f"""Bonjour,
 
-Merci de vous être inscrit sur DotJcom ForgeAI.
+Merci de vous être inscrit sur ForgeAI.
 
 Pour activer votre compte, ouvrez ce lien :
 
@@ -70,7 +70,7 @@ Ce lien expire dans {settings.EMAIL_VERIFICATION_EXPIRE_HOURS} heures.
 
 Si vous n'avez pas créé de compte, ignorez cet email.
 
-DotJcom ForgeAI
+ForgeAI
 """
 
     html_body = f"""<!DOCTYPE html>
@@ -96,7 +96,7 @@ DotJcom ForgeAI
                 </p>
 
                 <p style="color:#374151; font-size:16px; line-height:1.6;">
-                  Merci de vous être inscrit sur <strong>DotJcom ForgeAI</strong>.
+                  Merci de vous être inscrit sur <strong>ForgeAI</strong>.
                 </p>
 
                 <p style="color:#374151; font-size:16px; line-height:1.6;">
@@ -136,7 +136,7 @@ DotJcom ForgeAI
                 </p>
 
                 <p style="margin-top:30px; color:#9ca3af; font-size:14px;">
-                  DotJcom ForgeAI
+                  ForgeAI
                 </p>
               </td>
             </tr>
@@ -163,11 +163,11 @@ def send_password_reset_email(to_email: str, reset_link: str) -> None:
 
     expire_hours = getattr(settings, "PASSWORD_RESET_EXPIRE_HOURS", 1)
 
-    subject = "Réinitialisation de votre mot de passe — DotJcom ForgeAI"
+    subject = "Réinitialisation de votre mot de passe — ForgeAI"
 
     text_body = f"""Bonjour,
 
-Vous avez demandé la réinitialisation de votre mot de passe DotJcom ForgeAI.
+Vous avez demandé la réinitialisation de votre mot de passe ForgeAI.
 
 Pour choisir un nouveau mot de passe, ouvrez ce lien :
 
@@ -177,7 +177,7 @@ Ce lien expire dans {expire_hours} heure(s).
 
 Si vous n'avez pas demandé cette réinitialisation, ignorez cet email.
 
-DotJcom ForgeAI
+ForgeAI
 """
 
     html_body = f"""<!DOCTYPE html>
@@ -203,7 +203,7 @@ DotJcom ForgeAI
                 </p>
 
                 <p style="color:#374151; font-size:16px; line-height:1.6;">
-                  Vous avez demandé la réinitialisation de votre mot de passe sur <strong>DotJcom ForgeAI</strong>.
+                  Vous avez demandé la réinitialisation de votre mot de passe sur <strong>ForgeAI</strong>.
                 </p>
 
                 <p style="color:#374151; font-size:16px; line-height:1.6;">
@@ -243,7 +243,7 @@ DotJcom ForgeAI
                 </p>
 
                 <p style="margin-top:30px; color:#9ca3af; font-size:14px;">
-                  DotJcom ForgeAI
+                  ForgeAI
                 </p>
               </td>
             </tr>

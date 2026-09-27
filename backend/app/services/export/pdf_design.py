@@ -182,7 +182,9 @@ def make_page_callbacks(project_title: str, labels: dict[str, str] | None = None
     from .labels import FR
 
     labels = labels or FR
-    footer_text = f"{labels['generated_by']} DotJcom ForgeAI"
+    # The platform is ForgeAI; the report belongs to the customer (no
+    # company line anywhere, product decision 27 Sept 2026).
+    footer_text = f"{labels['generated_by']} ForgeAI"
 
     def _on_cover_page(canvas: Canvas, doc: BaseDocTemplate) -> None:
         # Bandeau violet en pied de la couverture, sans numero de page.
@@ -225,7 +227,7 @@ def make_page_callbacks(project_title: str, labels: dict[str, str] | None = None
         # nom du document, numero de page.
         canvas.setFont("Helvetica", 7.5)
         canvas.setFillColor(TEXT_FAINT)
-        canvas.drawString(MARGIN_LEFT, 1.2 * cm, "DotJcom Ltd")
+        canvas.drawString(MARGIN_LEFT, 1.2 * cm, footer_text)
         canvas.drawCentredString(
             PAGE_SIZE[0] / 2,
             1.2 * cm,
@@ -336,7 +338,7 @@ def build_document(
         topMargin=MARGIN_TOP,
         bottomMargin=MARGIN_BOTTOM,
         title=project_title,
-        author="DotJcom ForgeAI",
+        author="ForgeAI",
     )
     doc.addPageTemplates(
         [

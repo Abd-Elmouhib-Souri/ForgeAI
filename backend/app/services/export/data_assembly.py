@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.services.domain_integrity_guard import normalize_output_language
+from app.services.export.templates import normalize_template
 from typing import Any, Mapping
 
 
@@ -554,6 +555,7 @@ def assemble_export_data(
     analysis_data: Mapping[str, Any] | None,
     project_name: str,
     output_language: str | None = None,
+    template: str | None = None,
 ) -> dict[str, Any]:
     """
     Point d'entree unique de la couche d'export : lit analysis_data (le
@@ -575,6 +577,8 @@ def assemble_export_data(
         # Project output language: builders pick their labels from it
         # (labels.labels_for), never hard-code them.
         "language": normalize_output_language(output_language),
+        # Export template (templates.py): which sections, in which order.
+        "template": normalize_template(template),
         "cover": _assemble_cover(data, final_report, project_name),
         "executive_summary": _assemble_executive_summary(final_report),
         "description": _assemble_description(data, startup_score),

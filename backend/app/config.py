@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     )
 
     # ðŸŽ¯ CONFIGURATION GÃ‰NÃ‰RALE DE L'APPLICATION
-    APP_NAME: str = "DotJcom ForgeAI"
+    APP_NAME: str = "ForgeAI"
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
 
@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     SMTP_USERNAME: str = ""
     SMTP_PASSWORD: str = ""
     SMTP_FROM_EMAIL: str = ""
-    SMTP_FROM_NAME: str = "DotJcom ForgeAI"
+    SMTP_FROM_NAME: str = "ForgeAI"
     SMTP_USE_TLS: bool = True
 
     # ðŸ—„ï¸ POSTGRESQL

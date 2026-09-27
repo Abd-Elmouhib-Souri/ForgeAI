@@ -14,7 +14,7 @@ const content = {
   fr: {
     loading: "Chargement...",
     verified: "Email vérifié avec succès. Vous pouvez vous connecter.",
-    titleSmall: "DotJcom",
+    titleSmall: "Espace ForgeAI",
     title: "Connexion à ForgeAI",
     subtitle:
       "Accédez à votre espace et continuez à transformer vos idées en projets structurés.",
@@ -47,7 +47,7 @@ const content = {
   en: {
     loading: "Loading...",
     verified: "Email verified successfully. You can now log in.",
-    titleSmall: "DotJcom",
+    titleSmall: "ForgeAI workspace",
     title: "Login to ForgeAI",
     subtitle:
       "Access your workspace and keep turning your ideas into structured projects.",

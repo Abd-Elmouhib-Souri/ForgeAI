@@ -20,6 +20,7 @@ from reportlab.platypus import (
 from . import pdf_design as design
 from contextvars import ContextVar
 
+from .templates import sections_for
 from .labels import (
     DIAGRAM_ORDER,
     FR,
@@ -158,11 +159,10 @@ def _build_cover(data: dict[str, Any], styles: dict, generated_at: str) -> list[
 
     identity_rows = [
         _identity_row(_t("project"), cover["title"], styles),
-        _identity_row(_t("type"), _t("report_type"), styles),
-        _identity_row(_t("company"), "DotJcom Ltd — Soliman, Nabeul, Tunisie", styles),
+        _identity_row(_t("type"), _t(f"template_{data.get('template') or 'business'}"), styles),
         _identity_row(_t("date"), generated_at, styles),
         _identity_row(_t("classification"), _t("confidential"), styles),
-        _identity_row(_t("generated_by"), "DotJcom ForgeAI", styles),
+        _identity_row(_t("generated_by"), "ForgeAI", styles),
     ]
     identity_table = Table(
         identity_rows,
@@ -1373,21 +1373,53 @@ def build_part2_flow(
     return flow
 
 
+# Section key (templates.SECTION_KEYS) -> builder. The architecture section
+# also needs the rendered UML images, handled in build_full_flow.
+_SECTION_BUILDERS = {
+    "executive_summary": _build_executive_summary,
+    "idea_description": _build_description,
+    "market_study": _build_market_study,
+    "swot": _build_swot,
+    "business_model_canvas": _build_business_model_canvas,
+    "competitive_analysis": _build_competitive_analysis,
+    "sources": _build_sources,
+    "startup_score": _build_startup_score,
+    "debate_room": _build_debate_room,
+    "personas": _build_personas,
+    "product_backlog": _build_backlog,
+    "sprint_planning": _build_sprint_planning,
+}
+
+
 def build_full_flow(
     data: dict[str, Any],
     styles: dict,
     generated_at: str,
     diagram_images: dict[str, bytes] | None = None,
 ) -> list[Any]:
-    """Point d'entree unique utilise par le router d'export."""
+    """
+    Point d'entree unique utilise par le router d'export.
+
+    Cover first, then the sections of the export template (templates.py),
+    in the template's order. Each section ends with its own page break, so
+    any order keeps a clean layout.
+    """
     token = _LABELS.set(labels_for(data.get("language")))
     try:
-        flow = build_part1_flow(data, styles, generated_at)
-        flow.extend(build_part2_flow(data, styles, diagram_images))
+        flow = _build_cover(data, styles, generated_at)
+        for key in sections_for(data.get("template")):
+            if key == "solution_architecture":
+                flow.extend(_build_solution_architecture(data, styles, diagram_images))
+            else:
+                flow.extend(_SECTION_BUILDERS[key](data, styles))
+            # Every section starts on its own page, whatever the template
+            # order (the SWOT builder, for one, ends without a page break).
+            if not flow or type(flow[-1]).__name__ != "PageBreak":
+                flow.append(PageBreak())
     finally:
         _LABELS.reset(token)
-    # Le dernier PageBreak de build_part2_flow laisse une page finale
-    # vide : on le retire, jamais souhaitable en fin de document.
+    # Le dernier PageBreak laisse une page finale vide : on le retire,
+    # jamais souhaitable en fin de document.
     if flow and type(flow[-1]).__name__ == "PageBreak":
         flow.pop()
     return flow
