@@ -28,7 +28,7 @@ from typing import Protocol
 import jwt
 import pyotp
 import segno
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -159,8 +159,10 @@ def qr_svg(provisioning_uri: str) -> str:
 
 
 async def require_confirmation(
+    request: Request,
     admin: User = Depends(get_current_admin),
     confirmation: str | None = Header(default=None, alias=CONFIRMATION_HEADER),
+    db: AsyncSession = Depends(get_db),
 ) -> User:
     """
     Step-up for sensitive actions: a fresh TOTP code in X-Admin-Confirmation.
@@ -174,6 +176,14 @@ async def require_confirmation(
             detail={"reason": "confirmation_required", "message": "Confirmez l'action avec votre code 2FA."},
         )
     if not verify_totp(admin, confirmation):
+        # Sprint 7.2: a wrong code on a sensitive action is worth a trace
+        # (stolen session trying to act). Never the code itself.
+        from app.services import admin_audit  # local import: no cycle at load time
+
+        await admin_audit.add_and_commit(
+            db, request, action="admin.confirmation", result="failure", actor=admin,
+            detail="confirmation_invalid", after={"method": request.method, "path": request.url.path},
+        )
         raise HTTPException(
             status_code=status.HTTP_428_PRECONDITION_REQUIRED,
             detail={"reason": "confirmation_invalid", "message": "Code de confirmation invalide ou expiré."},

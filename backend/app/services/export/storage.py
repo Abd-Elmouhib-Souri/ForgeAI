@@ -15,8 +15,10 @@ The HTTP layer (app/routers/export.py) adds the ownership check.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
+import shutil
 import tempfile
 import unicodedata
 import uuid
@@ -24,6 +26,8 @@ from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 # Extension -> HTTP media type. Also the whitelist of producible formats.
 MEDIA_TYPES: dict[str, str] = {
@@ -114,3 +118,27 @@ def write_atomically(target: Path, build: Callable[[str], None]) -> None:
         # Never leave a partial document behind.
         Path(temp_name).unlink(missing_ok=True)
         raise
+
+
+def delete_project_files(project_id: int) -> None:
+    """
+    Remove every export file of a deleted project (Sprint 7.2, RED B3:
+    the files used to stay on disk forever).
+
+    Confined to <EXPORTS_DIR>/<project_id>: a symlink in its place is only
+    unlinked, never followed, so nothing outside the folder is touched.
+    Called AFTER the database commit: a failure here leaves orphan files
+    (logged), never a project whose documents vanished.
+    """
+    try:
+        root = exports_root()
+        folder = root / str(int(project_id))
+        if folder.is_symlink():
+            folder.unlink()
+            return
+        if not folder.is_dir() or folder.resolve().parent != root:
+            return
+        shutil.rmtree(folder)
+    except OSError:
+        # Cleanup must never turn a successful deletion into an error.
+        logger.exception("Export cleanup failed for project id=%s (orphan files left)", project_id)
