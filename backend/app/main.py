@@ -16,7 +16,6 @@ from fastapi import FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy.sql import text
-from app.routers.admin import router as admin_router
 
 from app.config import settings
 from app.database import engine
@@ -83,7 +82,8 @@ app.include_router(project_manager_router)
 app.include_router(solution_architect_router)
 app.include_router(export_router)
 app.include_router(pipeline_router)
-app.include_router(admin_router)
+# Sprint 7.1: the admin routes are NOT mounted here any more; they live in
+# the separate admin API (app/admin_main.py, port 8002, private network).
 
 # Sprint 6.1 hardening : les exports ne sont PLUS servis publiquement.
 # Ils sont stockes dans settings.EXPORTS_DIR et telecharges uniquement via

@@ -70,6 +70,33 @@ services:
     command: >
       sh -c "uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
+  # Sprint 7.1: admin API, separate from the public API. Same image and
+  # database, only the /admin routes. Published on 127.0.0.1 ONLY: never
+  # reachable from the network; in production it sits behind the VPN.
+  # Host port 8002 by default (8001 is ChromaDB); override with
+  # ADMIN_API_PORT in .env if 8002 is taken on your machine.
+  backend-admin:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: forgeai_backend_admin
+    working_dir: /app
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:${ADMIN_API_PORT:-8002}:8002"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - forgeai_network
+    command: >
+      sh -c "uvicorn app.admin_main:app --host 0.0.0.0 --port 8002 --reload"
+
 networks:
   forgeai_network:
     driver: bridge

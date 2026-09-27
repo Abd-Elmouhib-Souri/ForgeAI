@@ -58,7 +58,9 @@ export default function AdminProjectsPage() {
       setError("");
       setMessage("");
 
+      // Sensitive: the admin API requires a fresh 2FA code (Sprint 7.1).
       await adminFetch(`/admin/projects/${project.id}`, {
+        confirm: true,
         method: "DELETE",
       });
 

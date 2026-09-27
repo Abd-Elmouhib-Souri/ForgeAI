@@ -1,4 +1,3 @@
-from app.security_policy import reveal_totp_secret, set_refresh_cookie
 # ============================================================
 # backend/app/routers/admin.py
 # ============================================================
@@ -10,7 +9,7 @@ from typing import Any
 
 import pyotp
 from pydantic import BaseModel, EmailStr, Field
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from sqlalchemy import func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -19,14 +18,20 @@ from app.config import settings
 from app.database import get_db
 from app.mailer import send_verification_email
 from app.models import Project, User, UserRole
-from app.schemas.auth import Token, UserLogin
-from app.security import (
-    create_access_token,
-    create_refresh_token,
-    get_current_user,
-    get_password_hash,
-    verify_password,
+from app.admin_security import (
+    get_current_admin,
+    get_enrolling_admin,
+    issue_admin_access_token,
+    issue_enrollment_token,
+    login_throttle,
+    qr_svg,
+    require_confirmation,
+    throttle_keys,
+    verify_totp,
 )
+from app.schemas.auth import UserLogin
+from app.security import get_password_hash, verify_password
+from app.security_policy import protect_totp_secret
 
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
@@ -46,46 +51,41 @@ class AdminUserStatusUpdate(BaseModel):
 class AdminCreateAdminRequest(BaseModel):
     email: EmailStr
     full_name: str = Field(min_length=2, max_length=120)
-    password: str = Field(min_length=8, max_length=128)
+    # Sprint 7.1: admin passwords are long (12+ characters by default).
+    password: str = Field(min_length=settings.ADMIN_MIN_PASSWORD_LENGTH, max_length=128)
+
+
+class AdminLoginResponse(BaseModel):
+    """Either a session (access_token) or the 2FA enrollment step."""
+
+    access_token: str | None = None
+    token_type: str = "bearer"
+    expires_in: int | None = None
+    requires_2fa_setup: bool = False
+    enrollment_token: str | None = None
+
+
+class AdminTwoFactorSetupResponse(BaseModel):
+    secret: str
+    provisioning_uri: str
+    qr_svg: str
+
+
+class AdminTwoFactorCode(BaseModel):
+    code: str = Field(min_length=6, max_length=8)
 # ============================================================
 # Sécurité admin
 # ============================================================
 
 async def require_admin(
-    current_user: User = Depends(get_current_user),
+    admin: User = Depends(get_current_admin),
 ) -> User:
     """
-    Vérifie que l'utilisateur connecté est un admin actif et email vérifié.
-
-    Sécurité actuelle :
-    - compte actif obligatoire ;
-    - rôle admin obligatoire ;
-    - email vérifié obligatoire.
-
-    Note :
-    - La 2FA Authenticator est techniquement disponible.
-    - Elle est reportée temporairement pour ne pas bloquer le dashboard admin.
+    Guard of every admin route (Sprint 7.1): admin-audience token only,
+    active admin with 2FA enabled. User tokens from /auth/login are refused.
+    Sensitive actions use ``require_confirmation`` (fresh TOTP code) instead.
     """
-
-    if not current_user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Compte désactivé.",
-        )
-
-    if not current_user.is_email_verified:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Email non vérifié.",
-        )
-
-    if current_user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Accès réservé aux administrateurs.",
-        )
-
-    return current_user
+    return admin
 
 
 # ============================================================
@@ -200,75 +200,118 @@ def get_setting_value(*names: str) -> str | None:
 # 1. Login admin séparé
 # ============================================================
 
-@router.post("/login", response_model=Token)
+def _client_ip(request: Request) -> str | None:
+    return request.client.host if request.client else None
+
+
+def _session(user: User) -> dict:
+    return {
+        "access_token": issue_admin_access_token(user.email),
+        "token_type": "bearer",
+        "expires_in": settings.ADMIN_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        "requires_2fa_setup": False,
+    }
+
+
+@router.post("/login", response_model=AdminLoginResponse, response_model_exclude_none=True)
 async def admin_login(
-    response: Response,
+    request: Request,
     user_in: UserLogin,
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(User).where(User.email == user_in.email)
-    result = await db.execute(query)
-    user = result.scalar_one_or_none()
+    """
+    Admin login, 2FA mandatory (Sprint 7.1).
 
+    - password + valid TOTP -> 15-minute admin token, no refresh cookie;
+    - admin without 2FA -> enrollment token only (2FA setup, nothing else);
+    - failed password / TOTP attempts are limited per account and per IP.
+    """
+    keys = throttle_keys(user_in.email, _client_ip(request))
+    wait = await login_throttle.retry_after(keys)
+    if wait:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Trop de tentatives. Réessayez plus tard.",
+            headers={"Retry-After": str(wait)},
+        )
+
+    user = (await db.execute(select(User).where(User.email == user_in.email))).scalar_one_or_none()
     if not user or not user.hashed_password or not verify_password(user_in.password, user.hashed_password):
+        await login_throttle.record_failure(keys)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Email ou mot de passe incorrect.")
+
+    if user.role != UserRole.ADMIN or not user.is_active or not user.is_email_verified:
+        # Same answer for every refusal: never reveal which accounts are admins.
+        await login_throttle.record_failure(keys)
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Accès réservé aux administrateurs.")
+
+    if not user.is_two_factor_enabled:
+        # First admin login (or 2FA reset): enrol before any access.
+        return {
+            "requires_2fa_setup": True,
+            "enrollment_token": issue_enrollment_token(user.email),
+        }
+
+    if not user_in.two_factor_code:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Email ou mot de passe incorrect.",
+            detail={"reason": "totp_required", "message": "Code de double authentification requis."},
         )
-
-    if not user.is_active:
+    if not verify_totp(user, user_in.two_factor_code):
+        await login_throttle.record_failure(keys)
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Compte désactivé.",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"reason": "totp_invalid", "message": "Code de double authentification invalide."},
         )
 
-    if not user.is_email_verified:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Veuillez vérifier votre adresse email avant de vous connecter.",
-        )
+    await login_throttle.reset(keys)
+    return _session(user)
 
-    if user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Accès réservé aux administrateurs.",
-        )
 
-    if user.is_two_factor_enabled:
-        if not user.two_factor_secret:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Configuration 2FA invalide. Veuillez contacter l'administrateur.",
-            )
+@router.post("/2fa/setup", response_model=AdminTwoFactorSetupResponse)
+async def admin_two_factor_setup(
+    admin: User = Depends(get_enrolling_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """New TOTP secret + QR code for the authenticator app (enrollment token)."""
+    secret = pyotp.random_base32()
+    uri = pyotp.TOTP(secret).provisioning_uri(name=admin.email, issuer_name=f"{settings.APP_NAME} Admin")
+    admin.two_factor_secret = protect_totp_secret(secret)
+    await db.commit()
+    return {"secret": secret, "provisioning_uri": uri, "qr_svg": qr_svg(uri)}
 
-        if not user_in.two_factor_code:
-            return {
-                "access_token": "",
-                "token_type": "bearer",
-                "requires_2fa": True,
-            }
 
-        totp = pyotp.TOTP(reveal_totp_secret(user.two_factor_secret))
+@router.post("/2fa/enable", response_model=AdminLoginResponse, response_model_exclude_none=True)
+async def admin_two_factor_enable(
+    request: Request,
+    payload: AdminTwoFactorCode,
+    admin: User = Depends(get_enrolling_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Turn 2FA on with a first valid code, then open the admin session."""
+    keys = throttle_keys(admin.email, _client_ip(request))
+    wait = await login_throttle.retry_after(keys)
+    if wait:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                            detail="Trop de tentatives. Réessayez plus tard.", headers={"Retry-After": str(wait)})
+    if not admin.two_factor_secret:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Lancez d'abord la configuration 2FA.")
+    if not verify_totp(admin, payload.code):
+        await login_throttle.record_failure(keys)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail={"reason": "totp_invalid", "message": "Code invalide. Vérifiez l'heure de votre téléphone."})
+    admin.is_two_factor_enabled = True
+    await db.commit()
+    await login_throttle.reset(keys)
+    return _session(admin)
 
-        if not totp.verify(user_in.two_factor_code, valid_window=1):
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Code de double authentification invalide.",
-            )
 
-    access_token = create_access_token(data={"sub": user.email})
-    refresh_token = create_refresh_token(data={"sub": user.email})
-
-    set_refresh_cookie(
-        response,
-        refresh_token,
-    )
-
-    return {
-        "access_token": access_token,
-        "token_type": "bearer",
-        "requires_2fa": False,
-    }
+@router.get("/me")
+async def get_current_admin_profile(
+    admin: User = Depends(require_admin),
+):
+    """The signed-in admin (the console must not call the public /auth/me)."""
+    return serialize_user(admin)
 
 
 # ============================================================
@@ -380,11 +423,32 @@ async def list_admin_users(
         serialize_user(user, project_count=project_count)
         for user, project_count in rows
     ]
+async def _ensure_another_active_admin(db: AsyncSession, target: User) -> None:
+    """
+    Refuse any change that would leave the platform without an active admin
+    (demotion, deactivation or deletion of the last one).
+    """
+    if target.role != UserRole.ADMIN or not target.is_active:
+        return
+    others = await db.scalar(
+        select(func.count(User.id)).where(
+            User.role == UserRole.ADMIN,
+            User.is_active.is_(True),
+            User.id != target.id,
+        )
+    )
+    if not others:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Action impossible : ce compte est le dernier administrateur actif.",
+        )
+
+
 @router.post("/users/create-admin", status_code=status.HTTP_201_CREATED)
 async def create_admin_user(
     payload: AdminCreateAdminRequest,
     background_tasks: BackgroundTasks,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_confirmation),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -571,7 +635,7 @@ async def admin_resend_user_verification(
 async def update_user_role(
     user_id: int,
     payload: AdminUserRoleUpdate,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_confirmation),
     db: AsyncSession = Depends(get_db),
 ):
     target_user = await db.get(User, user_id)
@@ -581,6 +645,9 @@ async def update_user_role(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Utilisateur introuvable.",
         )
+
+    if payload.role != UserRole.ADMIN:
+        await _ensure_another_active_admin(db, target_user)
 
     if target_user.id == admin.id and payload.role != UserRole.ADMIN:
         raise HTTPException(
@@ -600,7 +667,7 @@ async def update_user_role(
 async def update_user_status(
     user_id: int,
     payload: AdminUserStatusUpdate,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_confirmation),
     db: AsyncSession = Depends(get_db),
 ):
     target_user = await db.get(User, user_id)
@@ -610,6 +677,9 @@ async def update_user_status(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Utilisateur introuvable.",
         )
+
+    if payload.is_active is False:
+        await _ensure_another_active_admin(db, target_user)
 
     if target_user.id == admin.id and payload.is_active is False:
         raise HTTPException(
@@ -626,7 +696,7 @@ async def update_user_status(
 @router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_admin_user(
     user_id: int,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_confirmation),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -646,6 +716,8 @@ async def delete_admin_user(
             detail="Utilisateur introuvable.",
         )
 
+    await _ensure_another_active_admin(db, target_user)
+
     if target_user.id == admin.id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -664,17 +736,6 @@ async def delete_admin_user(
                 "Désactivez le compte à la place."
             ),
         )
-
-    if target_user.role == UserRole.ADMIN:
-        admin_count = await db.scalar(
-            select(func.count(User.id)).where(User.role == UserRole.ADMIN)
-        )
-
-        if admin_count is not None and admin_count <= 1:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Impossible de supprimer le dernier administrateur.",
-            )
 
     await db.delete(target_user)
     await db.commit()
@@ -737,7 +798,7 @@ async def get_admin_project_detail(
 @router.delete("/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_admin_project(
     project_id: int,
-    admin: User = Depends(require_admin),
+    admin: User = Depends(require_confirmation),
     db: AsyncSession = Depends(get_db),
 ):
     project = await db.get(Project, project_id)

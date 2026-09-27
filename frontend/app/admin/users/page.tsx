@@ -48,7 +48,7 @@ export default function AdminUsersPage() {
 
   const loadCurrentAdmin = useCallback(async () => {
     try {
-      const data = await adminFetch("/auth/me");
+      const data = await adminFetch("/admin/me");
       setCurrentAdmin(data);
     } catch {
       setCurrentAdmin(null);
@@ -79,7 +79,9 @@ export default function AdminUsersPage() {
       setError("");
       setMessage("");
 
+      // Sensitive: the admin API requires a fresh 2FA code (Sprint 7.1).
       await adminFetch(`/admin/users/${user.id}/status`, {
+        confirm: true,
         method: "PATCH",
         body: JSON.stringify({
           is_active: !user.is_active,
@@ -107,6 +109,7 @@ export default function AdminUsersPage() {
       setMessage("");
 
       await adminFetch(`/admin/users/${user.id}/role`, {
+        confirm: true,
         method: "PATCH",
         body: JSON.stringify({
           role: newRole,
@@ -157,6 +160,7 @@ export default function AdminUsersPage() {
       setMessage("");
 
       await adminFetch(`/admin/users/${user.id}`, {
+        confirm: true,
         method: "DELETE",
       });
 
@@ -180,6 +184,7 @@ export default function AdminUsersPage() {
       setActionLoadingId(-1);
 
       const data = await adminFetch("/admin/users/create-admin", {
+        confirm: true,
         method: "POST",
         body: JSON.stringify({
           email: newAdminEmail,
@@ -441,8 +446,8 @@ export default function AdminUsersPage() {
                     value={newAdminPassword}
                     onChange={(event) => setNewAdminPassword(event.target.value)}
                     required
-                    minLength={8}
-                    placeholder="Minimum 8 caractères"
+                    minLength={12}
+                    placeholder="Minimum 12 caractères"
                     className="mt-1 w-full rounded-lg border border-white/10 bg-slate-900 px-4 py-3 text-sm outline-none focus:border-red-300"
                   />
                 </div>
@@ -501,7 +506,8 @@ export default function AdminUsersPage() {
                         <td className="px-4 py-4">
                           <select
                             value={user.role}
-                            disabled={isBusy}
+                            // An admin cannot change their own role from here.
+                            disabled={isBusy || isCurrentAdmin}
                             onChange={(event) =>
                               updateUserRole(user, event.target.value)
                             }
