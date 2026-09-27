@@ -21,6 +21,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.database import engine
 from app.routers.admin import router as admin_router
+from app.routers.admin_audit import router as admin_audit_router
 
 logger = logging.getLogger("ForgeAI.admin")
 
@@ -46,6 +47,7 @@ app.add_middleware(
 )
 
 app.include_router(admin_router)
+app.include_router(admin_audit_router)  # Sprint 7.2, read-only
 
 
 @app.get("/health", status_code=status.HTTP_200_OK, tags=["System"])

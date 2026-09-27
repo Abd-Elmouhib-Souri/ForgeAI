@@ -20,6 +20,7 @@ from app.schemas.project import (
 from app.schemas.project import ProjectClarificationUpdate
 from app.security import get_current_user
 from app.services.domain_integrity_guard import normalize_output_language
+from app.services.export.storage import delete_project_files
 from app.services.idea_readiness_checker import idea_readiness_checker
 from app.services.project_context_builder import project_context_builder
 from app.services.public_analysis_sanitizer import sanitize_analysis_data_for_public
@@ -2415,6 +2416,9 @@ async def delete_project(
 
     await db.delete(project)
     await db.commit()
+
+    # Sprint 7.2 (RED B3): the export files (PDF, Word, PowerPoint) go too.
+    delete_project_files(project_id)
 
     return None
 

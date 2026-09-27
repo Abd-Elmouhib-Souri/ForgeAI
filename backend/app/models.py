@@ -13,6 +13,7 @@ from sqlalchemy import (
     Text,
     JSON,
 )
+from sqlalchemy import event
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -358,3 +359,47 @@ class Export(Base):
         "Project",
         back_populates="exports",
     )
+
+
+class AdminAuditLog(Base):
+    """
+    Sprint 7.2: append-only trace of admin actions and admin login attempts.
+
+    No foreign key on purpose: deleting an account must neither erase nor
+    break its history, so the actor and the target are stored as snapshots
+    (id + e-mail / label). Rows are never updated nor deleted: the ORM
+    refuses it (listeners below) and PostgreSQL refuses it too (trigger
+    created by the migration).
+    """
+
+    __tablename__ = "admin_audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+    # Who: null actor_id = unknown account (failed login on a wrong e-mail).
+    actor_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    actor_email: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
+    # What, on what.
+    action: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    target_type: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    target_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    target_label: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    before: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    after: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    # From where.
+    ip_address: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    # Outcome: success | failure (wrong password / code) | denied (rule or block).
+    result: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    detail: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+
+def _refuse_audit_change(mapper, connection, target) -> None:
+    # Registered on the class itself: any session, any code path.
+    raise PermissionError("admin_audit_logs is append-only: entries cannot be updated or deleted.")
+
+
+event.listen(AdminAuditLog, "before_update", _refuse_audit_change)
+event.listen(AdminAuditLog, "before_delete", _refuse_audit_change)

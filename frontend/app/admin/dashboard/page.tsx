@@ -108,6 +108,13 @@ export default function AdminDashboardPage() {
               Errors
             </Link>
 
+            <Link
+              href="/admin/audit"
+              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 transition hover:bg-white/10"
+            >
+              Journal d&apos;audit
+            </Link>
+
             <button
               onClick={handleLogout}
               className="rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-2 text-red-200 transition hover:bg-red-500/20"

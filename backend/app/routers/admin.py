@@ -17,7 +17,9 @@ from sqlalchemy.future import select
 from app.config import settings
 from app.database import get_db
 from app.mailer import send_verification_email
-from app.models import Project, User, UserRole
+from app.models import Export, Project, User, UserRole
+from app.services import admin_audit as audit
+from app.services.export.storage import delete_project_files
 from app.admin_security import (
     get_current_admin,
     get_enrolling_admin,
@@ -229,6 +231,8 @@ async def admin_login(
     keys = throttle_keys(user_in.email, _client_ip(request))
     wait = await login_throttle.retry_after(keys)
     if wait:
+        await audit.add_and_commit(db, request, action="admin.login.blocked", result="denied",
+                                   actor_email=user_in.email, detail="too_many_attempts")
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Trop de tentatives. Réessayez plus tard.",
@@ -238,15 +242,24 @@ async def admin_login(
     user = (await db.execute(select(User).where(User.email == user_in.email))).scalar_one_or_none()
     if not user or not user.hashed_password or not verify_password(user_in.password, user.hashed_password):
         await login_throttle.record_failure(keys)
+        # Unknown account: actor stays null, the attempted e-mail is kept.
+        await audit.add_and_commit(db, request, action="admin.login", result="failure",
+                                   actor=user, actor_email=user_in.email, detail="bad_credentials")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Email ou mot de passe incorrect.")
 
     if user.role != UserRole.ADMIN or not user.is_active or not user.is_email_verified:
         # Same answer for every refusal: never reveal which accounts are admins.
+        # The (admin-only) log keeps the real reason.
         await login_throttle.record_failure(keys)
+        reason = ("not_admin" if user.role != UserRole.ADMIN
+                  else "inactive" if not user.is_active else "email_unverified")
+        await audit.add_and_commit(db, request, action="admin.login", result="denied", actor=user, detail=reason)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Accès réservé aux administrateurs.")
 
     if not user.is_two_factor_enabled:
         # First admin login (or 2FA reset): enrol before any access.
+        await audit.add_and_commit(db, request, action="admin.login", result="success",
+                                   actor=user, detail="2fa_enrollment_required")
         return {
             "requires_2fa_setup": True,
             "enrollment_token": issue_enrollment_token(user.email),
@@ -259,12 +272,15 @@ async def admin_login(
         )
     if not verify_totp(user, user_in.two_factor_code):
         await login_throttle.record_failure(keys)
+        await audit.add_and_commit(db, request, action="admin.login", result="failure",
+                                   actor=user, detail="totp_invalid")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"reason": "totp_invalid", "message": "Code de double authentification invalide."},
         )
 
     await login_throttle.reset(keys)
+    await audit.add_and_commit(db, request, action="admin.login", result="success", actor=user)
     return _session(user)
 
 
@@ -292,15 +308,23 @@ async def admin_two_factor_enable(
     keys = throttle_keys(admin.email, _client_ip(request))
     wait = await login_throttle.retry_after(keys)
     if wait:
+        await audit.add_and_commit(db, request, action="admin.login.blocked", result="denied",
+                                   actor=admin, detail="too_many_attempts")
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                             detail="Trop de tentatives. Réessayez plus tard.", headers={"Retry-After": str(wait)})
     if not admin.two_factor_secret:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Lancez d'abord la configuration 2FA.")
     if not verify_totp(admin, payload.code):
         await login_throttle.record_failure(keys)
+        await audit.add_and_commit(db, request, action="admin.2fa.enable", result="failure",
+                                   actor=admin, target_type="user", target_id=admin.id,
+                                   target_label=admin.email, detail="totp_invalid")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail={"reason": "totp_invalid", "message": "Code invalide. Vérifiez l'heure de votre téléphone."})
     admin.is_two_factor_enabled = True
+    audit.add(db, request, action="admin.2fa.enable", result="success", actor=admin,
+              target_type="user", target_id=admin.id, target_label=admin.email,
+              before={"is_two_factor_enabled": False}, after={"is_two_factor_enabled": True})
     await db.commit()
     await login_throttle.reset(keys)
     return _session(admin)
@@ -444,8 +468,21 @@ async def _ensure_another_active_admin(db: AsyncSession, target: User) -> None:
         )
 
 
+async def _record_refusal(
+    db: AsyncSession, request: Request, admin: User, exc: HTTPException, *, action: str, target: User | None = None,
+) -> None:
+    """A business rule refused the action: keep the attempt in the audit log."""
+    await audit.add_and_commit(
+        db, request, action=action, result="denied", actor=admin, detail=exc.detail,
+        target_type="user" if target is not None else None,
+        target_id=target.id if target is not None else None,
+        target_label=target.email if target is not None else None,
+    )
+
+
 @router.post("/users/create-admin", status_code=status.HTTP_201_CREATED)
 async def create_admin_user(
+    request: Request,
     payload: AdminCreateAdminRequest,
     background_tasks: BackgroundTasks,
     admin: User = Depends(require_confirmation),
@@ -465,10 +502,12 @@ async def create_admin_user(
     existing_user = result.scalar_one_or_none()
 
     if existing_user:
-        raise HTTPException(
+        exc = HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Un compte existe déjà avec cet email.",
         )
+        await _record_refusal(db, request, admin, exc, action="admin.create", target=existing_user)
+        raise exc
 
     new_admin = User(
         email=payload.email,
@@ -482,6 +521,10 @@ async def create_admin_user(
     verification_token = set_email_verification_token(new_admin)
 
     db.add(new_admin)
+    await db.flush()  # new_admin.id for the audit entry, same transaction
+    audit.add(db, request, action="admin.create", result="success", actor=admin,
+              target_type="user", target_id=new_admin.id, target_label=new_admin.email,
+              after=audit.user_snapshot(new_admin))  # never the password
     await db.commit()
     await db.refresh(new_admin)
 
@@ -589,6 +632,7 @@ async def get_admin_user_projects(
 
 @router.post("/users/{user_id}/resend-verification")
 async def admin_resend_user_verification(
+    request: Request,
     user_id: int,
     background_tasks: BackgroundTasks,
     admin: User = Depends(require_admin),
@@ -615,6 +659,8 @@ async def admin_resend_user_verification(
         )
 
     verification_token = set_email_verification_token(target_user)
+    audit.add(db, request, action="user.verification.resend", result="success", actor=admin,
+              target_type="user", target_id=target_user.id, target_label=target_user.email)
 
     await db.commit()
     await db.refresh(target_user)
@@ -633,6 +679,7 @@ async def admin_resend_user_verification(
 
 @router.patch("/users/{user_id}/role")
 async def update_user_role(
+    request: Request,
     user_id: int,
     payload: AdminUserRoleUpdate,
     admin: User = Depends(require_confirmation),
@@ -646,16 +693,24 @@ async def update_user_role(
             detail="Utilisateur introuvable.",
         )
 
-    if payload.role != UserRole.ADMIN:
-        await _ensure_another_active_admin(db, target_user)
+    try:
+        if payload.role != UserRole.ADMIN:
+            await _ensure_another_active_admin(db, target_user)
 
-    if target_user.id == admin.id and payload.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Un admin ne peut pas retirer son propre rôle admin.",
-        )
+        if target_user.id == admin.id and payload.role != UserRole.ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Un admin ne peut pas retirer son propre rôle admin.",
+            )
+    except HTTPException as exc:
+        await _record_refusal(db, request, admin, exc, action="user.role.update", target=target_user)
+        raise
 
+    before = {"role": role_to_str(target_user.role)}
     target_user.role = payload.role
+    audit.add(db, request, action="user.role.update", result="success", actor=admin,
+              target_type="user", target_id=target_user.id, target_label=target_user.email,
+              before=before, after={"role": role_to_str(payload.role)})
 
     await db.commit()
     await db.refresh(target_user)
@@ -665,6 +720,7 @@ async def update_user_role(
 
 @router.patch("/users/{user_id}/status")
 async def update_user_status(
+    request: Request,
     user_id: int,
     payload: AdminUserStatusUpdate,
     admin: User = Depends(require_confirmation),
@@ -678,16 +734,24 @@ async def update_user_status(
             detail="Utilisateur introuvable.",
         )
 
-    if payload.is_active is False:
-        await _ensure_another_active_admin(db, target_user)
+    try:
+        if payload.is_active is False:
+            await _ensure_another_active_admin(db, target_user)
 
-    if target_user.id == admin.id and payload.is_active is False:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Un admin ne peut pas désactiver son propre compte.",
-        )
+        if target_user.id == admin.id and payload.is_active is False:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Un admin ne peut pas désactiver son propre compte.",
+            )
+    except HTTPException as exc:
+        await _record_refusal(db, request, admin, exc, action="user.status.update", target=target_user)
+        raise
 
+    before = {"is_active": bool(target_user.is_active)}
     target_user.is_active = payload.is_active
+    audit.add(db, request, action="user.status.update", result="success", actor=admin,
+              target_type="user", target_id=target_user.id, target_label=target_user.email,
+              before=before, after={"is_active": bool(payload.is_active)})
 
     await db.commit()
     await db.refresh(target_user)
@@ -695,6 +759,7 @@ async def update_user_status(
     return serialize_user(target_user)
 @router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_admin_user(
+    request: Request,
     user_id: int,
     admin: User = Depends(require_confirmation),
     db: AsyncSession = Depends(get_db),
@@ -716,27 +781,35 @@ async def delete_admin_user(
             detail="Utilisateur introuvable.",
         )
 
-    await _ensure_another_active_admin(db, target_user)
+    try:
+        await _ensure_another_active_admin(db, target_user)
 
-    if target_user.id == admin.id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Un admin ne peut pas supprimer son propre compte.",
+        if target_user.id == admin.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Un admin ne peut pas supprimer son propre compte.",
+            )
+
+        project_count = await db.scalar(
+            select(func.count(Project.id)).where(Project.user_id == user_id)
         )
 
-    project_count = await db.scalar(
-        select(func.count(Project.id)).where(Project.user_id == user_id)
-    )
+        if project_count and project_count > 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Impossible de supprimer cet utilisateur car il possède des projets. "
+                    "Désactivez le compte à la place."
+                ),
+            )
+    except HTTPException as exc:
+        await _record_refusal(db, request, admin, exc, action="user.delete", target=target_user)
+        raise
 
-    if project_count and project_count > 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "Impossible de supprimer cet utilisateur car il possède des projets. "
-                "Désactivez le compte à la place."
-            ),
-        )
-
+    # The account disappears; its public snapshot stays in the log.
+    audit.add(db, request, action="user.delete", result="success", actor=admin,
+              target_type="user", target_id=target_user.id, target_label=target_user.email,
+              before=audit.user_snapshot(target_user))
     await db.delete(target_user)
     await db.commit()
 
@@ -797,6 +870,7 @@ async def get_admin_project_detail(
 
 @router.delete("/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_admin_project(
+    request: Request,
     project_id: int,
     admin: User = Depends(require_confirmation),
     db: AsyncSession = Depends(get_db),
@@ -809,8 +883,21 @@ async def delete_admin_project(
             detail="Projet introuvable.",
         )
 
+    owner = await db.get(User, project.user_id)
+    export_count = await db.scalar(select(func.count(Export.id)).where(Export.project_id == project_id))
+    audit.add(db, request, action="project.delete", result="success", actor=admin,
+              target_type="project", target_id=project.id, target_label=project.title,
+              before={
+                  "title": project.title,
+                  "owner_email": owner.email if owner else None,
+                  "analysis_status": project.analysis_status,
+                  "exports": export_count or 0,
+              })
     await db.delete(project)
     await db.commit()
+
+    # Sprint 7.2 (RED B3): the export files (PDF, Word, PowerPoint) go too.
+    delete_project_files(project_id)
 
     return None
 

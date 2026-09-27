@@ -127,3 +127,33 @@ export async function adminFetch(path: string, options: AdminFetchOptions = {}) 
 
   return data;
 }
+
+// Authenticated file download (CSV of the audit log...): the token travels
+// in the header, never in the URL (URLs end up in logs and history).
+export async function adminDownload(path: string, fallbackName: string) {
+  const token = getAdminToken();
+  const response = await fetch(`${ADMIN_API_URL}${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+
+  if (response.status === 401 || response.status === 403) {
+    removeAdminToken();
+    if (typeof window !== "undefined") {
+      window.location.href = "/admin/login";
+    }
+    throw new AdminApiError(response.status, null, "Session admin expirée ou accès interdit.");
+  }
+  if (!response.ok) {
+    const data = await readJson(response);
+    throw new AdminApiError(response.status, data?.detail, "Téléchargement impossible.");
+  }
+
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fallbackName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
