@@ -18,7 +18,7 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "DotJcom ForgeAI",
+  title: "ForgeAI",
   description: "From Idea to Startup, Powered by AI.",
 };
 

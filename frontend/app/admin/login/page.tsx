@@ -155,7 +155,7 @@ export default function AdminLoginPage() {
         </form>
 
         <p className="mt-6 text-center text-xs text-white/40">
-          Espace sécurisé — DotJcom ForgeAI
+          Espace sécurisé — ForgeAI
         </p>
       </div>
     </main>

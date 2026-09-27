@@ -222,7 +222,7 @@ const content = {
         'ForgeAI génère un dossier complet : analyse de l’idée, étude de marché, SWOT, Business Model Canvas, analyse concurrentielle, estimation financière, Startup Score, personas clients, Product Backlog, Sprint Planning, stack technique, diagrammes UML, rapport PDF, document Word et Pitch Deck PowerPoint.',
       cta: 'Créer mon premier projet',
     },
-    footer: 'DotJcom ForgeAI — From Idea to Startup, Powered by AI.',
+    footer: 'ForgeAI — From Idea to Startup, Powered by AI.',
   },
   en: {
     nav: {
@@ -439,7 +439,7 @@ const content = {
         'ForgeAI generates a complete file: idea analysis, market study, SWOT, Business Model Canvas, competitive analysis, financial estimation, Startup Score, customer personas, Product Backlog, Sprint Planning, technical stack, UML diagrams, PDF report, Word document and PowerPoint Pitch Deck.',
       cta: 'Create my first project',
     },
-    footer: 'DotJcom ForgeAI — From Idea to Startup, Powered by AI.',
+    footer: 'ForgeAI — From Idea to Startup, Powered by AI.',
   },
 };
 

@@ -23,6 +23,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
 
+from .templates import sections_for
 from .labels import (
     DIAGRAM_ORDER,
     category_label,
@@ -165,9 +166,9 @@ class _Report:
             shape.width = int(shape.width * ratio)
 
     def footer(self) -> None:
-        """'Généré par DotJcom ForgeAI · Page N' on every page."""
+        """'Généré par ForgeAI · Page N' on every page."""
         paragraph = self.doc.sections[0].footer.paragraphs[0]
-        run = paragraph.add_run(f"{self.L['generated_by']} DotJcom ForgeAI · {self.L['page']} ")
+        run = paragraph.add_run(f"{self.L['generated_by']} ForgeAI · {self.L['page']} ")
         run.font.size = Pt(8)
         run.font.color.rgb = TEXT_MUTED
         field = OxmlElement("w:fldSimple")
@@ -195,11 +196,10 @@ def _cover(r: _Report, data: dict[str, Any], generated_at: str) -> None:
     score_text = f"{score:.1f}/10" if isinstance(score, (int, float)) else "—"
     identity = [
         (L["project"], cover["title"]),
-        (L["type"], L["report_type"]),
-        (L["company"], "DotJcom Ltd — Soliman, Nabeul, Tunisie"),
+        (L["type"], L[f"template_{data.get('template') or 'business'}"]),
         (L["date"], generated_at),
         (L["classification"], L["confidential"]),
-        (L["generated_by"], "DotJcom ForgeAI"),
+        (L["generated_by"], "ForgeAI"),
         (L["stat_startup_score"], score_text),
         (L["stat_personas"], str(len(data["personas"]))),
         (L["stat_user_stories"], str(len(data["backlog"]["stories"]))),
@@ -532,6 +532,24 @@ def _solution_architecture(r: _Report, data: dict[str, Any], images: dict[str, b
                 r.para(L["diagram_unavailable"], muted=True)
 
 
+# Section key (templates.SECTION_KEYS) -> writer (architecture handled apart:
+# it also needs the rendered UML images).
+_SECTIONS = {
+    "executive_summary": _executive_summary,
+    "idea_description": _description,
+    "market_study": _market_study,
+    "swot": _swot,
+    "business_model_canvas": _business_model_canvas,
+    "competitive_analysis": _competitive_analysis,
+    "sources": _sources,
+    "startup_score": _startup_score,
+    "debate_room": _debate_room,
+    "personas": _personas,
+    "product_backlog": _backlog,
+    "sprint_planning": _sprint_planning,
+}
+
+
 def build_docx(
     data: dict[str, Any],
     generated_at: str,
@@ -541,12 +559,11 @@ def build_docx(
     """Write the complete report to ``target`` (path or binary stream)."""
     report = _Report(labels_for(data.get("language")))
     _cover(report, data, generated_at)
-    for section in (
-        _executive_summary, _description, _market_study, _swot, _business_model_canvas,
-        _competitive_analysis, _sources, _startup_score, _debate_room, _personas,
-        _backlog, _sprint_planning,
-    ):
-        section(report, data)
-    _solution_architecture(report, data, diagram_images or {})
+    # Sections of the export template (templates.py), in its order.
+    for key in sections_for(data.get("template")):
+        if key == "solution_architecture":
+            _solution_architecture(report, data, diagram_images or {})
+        else:
+            _SECTIONS[key](report, data)
     report.footer()
     report.doc.save(target)

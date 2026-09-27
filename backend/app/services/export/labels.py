@@ -220,6 +220,11 @@ FR: dict[str, str] = {
     "deck_why_now": "Pourquoi maintenant",
     "deck_differentiation": "Notre différence",
     "deck_use_case_diagram": "Cas d'usage",
+    # Export templates (Sprint 6.4): the cover "Type" line
+    "template_business": "Rapport d'analyse stratégique et technique",
+    "template_entrepreneur": "Dossier entrepreneur : marché, modèle économique et plan de lancement",
+    "template_student": "Dossier académique : conception, backlog et architecture technique",
+    "template_consultant": "Rapport de conseil : diagnostic stratégique, risques et recommandations",
     "report_footer": "Rapport ForgeAI",
 }
 
@@ -409,6 +414,10 @@ EN: dict[str, str] = {
     "deck_why_now": "Why now",
     "deck_differentiation": "What sets us apart",
     "deck_use_case_diagram": "Use cases",
+    "template_business": "Strategic and technical analysis report",
+    "template_entrepreneur": "Founder dossier: market, business model and launch plan",
+    "template_student": "Academic dossier: design, backlog and technical architecture",
+    "template_consultant": "Advisory report: strategic diagnosis, risks and recommendations",
     "report_footer": "ForgeAI report",
 }
 
