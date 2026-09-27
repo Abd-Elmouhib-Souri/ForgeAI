@@ -100,6 +100,19 @@ class Settings(BaseSettings):
     # ðŸŒ CORS
     
     ALLOWED_ORIGINS: List[str] = ["http://localhost:3000"]
+
+    # --- Sprint 7.1: separate, locked-down admin API (app/admin_main.py) ---
+    # Origins allowed to call the admin API (the admin console only).
+    ADMIN_ALLOWED_ORIGINS: List[str] = ["http://localhost:3000"]
+    # Admin access token: short-lived, no silent refresh.
+    ADMIN_ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    # Token that only allows enrolling 2FA after the password step.
+    ADMIN_ENROLL_TOKEN_EXPIRE_MINUTES: int = 10
+    # Failed password / TOTP attempts allowed per account and per IP
+    # within the window, before a temporary block (HTTP 429).
+    ADMIN_LOGIN_MAX_ATTEMPTS: int = 5
+    ADMIN_LOGIN_WINDOW_SECONDS: int = 900
+    ADMIN_MIN_PASSWORD_LENGTH: int = 12
     PASSWORD_RESET_EXPIRE_HOURS: int = 1
 
 
