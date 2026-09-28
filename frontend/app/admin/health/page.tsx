@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { adminFetch } from "@/lib/admin-api";
+import AdminPageHeader from "@/app/admin/_components/AdminPageHeader";
 
 type HealthService = {
   name: string;
@@ -42,36 +42,8 @@ export default function AdminHealthPage() {
   }, []);
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      <header className="border-b border-white/10 bg-white/5 px-6 py-4">
-        <div className="mx-auto flex max-w-7xl items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-red-300">ForgeAI Admin</p>
-            <h1 className="text-2xl font-bold">Health système</h1>
-          </div>
-
-          <nav className="flex gap-3 text-sm">
-            <Link
-              href="/admin/dashboard"
-              className="rounded-lg border border-white/10 px-4 py-2 hover:bg-white/10"
-            >
-              Dashboard
-            </Link>
-            <Link
-              href="/admin/users"
-              className="rounded-lg border border-white/10 px-4 py-2 hover:bg-white/10"
-            >
-              Users
-            </Link>
-            <Link
-              href="/admin/errors"
-              className="rounded-lg border border-white/10 px-4 py-2 hover:bg-white/10"
-            >
-              Errors
-            </Link>
-          </nav>
-        </div>
-      </header>
+    <div>
+      <AdminPageHeader title="Santé du système" subtitle="État des services dont dépend la plateforme." />
 
       <section className="mx-auto max-w-7xl px-6 py-8">
         <div className="mb-6 rounded-2xl border border-white/10 bg-white/5 p-6">
@@ -125,7 +97,7 @@ export default function AdminHealthPage() {
           ))}
         </div>
       </section>
-    </main>
+    </div>
   );
 }
 

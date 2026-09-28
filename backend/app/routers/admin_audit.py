@@ -21,7 +21,7 @@ from sqlalchemy.future import select
 from app.admin_security import get_current_admin
 from app.database import get_db
 from app.models import AdminAuditLog, User
-from app.services.admin_audit import ACTIONS, RESULTS
+from app.services.admin_audit import ACTIONS, RESULTS, detail_label
 
 router = APIRouter(prefix="/admin/audit", tags=["Admin audit"])
 
@@ -83,6 +83,7 @@ def serialize_entry(entry: AdminAuditLog) -> dict[str, Any]:
         "user_agent": entry.user_agent,
         "result": entry.result,
         "detail": entry.detail,
+        "detail_label": detail_label(entry.detail),
     }
 
 
@@ -150,7 +151,7 @@ async def export_audit_csv(
             entry.actor_email,
             ACTIONS.get(entry.action, entry.action),
             RESULT_LABELS.get(entry.result, entry.result),
-            entry.detail,
+            detail_label(entry.detail),
             entry.target_type,
             entry.target_label or entry.target_id,
             entry.before,

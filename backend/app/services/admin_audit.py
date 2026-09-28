@@ -40,6 +40,24 @@ ACTIONS: dict[str, str] = {
 
 RESULTS = ("success", "failure", "denied")
 
+# Reason code -> French label. The code stays in the database (stable, for
+# filters and tools); the console and the CSV show the label. Refusals by a
+# business rule store the backend's French message itself: shown as is.
+DETAIL_LABELS: dict[str, str] = {
+    "bad_credentials": "E-mail ou mot de passe incorrect",
+    "not_admin": "Compte non administrateur",
+    "inactive": "Compte désactivé",
+    "email_unverified": "E-mail non vérifié",
+    "totp_invalid": "Code 2FA invalide",
+    "too_many_attempts": "Trop de tentatives",
+    "confirmation_invalid": "Code de confirmation invalide",
+    "2fa_enrollment_required": "Première connexion : activation 2FA demandée",
+}
+
+
+def detail_label(detail: str | None) -> str | None:
+    return DETAIL_LABELS.get(detail, detail) if detail else None
+
 
 def _cut(value: Any, size: int) -> str | None:
     if value is None:

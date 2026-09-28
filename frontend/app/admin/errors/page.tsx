@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { adminFetch } from "@/lib/admin-api";
+import AdminPageHeader from "@/app/admin/_components/AdminPageHeader";
+import { analysisStatusLabel } from "@/app/admin/_components/labels";
 
 type AdminError = {
   id: string;
@@ -42,36 +43,8 @@ export default function AdminErrorsPage() {
   }, []);
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      <header className="border-b border-white/10 bg-white/5 px-6 py-4">
-        <div className="mx-auto flex max-w-7xl items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-red-300">ForgeAI Admin</p>
-            <h1 className="text-2xl font-bold">Suivi des erreurs</h1>
-          </div>
-
-          <nav className="flex gap-3 text-sm">
-            <Link
-              href="/admin/dashboard"
-              className="rounded-lg border border-white/10 px-4 py-2 hover:bg-white/10"
-            >
-              Dashboard
-            </Link>
-            <Link
-              href="/admin/users"
-              className="rounded-lg border border-white/10 px-4 py-2 hover:bg-white/10"
-            >
-              Users
-            </Link>
-            <Link
-              href="/admin/health"
-              className="rounded-lg border border-white/10 px-4 py-2 hover:bg-white/10"
-            >
-              Health
-            </Link>
-          </nav>
-        </div>
-      </header>
+    <div>
+      <AdminPageHeader title="Erreurs" subtitle="Analyses en échec ou avec anomalies." />
 
       <section className="mx-auto max-w-7xl px-6 py-8">
         <div className="mb-6 rounded-2xl border border-white/10 bg-white/5 p-6">
@@ -121,14 +94,14 @@ export default function AdminErrorsPage() {
 
               <div className="mt-4 grid gap-3 text-sm md:grid-cols-3">
                 <Info label="Source" value={item.source} />
-                <Info label="Status analyse" value={item.analysis_status} />
+                <Info label="Statut de l'analyse" value={analysisStatusLabel(item.analysis_status)} />
                 <Info label="Date" value={formatDate(item.created_at)} />
               </div>
             </div>
           ))}
         </div>
       </section>
-    </main>
+    </div>
   );
 }
 

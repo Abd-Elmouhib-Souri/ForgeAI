@@ -1,9 +1,9 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import Link from "next/link";
 
 import { adminDownload, adminFetch } from "@/lib/admin-api";
+import AdminPageHeader from "@/app/admin/_components/AdminPageHeader";
 
 // Sprint 7.2: read-only view of the admin audit log (who, what, when, from where).
 
@@ -22,6 +22,7 @@ type AuditEntry = {
   user_agent: string | null;
   result: "success" | "failure" | "denied";
   detail: string | null;
+  detail_label: string | null; // French label decided by the backend
 };
 
 type AuditPage = { items: AuditEntry[]; total: number; page: number; page_size: number };
@@ -35,18 +36,6 @@ const RESULTS: Record<string, { label: string; className: string }> = {
   success: { label: "Succès", className: "border-emerald-400/30 bg-emerald-500/10 text-emerald-200" },
   failure: { label: "Échec", className: "border-red-400/30 bg-red-500/10 text-red-200" },
   denied: { label: "Refusé", className: "border-amber-400/30 bg-amber-500/10 text-amber-200" },
-};
-
-// Reason codes written by the backend -> readable French.
-const DETAILS: Record<string, string> = {
-  bad_credentials: "E-mail ou mot de passe incorrect",
-  not_admin: "Compte non administrateur",
-  inactive: "Compte désactivé",
-  email_unverified: "E-mail non vérifié",
-  totp_invalid: "Code 2FA invalide",
-  too_many_attempts: "Trop de tentatives",
-  confirmation_invalid: "Code de confirmation invalide",
-  "2fa_enrollment_required": "Première connexion : activation 2FA demandée",
 };
 
 function formatDate(value: string | null) {
@@ -149,39 +138,20 @@ export default function AdminAuditPage() {
     "mt-1 w-full rounded-lg border border-white/10 bg-white/10 px-3 py-2 text-sm text-white outline-none focus:border-red-300";
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      <header className="border-b border-white/10 bg-white/5 px-6 py-4 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="text-sm font-medium text-red-300">ForgeAI Admin</p>
-            <h1 className="text-2xl font-bold">Journal d&apos;audit</h1>
-            <p className="text-sm text-white/50">
-              Toutes les actions et connexions admin. Les entrées ne peuvent être ni modifiées ni supprimées.
-            </p>
-          </div>
-          <nav className="flex flex-wrap items-center gap-3 text-sm">
-            <Link
-              href="/admin/dashboard"
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 transition hover:bg-white/10"
-            >
-              Dashboard
-            </Link>
-            <Link
-              href="/admin/users"
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 transition hover:bg-white/10"
-            >
-              Users
-            </Link>
-            <button
-              onClick={exportCsv}
-              disabled={isExporting}
-              className="rounded-lg bg-red-500 px-4 py-2 font-semibold text-white transition hover:bg-red-400 disabled:opacity-60"
-            >
-              {isExporting ? "Export..." : "Exporter en CSV"}
-            </button>
-          </nav>
-        </div>
-      </header>
+    <div>
+      <AdminPageHeader
+        title="Journal d'audit"
+        subtitle="Toutes les actions et connexions admin. Les entrées ne peuvent être ni modifiées ni supprimées."
+        actions={
+          <button
+            onClick={exportCsv}
+            disabled={isExporting}
+            className="rounded-lg bg-red-500 px-4 py-2 font-semibold text-white transition hover:bg-red-400 disabled:opacity-60"
+          >
+            {isExporting ? "Export..." : "Exporter en CSV"}
+          </button>
+        }
+      />
 
       <section className="mx-auto max-w-7xl space-y-6 px-6 py-8">
         <form
@@ -302,7 +272,7 @@ export default function AdminAuditPage() {
                       <td className="px-4 py-3">
                         {entry.action_label}
                         {entry.detail && (
-                          <span className="block text-xs text-white/50">{DETAILS[entry.detail] ?? entry.detail}</span>
+                          <span className="block text-xs text-white/50">{entry.detail_label ?? entry.detail}</span>
                         )}
                       </td>
                       <td className="px-4 py-3 text-white/70">{entry.target_label || entry.target_id || "—"}</td>
@@ -360,6 +330,6 @@ export default function AdminAuditPage() {
           </div>
         </div>
       </section>
-    </main>
+    </div>
   );
 }

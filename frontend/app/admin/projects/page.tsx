@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { adminFetch } from "@/lib/admin-api";
+import { adminFetch, isAdminActionCancelled } from "@/lib/admin-api";
+import { analysisStatusLabel } from "@/app/admin/_components/labels";
+import AdminPageHeader from "@/app/admin/_components/AdminPageHeader";
 
 type AdminProject = {
   id: number;
@@ -23,8 +23,6 @@ type AdminProject = {
 };
 
 export default function AdminProjectsPage() {
-  const router = useRouter();
-
   const [projects, setProjects] = useState<AdminProject[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [actionLoadingId, setActionLoadingId] = useState<number | null>(null);
@@ -47,12 +45,6 @@ export default function AdminProjectsPage() {
   }
 
   async function deleteProject(project: AdminProject) {
-    const confirmed = window.confirm(
-      `Supprimer le projet "${project.title}" ?\n\nCette action est irréversible.`
-    );
-
-    if (!confirmed) return;
-
     try {
       setActionLoadingId(project.id);
       setError("");
@@ -60,13 +52,14 @@ export default function AdminProjectsPage() {
 
       // Sensitive: the admin API requires a fresh 2FA code (Sprint 7.1).
       await adminFetch(`/admin/projects/${project.id}`, {
-        confirm: true,
+        confirm: `Supprimer définitivement le projet « ${project.title} » ?\nSon analyse et ses documents exportés seront supprimés.`,
         method: "DELETE",
       });
 
       setMessage(`Projet "${project.title}" supprimé avec succès.`);
       await loadProjects();
     } catch (err) {
+      if (isAdminActionCancelled(err)) return;
       setError(err instanceof Error ? err.message : "Erreur suppression projet.");
     } finally {
       setActionLoadingId(null);
@@ -94,45 +87,8 @@ export default function AdminProjectsPage() {
   }, [projects, search]);
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      <header className="border-b border-white/10 bg-white/5 px-6 py-4 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-red-300">ForgeAI Admin</p>
-            <h1 className="text-2xl font-bold">Gestion des projets</h1>
-          </div>
-
-          <nav className="flex flex-wrap gap-3 text-sm">
-            <button
-              onClick={() => router.back()}
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 hover:bg-white/10"
-            >
-              Retour
-            </button>
-
-            <Link
-              href="/admin/dashboard"
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 hover:bg-white/10"
-            >
-              Dashboard
-            </Link>
-
-            <Link
-              href="/admin/users"
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 hover:bg-white/10"
-            >
-              Users
-            </Link>
-
-            <Link
-              href="/admin/analyses"
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 hover:bg-white/10"
-            >
-              Analyses
-            </Link>
-          </nav>
-        </div>
-      </header>
+    <div>
+      <AdminPageHeader title="Projets" subtitle="Tous les projets créés sur la plateforme." />
 
       <section className="mx-auto max-w-7xl px-6 py-8">
         <div className="grid gap-4 md:grid-cols-4">
@@ -194,7 +150,7 @@ export default function AdminProjectsPage() {
                     <th className="px-4 py-2">Région</th>
                     <th className="px-4 py-2">Score</th>
                     <th className="px-4 py-2">Analyse</th>
-                    <th className="px-4 py-2">Owner</th>
+                    <th className="px-4 py-2">Propriétaire</th>
                     <th className="px-4 py-2">Créé le</th>
                     <th className="px-4 py-2 text-right">Actions</th>
                   </tr>
@@ -263,7 +219,7 @@ export default function AdminProjectsPage() {
           )}
         </div>
       </section>
-    </main>
+    </div>
   );
 }
 
@@ -288,7 +244,7 @@ function Badge({ status }: { status: string }) {
 
   return (
     <span className={`rounded-full border px-3 py-1 text-xs ${className}`}>
-      {status}
+      {analysisStatusLabel(status)}
     </span>
   );
 }
