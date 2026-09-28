@@ -124,6 +124,9 @@ class Settings(BaseSettings):
     ANALYSIS_STALE_AFTER_SECONDS: int = 1200
     # Sprint 7.6: how often the public API picks up runs queued by an admin.
     ANALYSIS_QUEUE_POLL_SECONDS: int = 5
+    # Sprint 7.7: how the admin API reaches the public API for its health
+    # check (docker-compose service name; http://localhost:8000 outside Docker).
+    PUBLIC_API_INTERNAL_URL: str = "http://backend:8000"
     ENABLE_TAVILY_SEARCH: bool = True
     TAVILY_API_KEY: str = ""
     TAVILY_SEARCH_URL: str = "https://api.tavily.com/search"
