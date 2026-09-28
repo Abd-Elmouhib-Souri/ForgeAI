@@ -1,8 +1,12 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useState } from "react";
 import Link from "next/link";
-import { adminFetch, isAdminActionCancelled } from "@/lib/admin-api";
+import { adminDownload, adminFetch, isAdminActionCancelled } from "@/lib/admin-api";
+import { buildListQuery, type Page } from "@/app/admin/_components/listQuery";
+import Pagination from "@/app/admin/_components/Pagination";
+import type { AdminStats } from "@/app/admin/_components/stats";
+import { useAdminResource } from "@/app/admin/_components/useAdminResource";
 import { ROLE_LABELS, roleLabel } from "@/app/admin/_components/labels";
 import AdminPageHeader from "@/app/admin/_components/AdminPageHeader";
 
@@ -27,50 +31,92 @@ type CurrentAdmin = {
 
 const roles = ["admin", "entrepreneur", "student", "consultant"];
 
-export default function AdminUsersPage() {
-  const [users, setUsers] = useState<AdminUser[]>([]);
-  const [currentAdmin, setCurrentAdmin] = useState<CurrentAdmin | null>(null);
+// Sprint 7.4: each quick filter is a query sent to the API (no browser filtering).
+type QuickFilter = "all" | "verified" | "unverified" | "inactive" | "admins";
+const QUICK_FILTERS: Record<QuickFilter, Record<string, string>> = {
+  all: {},
+  admins: { role: "admin" },
+  verified: { verified: "true" },
+  unverified: { verified: "false" },
+  inactive: { status: "inactive" },
+};
 
-  const [isLoading, setIsLoading] = useState(true);
+const SORTS: Record<string, { label: string; sort: string; order: "asc" | "desc" }> = {
+  recent: { label: "Plus récents", sort: "created_at", order: "desc" },
+  oldest: { label: "Plus anciens", sort: "created_at", order: "asc" },
+  email: { label: "E-mail (A → Z)", sort: "email", order: "asc" },
+  name: { label: "Nom (A → Z)", sort: "full_name", order: "asc" },
+  projects: { label: "Plus de projets", sort: "project_count", order: "desc" },
+};
+
+const PAGE_SIZE = 25;
+
+export default function AdminUsersPage() {
+  // The signed-in admin (to lock their own role / status controls).
+  const me = useAdminResource<CurrentAdmin>("/admin/me");
+  const currentAdmin = me.data;
+  const reloadMe = me.reload;
+
   const [actionLoadingId, setActionLoadingId] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
-  const [filter, setFilter] = useState<
-    "all" | "verified" | "unverified" | "inactive" | "admins"
-  >("all");
+  const [filter, setFilter] = useState<QuickFilter>("all");
+  const [searchDraft, setSearchDraft] = useState("");
+  const [search, setSearch] = useState("");
+  const [sortKey, setSortKey] = useState("recent");
+  const [page, setPage] = useState(1);
+
+  // The screen's filters: the same object drives the list and the CSV export.
+  const filters = {
+    ...QUICK_FILTERS[filter],
+    search,
+    sort: SORTS[sortKey].sort,
+    order: SORTS[sortKey].order,
+  };
+  const list = useAdminResource<Page<AdminUser>>(
+    `/admin/users${buildListQuery({ ...filters, page, page_size: PAGE_SIZE })}`,
+  );
+  const stats = useAdminResource<AdminStats>("/admin/stats");
+  const users = list.data?.items ?? [];
+  const reloadList = list.reload;
+  const reloadStats = stats.reload;
 
   const [showCreateAdmin, setShowCreateAdmin] = useState(false);
   const [newAdminEmail, setNewAdminEmail] = useState("");
   const [newAdminName, setNewAdminName] = useState("");
   const [newAdminPassword, setNewAdminPassword] = useState("");
 
-  const loadCurrentAdmin = useCallback(async () => {
-    try {
-      const data = await adminFetch("/admin/me");
-      setCurrentAdmin(data);
-    } catch {
-      setCurrentAdmin(null);
-    }
-  }, []);
-
+  // After an action: reload the current page and the counters.
   const loadUsers = useCallback(async () => {
-    try {
-      setIsLoading(true);
-      setError("");
-
-      const data = await adminFetch("/admin/users");
-      setUsers(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Erreur inconnue.");
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+    reloadList();
+    reloadStats();
+  }, [reloadList, reloadStats]);
 
   const refreshPageData = useCallback(async () => {
-    await Promise.all([loadCurrentAdmin(), loadUsers()]);
-  }, [loadCurrentAdmin, loadUsers]);
+    reloadMe();
+    await loadUsers();
+  }, [reloadMe, loadUsers]);
+
+  function changeFilter(next: QuickFilter) {
+    setFilter(next);
+    setPage(1); // a new filter starts at the first page
+  }
+
+  function applySearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSearch(searchDraft);
+    setPage(1);
+  }
+
+  async function exportCsv() {
+    try {
+      setError("");
+      await adminDownload(`/admin/users/export.csv${buildListQuery(filters)}`, "forgeai-utilisateurs.csv");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Export impossible.");
+    }
+  }
 
   async function toggleUserStatus(user: AdminUser) {
     try {
@@ -211,51 +257,18 @@ export default function AdminUsersPage() {
     }
   }
 
-  useEffect(() => {
-    void refreshPageData();
-  }, [refreshPageData]);
-
-  const filteredUsers = useMemo(() => {
-    if (filter === "verified") {
-      return users.filter((user) => user.is_email_verified);
-    }
-
-    if (filter === "unverified") {
-      return users.filter((user) => !user.is_email_verified);
-    }
-
-    if (filter === "inactive") {
-      return users.filter((user) => !user.is_active);
-    }
-
-    if (filter === "admins") {
-      return users.filter((user) => user.role === "admin");
-    }
-
-    return users;
-  }, [users, filter]);
-
-  const stats = useMemo(() => {
-    return {
-      total: users.length,
-      verified: users.filter((user) => user.is_email_verified).length,
-      unverified: users.filter((user) => !user.is_email_verified).length,
-      inactive: users.filter((user) => !user.is_active).length,
-      admins: users.filter((user) => user.role === "admin").length,
-    };
-  }, [users]);
-
   return (
     <div>
       <AdminPageHeader title="Utilisateurs" subtitle="Comptes clients et administrateurs." />
 
       <section className="mx-auto max-w-7xl px-6 py-8">
         <div className="grid gap-4 md:grid-cols-5">
-          <StatCard title="Total" value={stats.total} />
-          <StatCard title="Administrateurs" value={stats.admins} />
-          <StatCard title="Vérifiés" value={stats.verified} />
-          <StatCard title="Non vérifiés" value={stats.unverified} />
-          <StatCard title="Inactifs" value={stats.inactive} />
+          {/* Counters of the whole platform, computed by the database. */}
+          <StatCard title="Total" value={stats.data?.users.total ?? 0} />
+          <StatCard title="Administrateurs" value={stats.data?.users.admins ?? 0} />
+          <StatCard title="Vérifiés" value={stats.data?.users.verified ?? 0} />
+          <StatCard title="Non vérifiés" value={stats.data?.users.unverified ?? 0} />
+          <StatCard title="Inactifs" value={stats.data?.users.inactive ?? 0} />
         </div>
 
         <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-6">
@@ -276,37 +289,49 @@ export default function AdminUsersPage() {
                 + Ajouter admin
               </button>
 
-              <FilterButton
-                label="Tous"
-                active={filter === "all"}
-                onClick={() => setFilter("all")}
-              />
+              <button
+                type="button"
+                onClick={exportCsv}
+                className="rounded-lg border border-white/10 px-4 py-2 text-xs text-white/80 transition hover:bg-white/10"
+              >
+                Exporter en CSV
+              </button>
 
-              <FilterButton
-                label="Admins"
-                active={filter === "admins"}
-                onClick={() => setFilter("admins")}
-              />
-
-              <FilterButton
-                label="Vérifiés"
-                active={filter === "verified"}
-                onClick={() => setFilter("verified")}
-              />
-
-              <FilterButton
-                label="Non vérifiés"
-                active={filter === "unverified"}
-                onClick={() => setFilter("unverified")}
-              />
-
-              <FilterButton
-                label="Inactifs"
-                active={filter === "inactive"}
-                onClick={() => setFilter("inactive")}
-              />
+              <FilterButton label="Tous" active={filter === "all"} onClick={() => changeFilter("all")} />
+              <FilterButton label="Administrateurs" active={filter === "admins"} onClick={() => changeFilter("admins")} />
+              <FilterButton label="Vérifiés" active={filter === "verified"} onClick={() => changeFilter("verified")} />
+              <FilterButton label="Non vérifiés" active={filter === "unverified"} onClick={() => changeFilter("unverified")} />
+              <FilterButton label="Inactifs" active={filter === "inactive"} onClick={() => changeFilter("inactive")} />
             </div>
           </div>
+
+          {/* Search and sort run on the server (Sprint 7.4). */}
+          <form onSubmit={applySearch} className="mt-5 flex flex-col gap-3 md:flex-row">
+            <input
+              value={searchDraft}
+              onChange={(event) => setSearchDraft(event.target.value)}
+              placeholder="Rechercher par e-mail ou nom..."
+              className="w-full rounded-lg border border-white/10 bg-slate-900 px-4 py-2.5 text-sm outline-none focus:border-red-300 md:max-w-md"
+            />
+            <button type="submit" className="rounded-lg bg-white/15 px-4 py-2.5 text-sm font-semibold hover:bg-white/25">
+              Rechercher
+            </button>
+            <select
+              value={sortKey}
+              onChange={(event) => {
+                setSortKey(event.target.value);
+                setPage(1);
+              }}
+              aria-label="Trier"
+              className="rounded-lg border border-white/10 bg-slate-900 px-3 py-2.5 text-sm md:ml-auto"
+            >
+              {Object.entries(SORTS).map(([key, option]) => (
+                <option key={key} value={key}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </form>
 
           {message && (
             <div className="mt-5 rounded-lg border border-emerald-400/30 bg-emerald-500/10 p-3 text-sm text-emerald-200">
@@ -314,9 +339,9 @@ export default function AdminUsersPage() {
             </div>
           )}
 
-          {error && (
+          {(error || list.error) && (
             <div className="mt-5 rounded-lg border border-red-400/30 bg-red-500/10 p-3 text-sm text-red-200">
-              {error}
+              {error || list.error}
             </div>
           )}
 
@@ -395,7 +420,7 @@ export default function AdminUsersPage() {
             </div>
           )}
 
-          {isLoading ? (
+          {!list.data ? (
             <div className="mt-6 rounded-xl border border-white/10 bg-white/5 p-6 text-white/60">
               Chargement des utilisateurs...
             </div>
@@ -415,7 +440,7 @@ export default function AdminUsersPage() {
                 </thead>
 
                 <tbody>
-                  {filteredUsers.map((user) => {
+                  {users.map((user) => {
                     const isBusy = actionLoadingId === user.id;
                     const isCurrentAdmin = currentAdmin?.id === user.id;
                     const canDelete = user.project_count === 0 && !isCurrentAdmin;
@@ -529,11 +554,19 @@ export default function AdminUsersPage() {
                 </tbody>
               </table>
 
-              {filteredUsers.length === 0 && (
+              {list.data.total === 0 && (
                 <div className="rounded-xl border border-white/10 bg-white/5 p-6 text-center text-white/50">
                   Aucun utilisateur trouvé.
                 </div>
               )}
+
+              <Pagination
+                page={page}
+                pageSize={PAGE_SIZE}
+                total={list.data.total}
+                isLoading={list.isLoading}
+                onPageChange={setPage}
+              />
             </div>
           )}
         </div>
