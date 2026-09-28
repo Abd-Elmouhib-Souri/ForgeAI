@@ -233,6 +233,12 @@ class Project(Base):
         Integer, default=0, nullable=False
     )
 
+    # Sprint 7.6: set when an admin queues a relaunch; cleared by the public
+    # API worker when it claims the run (exactly once).
+    analysis_enqueued_at: Mapped[Optional[datetime.datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+
     user_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("users.id", ondelete="CASCADE"),

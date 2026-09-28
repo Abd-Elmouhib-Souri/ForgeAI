@@ -19,6 +19,8 @@ from app.database import get_db
 from app.mailer import send_verification_email
 from app.models import Export, Project, User, UserRole
 from app.services import admin_audit as audit
+from app.services import analysis_queue
+from app.services.post_analysis_pipeline import effective_state
 from app.services.admin_listing import (
     ANALYSIS_STATUS_LABELS,
     CSV_MAX_ROWS,
@@ -938,6 +940,7 @@ PROJECT_LIST_COLUMNS = (
     Project.analysis_error,
     Project.analysis_started_at,
     Project.analysis_completed_at,
+    Project.analysis_heartbeat_at,
     Project.user_id,
     Project.created_at,
     Project.updated_at,
@@ -985,7 +988,10 @@ async def _project_page(db, conditions, order_by, page, page_size):
 
 def serialize_project_row(row) -> dict:
     """List item of a project (light row from PROJECT_LIST_COLUMNS)."""
-    return dict(row._mapping)
+    item = dict(row._mapping)
+    # Sprint 7.6: queued/running without a sign of life = stuck (restart...).
+    item["analysis_stalled"] = analysis_queue.is_stalled(item["analysis_status"], item["analysis_heartbeat_at"])
+    return item
 
 
 @router.get("/projects")
@@ -1350,8 +1356,61 @@ async def get_admin_analysis_detail(
             owner_email=owner_email,
             owner_name=owner_name,
         ),
+        # Sprint 7.6: is the run stuck, and where is the post-analysis pipeline?
+        "analysis_stalled": analysis_queue.is_stalled(project.analysis_status, project.analysis_heartbeat_at),
+        "pipeline": effective_state(
+            project_id=project.id,
+            analysis_status=project.analysis_status,
+            analysis_data=project.analysis_data,
+        ),
         "diagnostics": build_admin_analysis_diagnostics(project),
         "analysis_data": project.analysis_data,
+    }
+
+
+@router.post("/analyses/{project_id}/relaunch", status_code=status.HTTP_202_ACCEPTED)
+async def relaunch_admin_analysis(
+    request: Request,
+    project_id: int,
+    admin: User = Depends(require_confirmation),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Queue a new run of a project's analysis (Sprint 7.6).
+
+    The admin API never executes it: the public API worker picks it up
+    (analysis_queue). Refused (409) while a run is alive, and for a project
+    whose owner never started an analysis. Audited either way.
+    """
+    project = await db.get(Project, project_id)
+    if project is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Projet introuvable.")
+
+    before = analysis_queue.audit_snapshot(project)
+    target = {"target_type": "project", "target_id": project.id, "target_label": project.title}
+
+    refusal = None
+    if project.analysis_status == "not_started":
+        refusal = ("never_started", "Le client n'a jamais lancé d'analyse sur ce projet.")
+    elif analysis_queue.is_live(project):
+        refusal = ("analysis_active", "Une analyse est en cours et donne encore des signes de vie.")
+    if refusal:
+        code, message = refusal
+        await audit.add_and_commit(db, request, action="analysis.relaunch", result="denied",
+                                   actor=admin, before=before, detail=code, **target)
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"reason": code, "message": message})
+
+    run_id = analysis_queue.enqueue(project)
+    audit.add(db, request, action="analysis.relaunch", result="success", actor=admin, before=before,
+              after={"analysis_status": project.analysis_status, "analysis_attempt": project.analysis_attempt,
+                     "analysis_run_id": run_id},
+              **target)
+    await db.commit()
+    return {
+        "project_id": project.id,
+        "analysis_status": project.analysis_status,
+        "analysis_step": project.analysis_step,
+        "message": "Relance en file d'attente : l'analyse démarrera dans quelques secondes.",
     }
 
 

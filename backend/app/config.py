@@ -119,6 +119,11 @@ class Settings(BaseSettings):
     # Runtime analysis and web-search configuration.
     GEMINI_SEARCH_MODEL: str = "gemini-3-flash-preview"
     ANALYSIS_MAX_CONCURRENT_RUNS: int = 2
+    # Sprint 7.6: a queued/running analysis without any sign of life for this
+    # long is considered stuck (restart, crash) and may be relaunched.
+    ANALYSIS_STALE_AFTER_SECONDS: int = 1200
+    # Sprint 7.6: how often the public API picks up runs queued by an admin.
+    ANALYSIS_QUEUE_POLL_SECONDS: int = 5
     ENABLE_TAVILY_SEARCH: bool = True
     TAVILY_API_KEY: str = ""
     TAVILY_SEARCH_URL: str = "https://api.tavily.com/search"
