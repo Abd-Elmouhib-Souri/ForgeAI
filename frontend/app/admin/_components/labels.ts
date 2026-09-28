@@ -52,3 +52,16 @@ export function pipelineStatusLabel(status: string | null | undefined) {
   if (!status) return "—";
   return PIPELINE_STATUS_LABELS[status] ?? status;
 }
+
+// Sprint 7.7: real health checks (backend: services/health_checks.py).
+export const HEALTH_STATUS_LABELS: Record<string, string> = {
+  healthy: "Opérationnel",
+  degraded: "Dégradé",
+  down: "Hors service",
+  not_configured: "Non configuré",
+};
+
+export function healthStatusLabel(status: string | null | undefined) {
+  if (!status) return "—";
+  return HEALTH_STATUS_LABELS[status] ?? status;
+}

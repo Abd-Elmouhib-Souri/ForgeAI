@@ -10,7 +10,7 @@ from typing import Any, Literal
 import pyotp
 from pydantic import BaseModel, EmailStr, Field
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
-from sqlalchemy import case, func, or_, text, true
+from sqlalchemy import case, func, or_, true
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -19,7 +19,7 @@ from app.database import get_db
 from app.mailer import send_verification_email
 from app.models import Export, Project, User, UserRole
 from app.services import admin_audit as audit
-from app.services import analysis_queue
+from app.services import analysis_queue, health_checks
 from app.services.post_analysis_pipeline import effective_state
 from app.services.admin_listing import (
     ANALYSIS_STATUS_LABELS,
@@ -193,22 +193,6 @@ def serialize_project(
         "created_at": project.created_at,
         "updated_at": project.updated_at,
     }
-
-
-def setting_is_configured(*names: str) -> bool:
-    for name in names:
-        value = getattr(settings, name, None)
-        if value:
-            return True
-    return False
-
-
-def get_setting_value(*names: str) -> str | None:
-    for name in names:
-        value = getattr(settings, name, None)
-        if value:
-            return str(value)
-    return None
 
 
 # ============================================================
@@ -1423,132 +1407,16 @@ async def relaunch_admin_analysis(
 
 @router.get("/health")
 async def get_admin_health(
+    refresh: bool = Query(default=False, description="Ignorer le cache et tester maintenant"),
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Health admin léger.
-
-    Important :
-    - Ne consomme pas les quotas Gemini/Groq.
-    - Vérifie surtout configuration + disponibilité Postgres.
-    - Les vrais tests LLM pourront être ajoutés avec un bouton "Tester maintenant".
+    Real health of every service (Sprint 7.7, app.services.health_checks):
+    each one is really contacted, with a timeout and a latency. Cached a few
+    seconds; ?refresh=true tests again now. No secret in the answer.
     """
-
-    services = []
-
-    services.append({
-        "name": "Backend API",
-        "type": "backend",
-        "status": "healthy",
-        "configured": True,
-        "message": "Backend FastAPI opérationnel.",
-    })
-
-    try:
-        await db.execute(text("SELECT 1"))
-        services.append({
-            "name": "PostgreSQL",
-            "type": "database",
-            "status": "healthy",
-            "configured": True,
-            "message": "Connexion PostgreSQL réussie.",
-        })
-    except Exception as exc:
-        services.append({
-            "name": "PostgreSQL",
-            "type": "database",
-            "status": "down",
-            "configured": True,
-            "message": str(exc),
-        })
-
-    smtp_configured = setting_is_configured("SMTP_USERNAME") and setting_is_configured("SMTP_PASSWORD")
-    services.append({
-        "name": "SMTP Email",
-        "type": "email",
-        "status": "configured" if smtp_configured else "warning",
-        "configured": smtp_configured,
-        "message": "SMTP configuré." if smtp_configured else "SMTP_USERNAME ou SMTP_PASSWORD manquant.",
-    })
-
-    google_configured = setting_is_configured("GOOGLE_CLIENT_ID") and setting_is_configured("GOOGLE_CLIENT_SECRET")
-    services.append({
-        "name": "Google OAuth",
-        "type": "oauth",
-        "status": "configured" if google_configured else "warning",
-        "configured": google_configured,
-        "message": "Google OAuth configuré." if google_configured else "GOOGLE_CLIENT_ID ou GOOGLE_CLIENT_SECRET manquant.",
-    })
-
-    gemini_configured = setting_is_configured("GEMINI_API_KEY", "GOOGLE_API_KEY")
-    gemini_model = get_setting_value("GEMINI_MODEL", "GEMINI_PRIMARY_MODEL")
-    gemini_fallback = get_setting_value("GEMINI_FALLBACK_MODEL")
-
-    services.append({
-        "name": "Gemini Primary",
-        "type": "llm",
-        "status": "configured" if gemini_configured else "warning",
-        "configured": gemini_configured,
-        "model": gemini_model,
-        "message": "Gemini configuré. Test réel non lancé pour éviter quota." if gemini_configured else "Clé Gemini manquante.",
-    })
-
-    services.append({
-        "name": "Gemini Fallback",
-        "type": "llm",
-        "status": "configured" if gemini_configured and gemini_fallback else "warning",
-        "configured": bool(gemini_configured and gemini_fallback),
-        "model": gemini_fallback,
-        "message": "Gemini fallback configuré." if gemini_fallback else "Modèle fallback Gemini non défini.",
-    })
-
-    groq_configured = setting_is_configured("GROQ_API_KEY")
-    groq_model = get_setting_value("GROQ_MODEL", "GROQ_PRIMARY_MODEL")
-
-    services.append({
-        "name": "Groq",
-        "type": "llm",
-        "status": "configured" if groq_configured else "warning",
-        "configured": groq_configured,
-        "model": groq_model,
-        "message": "Groq configuré. Test réel non lancé pour éviter quota." if groq_configured else "Clé Groq manquante.",
-    })
-
-    chroma_configured = setting_is_configured("CHROMA_HOST", "CHROMA_URL", "CHROMADB_HOST", "CHROMA_SERVER_HOST")
-    services.append({
-        "name": "ChromaDB",
-        "type": "vector_db",
-        "status": "configured" if chroma_configured else "warning",
-        "configured": chroma_configured,
-        "message": "ChromaDB configuré." if chroma_configured else "Configuration ChromaDB non détectée dans settings.",
-    })
-
-    redis_configured = setting_is_configured("REDIS_URL", "REDIS_HOST")
-    services.append({
-        "name": "Redis",
-        "type": "cache",
-        "status": "configured" if redis_configured else "warning",
-        "configured": redis_configured,
-        "message": "Redis configuré." if redis_configured else "Configuration Redis non détectée dans settings.",
-    })
-
-    status_priority = {"down": 3, "warning": 2, "configured": 1, "healthy": 0}
-    worst = max(services, key=lambda item: status_priority.get(item["status"], 0))
-
-    overall_status = "healthy"
-    if worst["status"] == "down":
-        overall_status = "down"
-    elif worst["status"] == "warning":
-        overall_status = "warning"
-    elif worst["status"] == "configured":
-        overall_status = "configured"
-
-    return {
-        "overall_status": overall_status,
-        "checked_at": datetime.datetime.now(datetime.timezone.utc),
-        "services": services,
-    }
+    return await health_checks.run_all(db, refresh=refresh)
 
 
 # ============================================================
