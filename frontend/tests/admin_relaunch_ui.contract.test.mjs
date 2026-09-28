@@ -49,3 +49,16 @@ test("G3: the pipeline stages are shown with French labels", () => {
   assert.match(detail, /pipelineStageLabel\(/);
   assert.match(detail, /pipelineStatusLabel\(/);
 });
+
+test("row actions never overlap (RED 28 Sept 2026, user's screenshot)", () => {
+  // Buttons wrap inside a flex container with a gap instead of piling up.
+  const cell = list.slice(list.indexOf("canRelaunch(analysis.analysis_status") - 400, list.indexOf("Diagnostic"));
+  assert.match(cell, /className="flex flex-wrap items-center justify-end gap-2"/);
+  assert.doesNotMatch(cell, /className="mr-2 /);
+});
+
+test("status badges stay on one line (\"En file d'attente\" broke out of its pill)", () => {
+  for (const source of [list, read("app/admin/projects/page.tsx")]) {
+    assert.match(source, /whitespace-nowrap rounded-full border px-3 py-1 text-xs \$\{className\}/);
+  }
+});

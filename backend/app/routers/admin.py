@@ -951,7 +951,7 @@ PROJECT_LIST_COLUMNS = (
 )
 
 ProjectSort = Literal["created_at", "updated_at", "title", "startup_score", "analysis_status"]
-AnalysisSort = Literal["analysis_completed_at", "analysis_started_at", "startup_score", "analysis_progress"]
+AnalysisSort = Literal["last_activity", "analysis_completed_at", "analysis_started_at", "startup_score", "analysis_progress"]
 AnalysisStatus = Literal["not_started", "queued", "running", "needs_clarification", "completed", "failed"]
 
 
@@ -1124,7 +1124,9 @@ async def delete_admin_project(
 async def list_admin_analyses(
     search: str | None = Query(default=None, max_length=255),
     status_value: AnalysisStatus | None = Query(default=None, alias="status"),
-    sort: AnalysisSort = Query(default="analysis_completed_at"),
+    # Default = last activity: a relaunched (or live) run has no end date yet
+    # and must come FIRST, not vanish at the end of the list.
+    sort: AnalysisSort = Query(default="last_activity"),
     order: SortOrder = Query(default="desc"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
@@ -1134,6 +1136,7 @@ async def list_admin_analyses(
     """Projects whose analysis was started at least once (light columns)."""
     conditions = [Project.analysis_status != "not_started", *_project_conditions(search, status_value)]
     column = {
+        "last_activity": func.coalesce(Project.analysis_completed_at, Project.analysis_started_at),
         "analysis_completed_at": Project.analysis_completed_at,
         "analysis_started_at": Project.analysis_started_at,
         "startup_score": Project.startup_score,
