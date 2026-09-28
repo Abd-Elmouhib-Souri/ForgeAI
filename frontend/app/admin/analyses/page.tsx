@@ -215,12 +215,14 @@ export default function AdminAnalysesPage() {
                       </td>
 
                       <td className="rounded-r-xl px-4 py-4 text-right">
+                        {/* Flex + gap: the buttons wrap cleanly, never on top of each other. */}
+                        <div className="flex flex-wrap items-center justify-end gap-2">
                         {canRelaunch(analysis.analysis_status, analysis.analysis_stalled) && (
                           <button
                             type="button"
                             onClick={() => relaunch(analysis)}
                             disabled={busyId === analysis.project_id}
-                            className="mr-2 rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-200 transition hover:bg-amber-500/20 disabled:opacity-50"
+                            className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-200 transition hover:bg-amber-500/20 disabled:opacity-50"
                           >
                             Relancer
                           </button>
@@ -231,6 +233,7 @@ export default function AdminAnalysesPage() {
                         >
                           Diagnostic
                         </Link>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -301,7 +304,7 @@ function Badge({ status }: { status: string }) {
           : "border-white/10 bg-white/5 text-white/60";
 
   return (
-    <span className={`rounded-full border px-3 py-1 text-xs ${className}`}>
+    <span className={`whitespace-nowrap rounded-full border px-3 py-1 text-xs ${className}`}>
       {analysisStatusLabel(status)}
     </span>
   );

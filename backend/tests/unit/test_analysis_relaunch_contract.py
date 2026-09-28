@@ -91,7 +91,9 @@ async def env(monkeypatch):
             project("stuck", "running", OLD),
             project("stuck-queue", "queued", None),
             project("never", "not_started", None),
-            project("done", "completed", OLD, startup_score=80),
+            # Finished runs carry their end date, like on a real database.
+            project("done", "completed", OLD, startup_score=80, analysis_completed_at=OLD),
+            project("recent", "completed", NOW, startup_score=70, analysis_completed_at=NOW),
         ])
         await s.commit()
 
@@ -269,3 +271,18 @@ async def test_progress_writes_refresh_the_heartbeat():
     p = Project(title="t", description="d", user_id=1, analysis_heartbeat_at=OLD)
     await projects_router.set_analysis_progress(db=FakeDb(), project=p, step="Étape", progress=40)
     assert p.analysis_heartbeat_at > OLD
+
+
+# RED 28 Sept 2026 (user's screenshot): the relaunched analysis vanished at the
+# END of the list (default sort = end date, NULLs last, and a relaunch clears it).
+
+@pytest.mark.asyncio
+async def test_a_relaunched_analysis_comes_first_in_the_default_list(env):
+    sessions, _ = env
+    done = await project(sessions, "done")
+    async with client(admin_app) as c:
+        h = await admin_headers(c)
+        assert (await c.post(f"/admin/analyses/{done.id}/relaunch", headers=h)).status_code == 202
+        first = (await c.get("/admin/analyses", headers=h)).json()["items"][0]
+    # Default order = last activity (end of a finished run, start of a live one).
+    assert first["title"] == "done" and first["analysis_status"] == "queued"

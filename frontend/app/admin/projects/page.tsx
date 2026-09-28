@@ -297,7 +297,7 @@ function Badge({ status }: { status: string }) {
       : "border-white/10 bg-white/5 text-white/60";
 
   return (
-    <span className={`rounded-full border px-3 py-1 text-xs ${className}`}>
+    <span className={`whitespace-nowrap rounded-full border px-3 py-1 text-xs ${className}`}>
       {analysisStatusLabel(status)}
     </span>
   );
