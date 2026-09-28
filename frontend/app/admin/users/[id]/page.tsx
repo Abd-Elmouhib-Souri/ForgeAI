@@ -2,8 +2,9 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import Link from "next/link";
 import { adminFetch } from "@/lib/admin-api";
+import AdminPageHeader from "@/app/admin/_components/AdminPageHeader";
+import { analysisStatusLabel } from "@/app/admin/_components/labels";
 
 type UserDetail = {
   user: {
@@ -76,36 +77,8 @@ export default function AdminUserDetailPage() {
   }, [loadData]);
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      <header className="border-b border-white/10 bg-white/5 px-6 py-4 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-red-300">ForgeAI Admin</p>
-            <h1 className="text-2xl font-bold">Détail utilisateur</h1>
-          </div>
-
-          <nav className="flex gap-3 text-sm">
-            <Link
-              href="/admin/users"
-              className="rounded-lg border border-white/10 px-4 py-2 hover:bg-white/10"
-            >
-              Users
-            </Link>
-            <Link
-              href="/admin/dashboard"
-              className="rounded-lg border border-white/10 px-4 py-2 hover:bg-white/10"
-            >
-              Dashboard
-            </Link>
-            <Link
-              href="/admin/health"
-              className="rounded-lg border border-white/10 px-4 py-2 hover:bg-white/10"
-            >
-              Health
-            </Link>
-          </nav>
-        </div>
-      </header>
+    <div>
+      <AdminPageHeader title="Détail utilisateur" backHref="/admin/users" backLabel="Utilisateurs" />
 
       <section className="mx-auto max-w-7xl px-6 py-8">
         {isLoading && (
@@ -190,7 +163,7 @@ export default function AdminUserDetailPage() {
                         <td className="px-4 py-4 font-semibold">
                           {project.startup_score ?? "-"}
                         </td>
-                        <td className="px-4 py-4">{project.analysis_status}</td>
+                        <td className="px-4 py-4">{analysisStatusLabel(project.analysis_status)}</td>
                         <td className="px-4 py-4">
                           {project.analysis_progress ?? 0}%
                         </td>
@@ -212,7 +185,7 @@ export default function AdminUserDetailPage() {
           </>
         )}
       </section>
-    </main>
+    </div>
   );
 }
 

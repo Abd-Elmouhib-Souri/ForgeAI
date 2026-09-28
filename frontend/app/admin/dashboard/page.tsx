@@ -1,9 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { adminFetch, removeAdminToken } from "@/lib/admin-api";
+import { adminFetch } from "@/lib/admin-api";
+import AdminPageHeader from "@/app/admin/_components/AdminPageHeader";
 
 type AdminStats = {
   users: {
@@ -34,8 +33,6 @@ type AdminStats = {
 };
 
 export default function AdminDashboardPage() {
-  const router = useRouter();
-
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -54,76 +51,13 @@ export default function AdminDashboardPage() {
     }
   }
 
-  function handleLogout() {
-    removeAdminToken();
-    router.replace("/admin/login");
-  }
-
   useEffect(() => {
     loadStats();
   }, []);
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      <header className="border-b border-white/10 bg-white/5 px-6 py-4 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-red-300">ForgeAI Admin</p>
-            <h1 className="text-2xl font-bold">Dashboard administrateur</h1>
-          </div>
-
-          <nav className="flex flex-wrap items-center gap-3 text-sm">
-            <Link
-              href="/admin/users"
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 transition hover:bg-white/10"
-            >
-              Users
-            </Link>
-
-            <Link
-              href="/admin/projects"
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 transition hover:bg-white/10"
-            >
-              Projects
-            </Link>
-
-            <Link
-              href="/admin/analyses"
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 transition hover:bg-white/10"
-            >
-              Analyses
-            </Link>
-
-            <Link
-              href="/admin/health"
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 transition hover:bg-white/10"
-            >
-              Health
-            </Link>
-
-            <Link
-              href="/admin/errors"
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 transition hover:bg-white/10"
-            >
-              Errors
-            </Link>
-
-            <Link
-              href="/admin/audit"
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 transition hover:bg-white/10"
-            >
-              Journal d&apos;audit
-            </Link>
-
-            <button
-              onClick={handleLogout}
-              className="rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-2 text-red-200 transition hover:bg-red-500/20"
-            >
-              Déconnexion
-            </button>
-          </nav>
-        </div>
-      </header>
+    <div>
+      <AdminPageHeader title="Tableau de bord" subtitle="Vue d'ensemble de la plateforme ForgeAI." />
 
       <section className="mx-auto max-w-7xl px-6 py-8">
         {isLoading && (
@@ -148,7 +82,7 @@ export default function AdminDashboardPage() {
               />
 
               <StatCard
-                title="Admins"
+                title="Administrateurs"
                 value={stats.users.admins}
                 subtitle="Comptes administrateurs"
               />
@@ -166,11 +100,11 @@ export default function AdminDashboardPage() {
               />
             </div>
 
-            <div className="mt-6 grid gap-6 lg:grid-cols-2">
+            <div className="mt-6">
               <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
                 <h2 className="text-lg font-semibold">Analyses IA</h2>
 
-                <div className="mt-5 grid gap-3">
+                <div className="mt-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                   <MiniStat label="Terminées" value={stats.analyses.completed} />
                   <MiniStat label="En cours" value={stats.analyses.running} />
                   <MiniStat label="Échouées" value={stats.analyses.failed} />
@@ -181,22 +115,12 @@ export default function AdminDashboardPage() {
                 </div>
               </div>
 
-              <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
-                <h2 className="text-lg font-semibold">Navigation admin</h2>
-
-                <div className="mt-5 grid gap-3">
-                  <AdminLink label="Utilisateurs" href="/admin/users" />
-                  <AdminLink label="Projets" href="/admin/projects" />
-                  <AdminLink label="Analyses IA" href="/admin/analyses" />
-                  <AdminLink label="Health système" href="/admin/health" />
-                  <AdminLink label="Erreurs" href="/admin/errors" />
-                </div>
-              </div>
+            {/* Navigation: the console sidebar (Sprint 7.3), no duplicate link panel. */}
             </div>
 
             <div className="mt-6 grid gap-6 lg:grid-cols-2">
               <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
-                <h2 className="text-lg font-semibold">Top secteurs</h2>
+                <h2 className="text-lg font-semibold">Principaux secteurs</h2>
 
                 <div className="mt-5 space-y-3">
                   {stats.top_sectors.map((sector) => (
@@ -210,7 +134,7 @@ export default function AdminDashboardPage() {
               </div>
 
               <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
-                <h2 className="text-lg font-semibold">Top régions</h2>
+                <h2 className="text-lg font-semibold">Principales régions</h2>
 
                 <div className="mt-5 space-y-3">
                   {stats.top_regions.map((region) => (
@@ -226,7 +150,7 @@ export default function AdminDashboardPage() {
           </>
         )}
       </section>
-    </main>
+    </div>
   );
 }
 
@@ -254,16 +178,5 @@ function MiniStat({ label, value }: { label: string; value: string | number }) {
       <span className="text-sm text-white/70">{label}</span>
       <span className="font-semibold">{value}</span>
     </div>
-  );
-}
-
-function AdminLink({ label, href }: { label: string; href: string }) {
-  return (
-    <Link
-      href={href}
-      className="rounded-lg border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/80 transition hover:bg-white/10"
-    >
-      {label}
-    </Link>
   );
 }

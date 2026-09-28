@@ -2,9 +2,10 @@
 
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { adminFetch } from "@/lib/admin-api";
+import AdminPageHeader from "@/app/admin/_components/AdminPageHeader";
+import { analysisStatusLabel } from "@/app/admin/_components/labels";
 
 type AdminAnalysisDetail = {
   project: {
@@ -68,7 +69,6 @@ type AdminAnalysisDetail = {
 
 export default function AdminAnalysisDetailPage() {
   const params = useParams();
-  const router = useRouter();
 
   const projectId = params.id as string;
 
@@ -98,45 +98,8 @@ export default function AdminAnalysisDetailPage() {
   }, [loadDetail]);
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      <header className="border-b border-white/10 bg-white/5 px-6 py-4 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center justify-between">
-          <div>
-            <p className="text-sm font-medium text-red-300">ForgeAI Admin</p>
-            <h1 className="text-2xl font-bold">Diagnostic analyse IA</h1>
-          </div>
-
-          <nav className="flex flex-wrap gap-3 text-sm">
-            <button
-              onClick={() => router.back()}
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 hover:bg-white/10"
-            >
-              Retour
-            </button>
-
-            <Link
-              href="/admin/dashboard"
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 hover:bg-white/10"
-            >
-              Dashboard
-            </Link>
-
-            <Link
-              href="/admin/analyses"
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 hover:bg-white/10"
-            >
-              Analyses
-            </Link>
-
-            <Link
-              href="/admin/errors"
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 hover:bg-white/10"
-            >
-              Errors
-            </Link>
-          </nav>
-        </div>
-      </header>
+    <div>
+      <AdminPageHeader title="Diagnostic d'analyse IA" backHref="/admin/analyses" backLabel="Analyses IA" />
 
       <section className="mx-auto max-w-7xl px-6 py-8">
         {isLoading && (
@@ -165,13 +128,13 @@ export default function AdminAnalysisDetailPage() {
                   </h2>
 
                   <p className="mt-2 text-sm text-white/50">
-                    Owner : {detail.project.owner_name || "-"} ·{" "}
+                    Propriétaire : {detail.project.owner_name || "-"} ·{" "}
                     {detail.project.owner_email || "-"}
                   </p>
                 </div>
 
                 <div className="flex flex-wrap gap-2">
-                  <Badge label={detail.project.analysis_status} />
+                  <Badge label={analysisStatusLabel(detail.project.analysis_status)} />
                   <Badge label={`${detail.project.analysis_progress ?? 0}%`} />
                   <Badge label={String(detail.project.startup_score ?? "-")} />
                 </div>
@@ -231,7 +194,7 @@ export default function AdminAnalysisDetailPage() {
 
               <Panel title="Debate Room">
                 <Info
-                  label="Completed"
+                  label="Terminé"
                   value={
                     detail.diagnostics.debate_room.completed === true
                       ? "Oui"
@@ -267,7 +230,7 @@ export default function AdminAnalysisDetailPage() {
 
               <Panel title="ForgeCrawler / Sources">
                 <Info
-                  label="Status"
+                  label="Statut"
                   value={detail.diagnostics.forgecrawler.status || "-"}
                 />
                 <Info
@@ -320,7 +283,7 @@ export default function AdminAnalysisDetailPage() {
           </div>
         )}
       </section>
-    </main>
+    </div>
   );
 }
 

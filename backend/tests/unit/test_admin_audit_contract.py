@@ -446,3 +446,31 @@ async def test_audit_csv_export_is_safe_for_spreadsheets(env):
     assert len(rows) >= 3
     cells = [cell for row in rows[1:] for cell in row]
     assert not any(cell.startswith(("=", "+", "-", "@")) for cell in cells)
+
+
+# Sprint 7.3 (C4): reason codes are translated by the backend, once ----------
+
+@pytest.mark.asyncio
+async def test_reason_codes_have_french_labels_in_list_and_csv(env):
+    async with client(admin_app) as c:
+        await c.post("/admin/login", json={"email": "alice@example.com", "password": "wrong-password"})
+        token = await login(c)
+        page = (await c.get("/admin/audit?result=failure", headers=auth(token))).json()
+        csv_text = (await c.get("/admin/audit/export.csv?result=failure", headers=auth(token))).content.decode("utf-8-sig")
+    [item] = page["items"]
+    assert item["detail"] == "bad_credentials"  # stable code, for filters and tools
+    assert item["detail_label"] == "E-mail ou mot de passe incorrect"
+    assert "E-mail ou mot de passe incorrect" in csv_text
+    assert "bad_credentials" not in csv_text
+
+
+def test_every_reason_code_written_by_the_backend_has_a_label():
+    import re
+
+    from app.services.admin_audit import DETAIL_LABELS
+
+    sources = (BACKEND / "app" / "routers" / "admin.py").read_text(encoding="utf-8")
+    sources += (BACKEND / "app" / "admin_security.py").read_text(encoding="utf-8")
+    codes = set(re.findall(r'detail="([a-z0-9_]+)"', sources))
+    codes |= set(re.findall(r'"(not_admin|inactive|email_unverified)"', sources))
+    assert codes and codes <= set(DETAIL_LABELS), codes - set(DETAIL_LABELS)

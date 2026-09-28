@@ -13,7 +13,8 @@ import test from "node:test";
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 const page = read("../app/admin/audit/page.tsx");
 const client = read("../lib/admin-api.ts");
-const dashboard = read("../app/admin/dashboard/page.tsx");
+// Sprint 7.3: navigation moved from each page to the console sidebar.
+const shell = read("../app/admin/_components/AdminShell.tsx");
 
 test("audit page reads the admin API list, actions and CSV export", () => {
   assert.match(page, /adminFetch\(\s*`\/admin\/audit\$\{buildQuery/);
@@ -33,6 +34,6 @@ test("CSV download sends the token in a header, never in the URL", () => {
   assert.match(download, /URL\.revokeObjectURL/);
 });
 
-test("dashboard links to the audit log", () => {
-  assert.match(dashboard, /href="\/admin\/audit"/);
+test("the audit log is reachable from every console page (sidebar)", () => {
+  assert.match(shell, /href: "\/admin\/audit"/);
 });

@@ -2,8 +2,9 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { adminFetch, removeAdminToken } from "@/lib/admin-api";
+import { adminFetch, isAdminActionCancelled } from "@/lib/admin-api";
+import { ROLE_LABELS, roleLabel } from "@/app/admin/_components/labels";
+import AdminPageHeader from "@/app/admin/_components/AdminPageHeader";
 
 type AdminUser = {
   id: number;
@@ -27,8 +28,6 @@ type CurrentAdmin = {
 const roles = ["admin", "entrepreneur", "student", "consultant"];
 
 export default function AdminUsersPage() {
-  const router = useRouter();
-
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [currentAdmin, setCurrentAdmin] = useState<CurrentAdmin | null>(null);
 
@@ -81,7 +80,9 @@ export default function AdminUsersPage() {
 
       // Sensitive: the admin API requires a fresh 2FA code (Sprint 7.1).
       await adminFetch(`/admin/users/${user.id}/status`, {
-        confirm: true,
+        confirm: user.is_active
+          ? `Désactiver le compte ${user.email} ?\nLa personne ne pourra plus se connecter.`
+          : `Réactiver le compte ${user.email} ?`,
         method: "PATCH",
         body: JSON.stringify({
           is_active: !user.is_active,
@@ -96,6 +97,7 @@ export default function AdminUsersPage() {
 
       await loadUsers();
     } catch (err) {
+      if (isAdminActionCancelled(err)) return;
       setError(err instanceof Error ? err.message : "Erreur action utilisateur.");
     } finally {
       setActionLoadingId(null);
@@ -109,7 +111,7 @@ export default function AdminUsersPage() {
       setMessage("");
 
       await adminFetch(`/admin/users/${user.id}/role`, {
-        confirm: true,
+        confirm: `Changer le rôle de ${user.email} : ${roleLabel(user.role)} → ${roleLabel(newRole)} ?`,
         method: "PATCH",
         body: JSON.stringify({
           role: newRole,
@@ -119,6 +121,7 @@ export default function AdminUsersPage() {
       setMessage(`Rôle de ${user.email} mis à jour.`);
       await loadUsers();
     } catch (err) {
+      if (isAdminActionCancelled(err)) return;
       setError(err instanceof Error ? err.message : "Erreur changement rôle.");
     } finally {
       setActionLoadingId(null);
@@ -148,25 +151,21 @@ export default function AdminUsersPage() {
   }
 
   async function deleteUser(user: AdminUser) {
-    const confirmed = window.confirm(
-      `Supprimer définitivement le compte ${user.email} ?\n\nCette action est irréversible.`
-    );
-
-    if (!confirmed) return;
-
     try {
       setActionLoadingId(user.id);
       setError("");
       setMessage("");
 
+      // One dialog: what is deleted + the 2FA code (no window.confirm).
       await adminFetch(`/admin/users/${user.id}`, {
-        confirm: true,
+        confirm: `Supprimer définitivement le compte ${user.email} ?\nCette action est irréversible.`,
         method: "DELETE",
       });
 
       setMessage(`Compte ${user.email} supprimé avec succès.`);
       await refreshPageData();
     } catch (err) {
+      if (isAdminActionCancelled(err)) return;
       setError(
         err instanceof Error ? err.message : "Erreur suppression utilisateur."
       );
@@ -184,7 +183,7 @@ export default function AdminUsersPage() {
       setActionLoadingId(-1);
 
       const data = await adminFetch("/admin/users/create-admin", {
-        confirm: true,
+        confirm: `Créer le compte administrateur ${newAdminEmail} ?\nIl aura accès à toute la console.`,
         method: "POST",
         body: JSON.stringify({
           email: newAdminEmail,
@@ -205,15 +204,11 @@ export default function AdminUsersPage() {
 
       await loadUsers();
     } catch (err) {
+      if (isAdminActionCancelled(err)) return;
       setError(err instanceof Error ? err.message : "Erreur création admin.");
     } finally {
       setActionLoadingId(null);
     }
-  }
-
-  function handleLogout() {
-    removeAdminToken();
-    router.replace("/admin/login");
   }
 
   useEffect(() => {
@@ -251,78 +246,13 @@ export default function AdminUsersPage() {
   }, [users]);
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      <header className="border-b border-white/10 bg-white/5 px-6 py-4 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div>
-            <p className="text-sm font-medium text-red-300">ForgeAI Admin</p>
-            <h1 className="text-2xl font-bold">Gestion utilisateurs</h1>
-            {currentAdmin && (
-              <p className="mt-1 text-xs text-white/40">
-                Connecté : {currentAdmin.email}
-              </p>
-            )}
-          </div>
-
-          <nav className="flex flex-wrap items-center gap-3 text-sm">
-            <button
-              type="button"
-              onClick={() => router.back()}
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 transition hover:bg-white/10"
-            >
-              Retour
-            </button>
-
-            <Link
-              href="/admin/dashboard"
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 transition hover:bg-white/10"
-            >
-              Dashboard
-            </Link>
-
-            <Link
-              href="/admin/projects"
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 transition hover:bg-white/10"
-            >
-              Projects
-            </Link>
-
-            <Link
-              href="/admin/analyses"
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 transition hover:bg-white/10"
-            >
-              Analyses
-            </Link>
-
-            <Link
-              href="/admin/health"
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 transition hover:bg-white/10"
-            >
-              Health
-            </Link>
-
-            <Link
-              href="/admin/errors"
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 transition hover:bg-white/10"
-            >
-              Errors
-            </Link>
-
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-2 text-red-200 transition hover:bg-red-500/20"
-            >
-              Déconnexion
-            </button>
-          </nav>
-        </div>
-      </header>
+    <div>
+      <AdminPageHeader title="Utilisateurs" subtitle="Comptes clients et administrateurs." />
 
       <section className="mx-auto max-w-7xl px-6 py-8">
         <div className="grid gap-4 md:grid-cols-5">
           <StatCard title="Total" value={stats.total} />
-          <StatCard title="Admins" value={stats.admins} />
+          <StatCard title="Administrateurs" value={stats.admins} />
           <StatCard title="Vérifiés" value={stats.verified} />
           <StatCard title="Non vérifiés" value={stats.unverified} />
           <StatCard title="Inactifs" value={stats.inactive} />
@@ -515,7 +445,7 @@ export default function AdminUsersPage() {
                           >
                             {roles.map((role) => (
                               <option key={role} value={role}>
-                                {role}
+                                {ROLE_LABELS[role] ?? role}
                               </option>
                             ))}
                           </select>
@@ -608,7 +538,7 @@ export default function AdminUsersPage() {
           )}
         </div>
       </section>
-    </main>
+    </div>
   );
 }
 
