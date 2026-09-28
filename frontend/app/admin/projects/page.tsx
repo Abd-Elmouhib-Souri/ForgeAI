@@ -1,14 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { adminFetch, isAdminActionCancelled } from "@/lib/admin-api";
-import { analysisStatusLabel } from "@/app/admin/_components/labels";
+import { FormEvent, useState } from "react";
+import { adminDownload, adminFetch, isAdminActionCancelled } from "@/lib/admin-api";
+import { ANALYSIS_STATUS_LABELS, analysisStatusLabel } from "@/app/admin/_components/labels";
+import { buildListQuery, type Page } from "@/app/admin/_components/listQuery";
+import Pagination from "@/app/admin/_components/Pagination";
+import type { AdminStats } from "@/app/admin/_components/stats";
+import { useAdminResource } from "@/app/admin/_components/useAdminResource";
 import AdminPageHeader from "@/app/admin/_components/AdminPageHeader";
 
 type AdminProject = {
   id: number;
   title: string;
-  description: string;
+  description_excerpt: string | null; // first 160 characters, cut by the API
   industry: string;
   market_region: string;
   status: string;
@@ -22,25 +26,51 @@ type AdminProject = {
   updated_at: string;
 };
 
+const SORTS: Record<string, { label: string; sort: string; order: "asc" | "desc" }> = {
+  recent: { label: "Plus récents", sort: "created_at", order: "desc" },
+  updated: { label: "Modifiés récemment", sort: "updated_at", order: "desc" },
+  score: { label: "Meilleur score", sort: "startup_score", order: "desc" },
+  title: { label: "Titre (A → Z)", sort: "title", order: "asc" },
+};
+
+const PAGE_SIZE = 25;
+
 export default function AdminProjectsPage() {
-  const [projects, setProjects] = useState<AdminProject[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [actionLoadingId, setActionLoadingId] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [searchDraft, setSearchDraft] = useState("");
   const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [sortKey, setSortKey] = useState("recent");
+  const [page, setPage] = useState(1);
 
-  async function loadProjects() {
+  // Sprint 7.4: search, status filter, sort and paging are done by the API;
+  // the same filters feed the CSV export.
+  const filters = { search, status: statusFilter, sort: SORTS[sortKey].sort, order: SORTS[sortKey].order };
+  const list = useAdminResource<Page<AdminProject>>(
+    `/admin/projects${buildListQuery({ ...filters, page, page_size: PAGE_SIZE })}`,
+  );
+  const stats = useAdminResource<AdminStats>("/admin/stats");
+  const projects = list.data?.items ?? [];
+
+  function loadProjects() {
+    list.reload();
+    stats.reload();
+  }
+
+  function applySearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSearch(searchDraft);
+    setPage(1);
+  }
+
+  async function exportCsv() {
     try {
-      setIsLoading(true);
       setError("");
-
-      const data = await adminFetch("/admin/projects");
-      setProjects(data);
+      await adminDownload(`/admin/projects/export.csv${buildListQuery(filters)}`, "forgeai-projets.csv");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erreur inconnue.");
-    } finally {
-      setIsLoading(false);
+      setError(err instanceof Error ? err.message : "Export impossible.");
     }
   }
 
@@ -66,45 +96,17 @@ export default function AdminProjectsPage() {
     }
   }
 
-  useEffect(() => {
-    loadProjects();
-  }, []);
-
-  const filteredProjects = useMemo(() => {
-    const query = search.toLowerCase().trim();
-
-    if (!query) return projects;
-
-    return projects.filter((project) => {
-      return (
-        project.title?.toLowerCase().includes(query) ||
-        project.industry?.toLowerCase().includes(query) ||
-        project.market_region?.toLowerCase().includes(query) ||
-        project.owner_email?.toLowerCase().includes(query) ||
-        project.analysis_status?.toLowerCase().includes(query)
-      );
-    });
-  }, [projects, search]);
-
   return (
     <div>
       <AdminPageHeader title="Projets" subtitle="Tous les projets créés sur la plateforme." />
 
       <section className="mx-auto max-w-7xl px-6 py-8">
         <div className="grid gap-4 md:grid-cols-4">
-          <Stat title="Total projets" value={projects.length} />
-          <Stat
-            title="Analyses terminées"
-            value={projects.filter((p) => p.analysis_status === "completed").length}
-          />
-          <Stat
-            title="Analyses en cours"
-            value={projects.filter((p) => p.analysis_status === "running").length}
-          />
-          <Stat
-            title="Analyses échouées"
-            value={projects.filter((p) => p.analysis_status === "failed").length}
-          />
+          {/* Counters of the whole platform, computed by the database. */}
+          <Stat title="Total projets" value={stats.data?.projects.total ?? 0} />
+          <Stat title="Analyses terminées" value={stats.data?.analyses.completed ?? 0} />
+          <Stat title="Analyses en cours" value={stats.data?.analyses.running ?? 0} />
+          <Stat title="Analyses échouées" value={stats.data?.analyses.failed ?? 0} />
         </div>
 
         <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-6">
@@ -116,13 +118,57 @@ export default function AdminProjectsPage() {
               </p>
             </div>
 
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Rechercher projet, secteur, région, owner..."
-              className="w-full rounded-lg border border-white/10 bg-slate-900 px-4 py-3 text-sm outline-none focus:border-red-300 md:max-w-md"
-            />
+            <button
+              type="button"
+              onClick={exportCsv}
+              className="rounded-lg border border-white/10 px-4 py-2 text-sm text-white/80 transition hover:bg-white/10"
+            >
+              Exporter en CSV
+            </button>
           </div>
+
+          <form onSubmit={applySearch} className="mt-5 flex flex-col gap-3 md:flex-row">
+            <input
+              value={searchDraft}
+              onChange={(event) => setSearchDraft(event.target.value)}
+              placeholder="Rechercher projet, secteur, région, propriétaire..."
+              className="w-full rounded-lg border border-white/10 bg-slate-900 px-4 py-2.5 text-sm outline-none focus:border-red-300 md:max-w-md"
+            />
+            <button type="submit" className="rounded-lg bg-white/15 px-4 py-2.5 text-sm font-semibold hover:bg-white/25">
+              Rechercher
+            </button>
+            <select
+              value={statusFilter}
+              onChange={(event) => {
+                setStatusFilter(event.target.value);
+                setPage(1);
+              }}
+              aria-label="Statut de l'analyse"
+              className="rounded-lg border border-white/10 bg-slate-900 px-3 py-2.5 text-sm md:ml-auto"
+            >
+              <option value="">Tous les statuts</option>
+              {Object.entries(ANALYSIS_STATUS_LABELS).map(([code, label]) => (
+                <option key={code} value={code}>
+                  {label}
+                </option>
+              ))}
+            </select>
+            <select
+              value={sortKey}
+              onChange={(event) => {
+                setSortKey(event.target.value);
+                setPage(1);
+              }}
+              aria-label="Trier"
+              className="rounded-lg border border-white/10 bg-slate-900 px-3 py-2.5 text-sm"
+            >
+              {Object.entries(SORTS).map(([key, option]) => (
+                <option key={key} value={key}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </form>
 
           {message && (
             <div className="mt-5 rounded-lg border border-emerald-400/30 bg-emerald-500/10 p-3 text-sm text-emerald-200">
@@ -130,13 +176,13 @@ export default function AdminProjectsPage() {
             </div>
           )}
 
-          {error && (
+          {(error || list.error) && (
             <div className="mt-5 rounded-lg border border-red-400/30 bg-red-500/10 p-3 text-sm text-red-200">
-              {error}
+              {error || list.error}
             </div>
           )}
 
-          {isLoading ? (
+          {!list.data ? (
             <div className="mt-6 rounded-xl border border-white/10 bg-white/5 p-6 text-white/60">
               Chargement des projets...
             </div>
@@ -157,7 +203,7 @@ export default function AdminProjectsPage() {
                 </thead>
 
                 <tbody>
-                  {filteredProjects.map((project) => {
+                  {projects.map((project) => {
                     const isBusy = actionLoadingId === project.id;
 
                     return (
@@ -165,7 +211,7 @@ export default function AdminProjectsPage() {
                         <td className="rounded-l-xl px-4 py-4">
                           <div className="font-medium">{project.title}</div>
                           <div className="line-clamp-1 text-xs text-white/40">
-                            {project.description}
+                            {project.description_excerpt}
                           </div>
                         </td>
 
@@ -210,11 +256,19 @@ export default function AdminProjectsPage() {
                 </tbody>
               </table>
 
-              {filteredProjects.length === 0 && (
+              {list.data.total === 0 && (
                 <div className="rounded-xl border border-white/10 bg-white/5 p-6 text-center text-white/50">
                   Aucun projet trouvé.
                 </div>
               )}
+
+              <Pagination
+                page={page}
+                pageSize={PAGE_SIZE}
+                total={list.data.total}
+                isLoading={list.isLoading}
+                onPageChange={setPage}
+              />
             </div>
           )}
         </div>

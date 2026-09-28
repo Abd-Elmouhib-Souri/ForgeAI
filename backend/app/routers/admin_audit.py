@@ -6,14 +6,10 @@ Sprint 7.2: reading the admin audit log (read-only: GET routes only).
   GET /admin/audit/export.csv  same filters, CSV for Excel / LibreOffice
 """
 
-import csv
 import datetime
-import io
-import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import Response
 from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
@@ -21,11 +17,11 @@ from sqlalchemy.future import select
 from app.admin_security import get_current_admin
 from app.database import get_db
 from app.models import AdminAuditLog, User
-from app.services.admin_audit import ACTIONS, RESULTS, detail_label
+from app.services.admin_audit import ACTIONS, detail_label
+from app.services.admin_listing import CSV_MAX_ROWS, csv_response
 
 router = APIRouter(prefix="/admin/audit", tags=["Admin audit"])
 
-CSV_MAX_ROWS = 10_000
 RESULT_LABELS = {"success": "Succès", "failure": "Échec", "denied": "Refusé"}
 
 
@@ -115,22 +111,6 @@ async def list_audit_actions(admin: User = Depends(get_current_admin)):
     return ACTIONS
 
 
-def _csv_cell(value: Any) -> str:
-    """
-    Text for one CSV cell. A cell starting with = + - @ (or tab / CR) is
-    run as a formula by spreadsheets (CSV injection): prefix it with '.
-    """
-    if value is None:
-        text = ""
-    elif isinstance(value, (dict, list)):
-        text = json.dumps(value, ensure_ascii=False, sort_keys=True)
-    else:
-        text = str(value)
-    if text[:1] in {"=", "+", "-", "@", "\t", "\r"}:
-        text = "'" + text
-    return text
-
-
 @router.get("/export.csv")
 async def export_audit_csv(
     filters: AuditFilters = Depends(),
@@ -140,29 +120,26 @@ async def export_audit_csv(
     rows = await db.execute(
         filters.apply(select(AdminAuditLog)).order_by(AdminAuditLog.id.desc()).limit(CSV_MAX_ROWS)
     )
-    buffer = io.StringIO()
-    # ";": the separator Excel expects in French locales ("," puts everything in one column).
-    writer = csv.writer(buffer, delimiter=";")
-    writer.writerow(["Date", "Auteur", "Action", "Résultat", "Motif", "Type de cible", "Cible",
-                     "Avant", "Après", "Adresse IP", "Navigateur"])
-    for entry in rows.scalars():
-        writer.writerow([_csv_cell(v) for v in (
-            _iso(entry.created_at),
-            entry.actor_email,
-            ACTIONS.get(entry.action, entry.action),
-            RESULT_LABELS.get(entry.result, entry.result),
-            detail_label(entry.detail),
-            entry.target_type,
-            entry.target_label or entry.target_id,
-            entry.before,
-            entry.after,
-            entry.ip_address,
-            entry.user_agent,
-        )])
-    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M")
-    return Response(
-        # BOM: Excel then reads the accents as UTF-8.
-        content=("﻿" + buffer.getvalue()).encode("utf-8"),
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="forgeai-audit-{stamp}.csv"'},
+    # Shared CSV writer (Sprint 7.4): same separator, BOM and formula guard
+    # as the users / projects exports.
+    return csv_response(
+        "audit",
+        ["Date", "Auteur", "Action", "Résultat", "Motif", "Type de cible", "Cible",
+         "Avant", "Après", "Adresse IP", "Navigateur"],
+        (
+            [
+                _iso(entry.created_at),
+                entry.actor_email,
+                ACTIONS.get(entry.action, entry.action),
+                RESULT_LABELS.get(entry.result, entry.result),
+                detail_label(entry.detail),
+                entry.target_type,
+                entry.target_label or entry.target_id,
+                entry.before,
+                entry.after,
+                entry.ip_address,
+                entry.user_agent,
+            ]
+            for entry in rows.scalars()
+        ),
     )

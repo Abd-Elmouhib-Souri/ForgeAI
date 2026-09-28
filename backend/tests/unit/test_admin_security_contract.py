@@ -326,5 +326,10 @@ async def test_console_reads_the_signed_in_admin_from_the_admin_api(db_env):
         me = await c.get("/admin/me", headers=auth(token))
     assert me.status_code == 200 and me.json()["email"] == "alice@example.com"
     users_page = (ROOT / "frontend/app/admin/users/page.tsx").read_text(encoding="utf-8")
-    assert 'adminFetch("/admin/me")' in users_page and "/auth/me" not in users_page
+    # Intent: the signed-in admin comes from the ADMIN API (directly or through
+    # the console's shared loader, Sprint 7.4), never from the public /auth/me.
+    import re
+
+    assert re.search(r'(adminFetch|useAdminResource<\w+>)\("/admin/me"\)', users_page)
+    assert "/auth/me" not in users_page and '"@/lib/api"' not in users_page
     assert "minLength={12}" in users_page

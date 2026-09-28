@@ -5,12 +5,12 @@
 import datetime
 import hashlib
 import secrets
-from typing import Any
+from typing import Any, Literal
 
 import pyotp
 from pydantic import BaseModel, EmailStr, Field
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
-from sqlalchemy import func, text
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
+from sqlalchemy import case, func, or_, text, true
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -19,6 +19,17 @@ from app.database import get_db
 from app.mailer import send_verification_email
 from app.models import Export, Project, User, UserRole
 from app.services import admin_audit as audit
+from app.services.admin_listing import (
+    ANALYSIS_STATUS_LABELS,
+    CSV_MAX_ROWS,
+    DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
+    ROLE_LABELS,
+    contains,
+    csv_response,
+    page_body,
+    paginate,
+)
 from app.services.export.storage import delete_project_files
 from app.admin_security import (
     get_current_admin,
@@ -347,39 +358,34 @@ async def get_admin_stats(
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    total_users = await db.scalar(select(func.count(User.id)))
-    active_users = await db.scalar(
-        select(func.count(User.id)).where(User.is_active == True)
-    )
-    verified_users = await db.scalar(
-        select(func.count(User.id)).where(User.is_email_verified == True)
-    )
-    unverified_users = await db.scalar(
-        select(func.count(User.id)).where(User.is_email_verified == False)
-    )
-    admin_users = await db.scalar(
-        select(func.count(User.id)).where(User.role == UserRole.ADMIN)
-    )
+    """
+    Dashboard counters in 3 SQL statements (Sprint 7.4, RED D3: was 13):
+    every counter in one SELECT (two one-row aggregates side by side),
+    then the top sectors and the top regions.
+    """
 
-    total_projects = await db.scalar(select(func.count(Project.id)))
+    def flag(condition):
+        # COUNT of the rows matching a condition, inside one aggregate.
+        return func.coalesce(func.sum(case((condition, 1), else_=0)), 0)
 
-    completed_analyses = await db.scalar(
-        select(func.count(Project.id)).where(Project.analysis_status == "completed")
-    )
-    running_analyses = await db.scalar(
-        select(func.count(Project.id)).where(Project.analysis_status == "running")
-    )
-    failed_analyses = await db.scalar(
-        select(func.count(Project.id)).where(Project.analysis_status == "failed")
-    )
-
-    projects_with_errors = await db.scalar(
-        select(func.count(Project.id)).where(Project.analysis_error.is_not(None))
-    )
-
-    average_score = await db.scalar(
-        select(func.avg(Project.startup_score)).where(Project.startup_score.is_not(None))
-    )
+    users = select(
+        func.count(User.id).label("u_total"),
+        flag(User.is_active.is_(True)).label("u_active"),
+        flag(User.is_email_verified.is_(True)).label("u_verified"),
+        flag(User.role == UserRole.ADMIN).label("u_admins"),
+    ).subquery()
+    projects = select(
+        func.count(Project.id).label("p_total"),
+        flag(Project.analysis_status != "not_started").label("a_total"),
+        flag(Project.analysis_status == "completed").label("a_completed"),
+        flag(Project.analysis_status == "running").label("a_running"),
+        flag(Project.analysis_status == "failed").label("a_failed"),
+        flag(Project.analysis_error.is_not(None)).label("a_errors"),
+        func.avg(Project.startup_score).label("a_score"),  # AVG ignores NULL scores
+    ).subquery()
+    counters = (
+        await db.execute(select(users, projects).select_from(users.join(projects, true())))
+    ).one()
 
     top_sectors_result = await db.execute(
         select(Project.industry, func.count(Project.id))
@@ -396,23 +402,28 @@ async def get_admin_stats(
         .limit(5)
     )
 
+    total_users = int(counters.u_total or 0)
+    active_users = int(counters.u_active or 0)
+    verified_users = int(counters.u_verified or 0)
     return {
         "users": {
-            "total": total_users or 0,
-            "active": active_users or 0,
-            "verified": verified_users or 0,
-            "unverified": unverified_users or 0,
-            "admins": admin_users or 0,
+            "total": total_users,
+            "active": active_users,
+            "inactive": total_users - active_users,
+            "verified": verified_users,
+            "unverified": total_users - verified_users,
+            "admins": int(counters.u_admins or 0),
         },
         "projects": {
-            "total": total_projects or 0,
+            "total": int(counters.p_total or 0),
         },
         "analyses": {
-            "completed": completed_analyses or 0,
-            "running": running_analyses or 0,
-            "failed": failed_analyses or 0,
-            "with_errors": projects_with_errors or 0,
-            "average_score": round(float(average_score), 2) if average_score is not None else None,
+            "total": int(counters.a_total or 0),
+            "completed": int(counters.a_completed or 0),
+            "running": int(counters.a_running or 0),
+            "failed": int(counters.a_failed or 0),
+            "with_errors": int(counters.a_errors or 0),
+            "average_score": round(float(counters.a_score), 2) if counters.a_score is not None else None,
         },
         "top_sectors": [
             {"industry": industry or "Non spécifié", "count": count}
@@ -429,24 +440,115 @@ async def get_admin_stats(
 # 3. Gestion utilisateurs
 # ============================================================
 
+# Sprint 7.4 (RED D1): search, filters, sort and pagination are done by the
+# database. Sort keys are a whitelist: an unknown key answers 422.
+UserSort = Literal["created_at", "email", "full_name", "role", "project_count"]
+SortOrder = Literal["asc", "desc"]
+
+
+def _project_count():
+    # Correlated COUNT: one statement for the page, no GROUP BY on users.
+    return (
+        select(func.count(Project.id))
+        .where(Project.user_id == User.id)
+        .correlate(User)
+        .scalar_subquery()
+        .label("project_count")
+    )
+
+
+def _user_conditions(search, role, status_filter, verified) -> list:
+    conditions = []
+    if search:
+        conditions.append(or_(contains(User.email, search), contains(User.full_name, search)))
+    if role is not None:
+        conditions.append(User.role == role)
+    if status_filter is not None:
+        conditions.append(User.is_active.is_(status_filter == "active"))
+    if verified is not None:
+        conditions.append(User.is_email_verified.is_(verified))
+    return conditions
+
+
+def _user_order(sort: str, order: str, project_count):
+    column = {
+        "created_at": User.created_at,
+        "email": User.email,
+        "full_name": User.full_name,
+        "role": User.role,
+        "project_count": project_count,
+    }[sort]
+    primary = column.asc() if order == "asc" else column.desc()
+    return primary, User.id.desc()  # stable order between pages
+
+
 @router.get("/users")
 async def list_admin_users(
+    search: str | None = Query(default=None, max_length=255),
+    role: UserRole | None = Query(default=None),
+    status_filter: Literal["active", "inactive"] | None = Query(default=None, alias="status"),
+    verified: bool | None = Query(default=None),
+    sort: UserSort = Query(default="created_at"),
+    order: SortOrder = Query(default="desc"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(User, func.count(Project.id))
-        .outerjoin(Project, Project.user_id == User.id)
-        .group_by(User.id)
-        .order_by(User.created_at.desc())
+    conditions = _user_conditions(search, role, status_filter, verified)
+    project_count = _project_count()
+    rows, total = await paginate(
+        db,
+        select(User, project_count).where(*conditions).order_by(*_user_order(sort, order, project_count)),
+        select(func.count(User.id)).where(*conditions),
+        page=page,
+        page_size=page_size,
+    )
+    return page_body(
+        [serialize_user(user, project_count=count) for user, count in rows], total, page, page_size
     )
 
-    rows = result.all()
 
-    return [
-        serialize_user(user, project_count=project_count)
-        for user, project_count in rows
-    ]
+@router.get("/users/export.csv")
+async def export_admin_users_csv(
+    search: str | None = Query(default=None, max_length=255),
+    role: UserRole | None = Query(default=None),
+    status_filter: Literal["active", "inactive"] | None = Query(default=None, alias="status"),
+    verified: bool | None = Query(default=None),
+    sort: UserSort = Query(default="created_at"),
+    order: SortOrder = Query(default="desc"),
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Same filters as the screen; never the password hash or the 2FA secret."""
+    project_count = _project_count()
+    rows = (
+        await db.execute(
+            select(User, project_count)
+            .where(*_user_conditions(search, role, status_filter, verified))
+            .order_by(*_user_order(sort, order, project_count))
+            .limit(CSV_MAX_ROWS)
+        )
+    ).all()
+    return csv_response(
+        "utilisateurs",
+        ["E-mail", "Nom", "Rôle", "Statut", "E-mail vérifié", "2FA", "Projets", "Inscrit le"],
+        (
+            [
+                user.email,
+                user.full_name,
+                ROLE_LABELS.get(role_to_str(user.role), role_to_str(user.role)),
+                "Actif" if user.is_active else "Désactivé",
+                bool(user.is_email_verified),
+                bool(user.is_two_factor_enabled),
+                count,
+                user.created_at,
+            ]
+            for user, count in rows
+        ),
+    )
+
+
 async def _ensure_another_active_admin(db: AsyncSession, target: User) -> None:
     """
     Refuse any change that would leave the platform without an active admin
@@ -820,23 +922,129 @@ async def delete_admin_user(
 # 4. Gestion projets
 # ============================================================
 
+# Sprint 7.4 (RED D2): the lists select named columns only, never the
+# heavy JSON (analysis_data, clarification_context) nor the description:
+# those are read by the detail pages.
+PROJECT_LIST_COLUMNS = (
+    Project.id,
+    Project.title,
+    Project.industry,
+    Project.market_region,
+    Project.status,
+    Project.startup_score,
+    Project.analysis_status,
+    Project.analysis_step,
+    Project.analysis_progress,
+    Project.analysis_error,
+    Project.analysis_started_at,
+    Project.analysis_completed_at,
+    Project.user_id,
+    Project.created_at,
+    Project.updated_at,
+    # A short excerpt cut by the database, never the whole text.
+    func.substr(Project.description, 1, 160).label("description_excerpt"),
+    User.email.label("owner_email"),
+    User.full_name.label("owner_name"),
+)
+
+ProjectSort = Literal["created_at", "updated_at", "title", "startup_score", "analysis_status"]
+AnalysisSort = Literal["analysis_completed_at", "analysis_started_at", "startup_score", "analysis_progress"]
+AnalysisStatus = Literal["not_started", "queued", "running", "needs_clarification", "completed", "failed"]
+
+
+def _project_conditions(search, status_value) -> list:
+    conditions = []
+    if search:
+        conditions.append(or_(
+            contains(Project.title, search),
+            contains(Project.industry, search),
+            contains(Project.market_region, search),
+            contains(User.email, search),
+            contains(User.full_name, search),
+        ))
+    if status_value is not None:
+        conditions.append(Project.analysis_status == status_value)
+    return conditions
+
+
+def _ordered(column, order: str):
+    # NULLs (no score, never finished) always at the end of the page.
+    return (column.asc() if order == "asc" else column.desc()).nulls_last()
+
+
+async def _project_page(db, conditions, order_by, page, page_size):
+    return await paginate(
+        db,
+        select(*PROJECT_LIST_COLUMNS).join(User, Project.user_id == User.id).where(*conditions)
+        .order_by(*order_by, Project.id.desc()),
+        select(func.count(Project.id)).join(User, Project.user_id == User.id).where(*conditions),
+        page=page,
+        page_size=page_size,
+    )
+
+
+def serialize_project_row(row) -> dict:
+    """List item of a project (light row from PROJECT_LIST_COLUMNS)."""
+    return dict(row._mapping)
+
+
 @router.get("/projects")
 async def list_admin_projects(
+    search: str | None = Query(default=None, max_length=255),
+    status_value: AnalysisStatus | None = Query(default=None, alias="status"),
+    sort: ProjectSort = Query(default="created_at"),
+    order: SortOrder = Query(default="desc"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Project, User.email, User.full_name)
-        .join(User, Project.user_id == User.id)
-        .order_by(Project.created_at.desc())
+    column = {
+        "created_at": Project.created_at,
+        "updated_at": Project.updated_at,
+        "title": Project.title,
+        "startup_score": Project.startup_score,
+        "analysis_status": Project.analysis_status,
+    }[sort]
+    rows, total = await _project_page(
+        db, _project_conditions(search, status_value), [_ordered(column, order)], page, page_size
     )
+    return page_body([serialize_project_row(row) for row in rows], total, page, page_size)
 
-    rows = result.all()
 
-    return [
-        serialize_project(project, owner_email=email, owner_name=full_name)
-        for project, email, full_name in rows
-    ]
+@router.get("/projects/export.csv")
+async def export_admin_projects_csv(
+    search: str | None = Query(default=None, max_length=255),
+    status_value: AnalysisStatus | None = Query(default=None, alias="status"),
+    admin: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    rows = (
+        await db.execute(
+            select(*PROJECT_LIST_COLUMNS)
+            .join(User, Project.user_id == User.id)
+            .where(*_project_conditions(search, status_value))
+            .order_by(Project.created_at.desc(), Project.id.desc())
+            .limit(CSV_MAX_ROWS)
+        )
+    ).all()
+    return csv_response(
+        "projets",
+        ["Projet", "Propriétaire", "Statut de l'analyse", "Secteur", "Région", "Score", "Erreur", "Créé le"],
+        (
+            [
+                row.title,
+                row.owner_email,
+                ANALYSIS_STATUS_LABELS.get(row.analysis_status, row.analysis_status),
+                row.industry,
+                row.market_region,
+                row.startup_score,
+                row.analysis_error,
+                row.created_at,
+            ]
+            for row in rows
+        ),
+    )
 
 
 @router.get("/projects/{project_id}")
@@ -908,36 +1116,32 @@ async def delete_admin_project(
 
 @router.get("/analyses")
 async def list_admin_analyses(
+    search: str | None = Query(default=None, max_length=255),
+    status_value: AnalysisStatus | None = Query(default=None, alias="status"),
+    sort: AnalysisSort = Query(default="analysis_completed_at"),
+    order: SortOrder = Query(default="desc"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    result = await db.execute(
-        select(Project, User.email, User.full_name)
-        .join(User, Project.user_id == User.id)
-        .where(Project.analysis_status != "not_started")
-        .order_by(Project.analysis_completed_at.desc().nullslast())
-    )
+    """Projects whose analysis was started at least once (light columns)."""
+    conditions = [Project.analysis_status != "not_started", *_project_conditions(search, status_value)]
+    column = {
+        "analysis_completed_at": Project.analysis_completed_at,
+        "analysis_started_at": Project.analysis_started_at,
+        "startup_score": Project.startup_score,
+        "analysis_progress": Project.analysis_progress,
+    }[sort]
+    rows, total = await _project_page(db, conditions, [_ordered(column, order)], page, page_size)
+    items = []
+    for row in rows:
+        item = serialize_project_row(row)
+        item["project_id"] = item.pop("id")  # key used by the analyses screen
+        items.append(item)
+    return page_body(items, total, page, page_size)
 
-    rows = result.all()
 
-    return [
-        {
-            "project_id": project.id,
-            "title": project.title,
-            "industry": project.industry,
-            "market_region": project.market_region,
-            "startup_score": project.startup_score,
-            "analysis_status": project.analysis_status,
-            "analysis_step": project.analysis_step,
-            "analysis_progress": project.analysis_progress,
-            "analysis_error": project.analysis_error,
-            "analysis_started_at": project.analysis_started_at,
-            "analysis_completed_at": project.analysis_completed_at,
-            "owner_email": email,
-            "owner_name": full_name,
-        }
-        for project, email, full_name in rows
-    ]
 # ============================================================
 # 5.1 Détail diagnostic brut d'une analyse IA
 # ============================================================
@@ -1291,47 +1495,31 @@ async def get_admin_health(
 
 @router.get("/errors")
 async def get_admin_errors(
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     admin: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Version MVP du suivi erreurs.
-
-    Pour maintenant :
-    - On remonte les projets avec analysis_status='failed'
-    - Ou ceux qui ont analysis_error non null
-
-    Plus tard :
-    - Créer une vraie table system_error_logs.
+    Failed analyses and analyses that reported an error, newest first
+    (light columns, paginated). A dedicated error log table comes later.
     """
-
-    result = await db.execute(
-        select(Project, User.email, User.full_name)
-        .join(User, Project.user_id == User.id)
-        .where(
-            (Project.analysis_status == "failed")
-            | (Project.analysis_error.is_not(None))
-        )
-        .order_by(Project.updated_at.desc())
-    )
-
-    rows = result.all()
-
-    errors = []
-
-    for project, owner_email, owner_name in rows:
-        errors.append({
-            "id": f"analysis_project_{project.id}",
+    conditions = [(Project.analysis_status == "failed") | (Project.analysis_error.is_not(None))]
+    rows, total = await _project_page(db, conditions, [Project.updated_at.desc()], page, page_size)
+    items = [
+        {
+            "id": f"analysis_project_{row.id}",
             "source": "analysis",
             "level": "error",
             "status": "open",
-            "message": project.analysis_error or "Analyse marquée comme échouée.",
-            "project_id": project.id,
-            "project_title": project.title,
-            "owner_email": owner_email,
-            "owner_name": owner_name,
-            "analysis_status": project.analysis_status,
-            "created_at": project.updated_at,
-        })
-
-    return errors
+            "message": row.analysis_error or "Analyse marquée comme échouée.",
+            "project_id": row.id,
+            "project_title": row.title,
+            "owner_email": row.owner_email,
+            "owner_name": row.owner_name,
+            "analysis_status": row.analysis_status,
+            "created_at": row.updated_at,
+        }
+        for row in rows
+    ]
+    return page_body(items, total, page, page_size)

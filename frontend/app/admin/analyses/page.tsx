@@ -1,8 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { FormEvent, useState } from "react";
 import Link from "next/link";
-import { adminFetch } from "@/lib/admin-api";
+import { buildListQuery, type Page } from "@/app/admin/_components/listQuery";
+import Pagination from "@/app/admin/_components/Pagination";
+import type { AdminStats } from "@/app/admin/_components/stats";
+import { useAdminResource } from "@/app/admin/_components/useAdminResource";
 import AdminPageHeader from "@/app/admin/_components/AdminPageHeader";
 import { analysisStatusLabel } from "@/app/admin/_components/labels";
 
@@ -22,45 +25,36 @@ type AdminAnalysis = {
   owner_name: string;
 };
 
+const PAGE_SIZE = 25;
+
 export default function AdminAnalysesPage() {
-  const [analyses, setAnalyses] = useState<AdminAnalysis[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [filter, setFilter] = useState<"all" | "completed" | "running" | "failed">(
-    "all"
+  const [filter, setFilter] = useState<"all" | "completed" | "running" | "failed">("all");
+  const [searchDraft, setSearchDraft] = useState("");
+  const [search, setSearch] = useState("");
+  const [page, setPage] = useState(1);
+
+  // Sprint 7.4: status filter, search and paging are done by the API.
+  const list = useAdminResource<Page<AdminAnalysis>>(
+    `/admin/analyses${buildListQuery({
+      status: filter === "all" ? "" : filter,
+      search,
+      page,
+      page_size: PAGE_SIZE,
+    })}`,
   );
+  const stats = useAdminResource<AdminStats>("/admin/stats");
+  const analyses = list.data?.items ?? [];
 
-  async function loadAnalyses() {
-    try {
-      setIsLoading(true);
-      setError("");
-
-      const data = await adminFetch("/admin/analyses");
-      setAnalyses(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Erreur inconnue.");
-    } finally {
-      setIsLoading(false);
-    }
+  function changeFilter(next: typeof filter) {
+    setFilter(next);
+    setPage(1);
   }
 
-  useEffect(() => {
-    loadAnalyses();
-  }, []);
-
-  const filteredAnalyses = useMemo(() => {
-    if (filter === "all") return analyses;
-    return analyses.filter((item) => item.analysis_status === filter);
-  }, [analyses, filter]);
-
-  const stats = useMemo(() => {
-    return {
-      total: analyses.length,
-      completed: analyses.filter((a) => a.analysis_status === "completed").length,
-      running: analyses.filter((a) => a.analysis_status === "running").length,
-      failed: analyses.filter((a) => a.analysis_status === "failed").length,
-    };
-  }, [analyses]);
+  function applySearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSearch(searchDraft);
+    setPage(1);
+  }
 
   return (
     <div>
@@ -68,10 +62,11 @@ export default function AdminAnalysesPage() {
 
       <section className="mx-auto max-w-7xl px-6 py-8">
         <div className="grid gap-4 md:grid-cols-4">
-          <Stat title="Total analyses" value={stats.total} />
-          <Stat title="Terminées" value={stats.completed} />
-          <Stat title="En cours" value={stats.running} />
-          <Stat title="Échouées" value={stats.failed} />
+          {/* Counters of the whole platform, computed by the database. */}
+          <Stat title="Total analyses" value={stats.data?.analyses.total ?? 0} />
+          <Stat title="Terminées" value={stats.data?.analyses.completed ?? 0} />
+          <Stat title="En cours" value={stats.data?.analyses.running ?? 0} />
+          <Stat title="Échouées" value={stats.data?.analyses.failed ?? 0} />
         </div>
 
         <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-6">
@@ -84,20 +79,32 @@ export default function AdminAnalysesPage() {
             </div>
 
             <div className="flex flex-wrap gap-2">
-              <FilterButton label="Toutes" active={filter === "all"} onClick={() => setFilter("all")} />
-              <FilterButton label="Terminées" active={filter === "completed"} onClick={() => setFilter("completed")} />
-              <FilterButton label="En cours" active={filter === "running"} onClick={() => setFilter("running")} />
-              <FilterButton label="Échouées" active={filter === "failed"} onClick={() => setFilter("failed")} />
+              <FilterButton label="Toutes" active={filter === "all"} onClick={() => changeFilter("all")} />
+              <FilterButton label="Terminées" active={filter === "completed"} onClick={() => changeFilter("completed")} />
+              <FilterButton label="En cours" active={filter === "running"} onClick={() => changeFilter("running")} />
+              <FilterButton label="Échouées" active={filter === "failed"} onClick={() => changeFilter("failed")} />
             </div>
           </div>
 
-          {error && (
+          <form onSubmit={applySearch} className="mt-5 flex flex-col gap-3 md:flex-row">
+            <input
+              value={searchDraft}
+              onChange={(event) => setSearchDraft(event.target.value)}
+              placeholder="Rechercher projet, secteur, région, propriétaire..."
+              className="w-full rounded-lg border border-white/10 bg-slate-900 px-4 py-2.5 text-sm outline-none focus:border-red-300 md:max-w-md"
+            />
+            <button type="submit" className="rounded-lg bg-white/15 px-4 py-2.5 text-sm font-semibold hover:bg-white/25">
+              Rechercher
+            </button>
+          </form>
+
+          {list.error && (
             <div className="mt-5 rounded-lg border border-red-400/30 bg-red-500/10 p-3 text-sm text-red-200">
-              {error}
+              {list.error}
             </div>
           )}
 
-          {isLoading ? (
+          {!list.data ? (
             <div className="mt-6 rounded-xl border border-white/10 bg-white/5 p-6 text-white/60">
               Chargement des analyses...
             </div>
@@ -119,7 +126,7 @@ export default function AdminAnalysesPage() {
                 </thead>
 
                 <tbody>
-                  {filteredAnalyses.map((analysis) => (
+                  {analyses.map((analysis) => (
                     <tr key={analysis.project_id} className="bg-white/5">
                       <td className="rounded-l-xl px-4 py-4">
                         <div className="font-medium">{analysis.title}</div>
@@ -184,11 +191,19 @@ export default function AdminAnalysesPage() {
                 </tbody>
               </table>
 
-              {filteredAnalyses.length === 0 && (
+              {list.data.total === 0 && (
                 <div className="rounded-xl border border-white/10 bg-white/5 p-6 text-center text-white/50">
                   Aucune analyse trouvée.
                 </div>
               )}
+
+              <Pagination
+                page={page}
+                pageSize={PAGE_SIZE}
+                total={list.data.total}
+                isLoading={list.isLoading}
+                onPageChange={setPage}
+              />
             </div>
           )}
         </div>
