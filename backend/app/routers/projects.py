@@ -25,6 +25,7 @@ from app.services.idea_readiness_checker import idea_readiness_checker
 from app.services.project_context_builder import project_context_builder
 from app.services.public_analysis_sanitizer import sanitize_analysis_data_for_public
 from app.services.analysis_run_guard import analysis_run_guard
+from app.services import analysis_queue
 from app.services.evidence_ledger import evidence_ledger
 from app.services.final_report_builder import (
     final_report_builder,
@@ -1275,6 +1276,8 @@ async def set_analysis_progress(
 ) -> None:
     project.analysis_step = step
     project.analysis_progress = max(0, min(100, int(progress)))
+    # Sprint 7.6 (RED F3): writing progress is a sign of life.
+    project.analysis_heartbeat_at = utc_now()
 
     if status_value is not None:
         project.analysis_status = status_value
@@ -2436,33 +2439,16 @@ async def start_project_analysis(
 ):
     project = await get_project_or_404(project_id, db, current_user)
 
-    if project.analysis_status in {"queued", "running"}:
+    # Sprint 7.6 (RED F2): a run interrupted by a restart no longer blocks
+    # the project forever; only a LIVE run (recent sign of life) refuses.
+    if analysis_queue.is_live(project):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Une analyse est déjà en cours pour ce projet.",
         )
 
-    run_id = analysis_run_guard.new_run_id()
-    project.analysis_run_id = run_id
-    project.analysis_attempt = int(project.analysis_attempt or 0) + 1
-    project.analysis_heartbeat_at = utc_now()
-    project.analysis_status = "queued"
-    project.analysis_step = "Analyse en attente d’un créneau"
-    project.analysis_progress = 2
-    existing_analysis_data = project.analysis_data or {}
-    project_manager = (
-        existing_analysis_data.get("project_manager")
-        if isinstance(existing_analysis_data, dict)
-        else None
-    )
-    project.analysis_data = (
-        {"project_manager": project_manager}
-        if isinstance(project_manager, dict)
-        else None
-    )
-    project.analysis_error = None
-    project.analysis_started_at = utc_now()
-    project.analysis_completed_at = None
+    # Same reset as an admin relaunch (one definition, analysis_queue).
+    run_id = analysis_queue.prepare_new_run(project, step="Analyse en attente d’un créneau")
 
     await db.commit()
     await db.refresh(project)

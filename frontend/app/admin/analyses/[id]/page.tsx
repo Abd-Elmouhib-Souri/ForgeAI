@@ -1,11 +1,17 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { useParams } from "next/navigation";
-import { adminFetch } from "@/lib/admin-api";
+import { isAdminActionCancelled } from "@/lib/admin-api";
 import AdminPageHeader from "@/app/admin/_components/AdminPageHeader";
-import { analysisStatusLabel } from "@/app/admin/_components/labels";
+import {
+  analysisStatusLabel,
+  pipelineStageLabel,
+  pipelineStatusLabel,
+} from "@/app/admin/_components/labels";
+import { canRelaunch, relaunchAnalysis } from "@/app/admin/_components/relaunch";
+import { useAdminResource } from "@/app/admin/_components/useAdminResource";
 
 type AdminAnalysisDetail = {
   project: {
@@ -65,6 +71,15 @@ type AdminAnalysisDetail = {
     };
   };
   analysis_data: unknown;
+  // Sprint 7.6: decided by the backend.
+  analysis_stalled: boolean;
+  pipeline: {
+    status: string;
+    stages: Record<
+      string,
+      { status: string; attempts?: number; error_code?: string | null; next_retry_at?: string | null; updated_at?: string | null }
+    >;
+  };
 };
 
 export default function AdminAnalysisDetailPage() {
@@ -72,34 +87,49 @@ export default function AdminAnalysisDetailPage() {
 
   const projectId = params.id as string;
 
-  const [detail, setDetail] = useState<AdminAnalysisDetail | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState("");
+  const resource = useAdminResource<AdminAnalysisDetail>(`/admin/analyses/${projectId}`);
+  const detail = resource.data;
+  const isLoading = !resource.data && !resource.error;
+  const [message, setMessage] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [isRelaunching, setIsRelaunching] = useState(false);
+  const error = actionError || resource.error;
 
-  const loadDetail = useCallback(async () => {
-    if (!projectId) return;
-
+  async function relaunch() {
+    if (!detail) return;
     try {
-      setIsLoading(true);
-      setError("");
-
-      const data = await adminFetch(`/admin/analyses/${projectId}`);
-      setDetail(data);
+      setIsRelaunching(true);
+      setMessage("");
+      setActionError("");
+      setMessage(await relaunchAnalysis(detail.project.id, detail.project.title));
+      resource.reload();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Erreur inconnue.");
-      setDetail(null);
+      if (isAdminActionCancelled(err)) return;
+      setActionError(err instanceof Error ? err.message : "Relance impossible.");
     } finally {
-      setIsLoading(false);
+      setIsRelaunching(false);
     }
-  }, [projectId]);
-
-  useEffect(() => {
-    void loadDetail();
-  }, [loadDetail]);
+  }
 
   return (
     <div>
-      <AdminPageHeader title="Diagnostic d'analyse IA" backHref="/admin/analyses" backLabel="Analyses IA" />
+      <AdminPageHeader
+        title="Diagnostic d'analyse IA"
+        backHref="/admin/analyses"
+        backLabel="Analyses IA"
+        actions={
+          detail && canRelaunch(detail.project.analysis_status, detail.analysis_stalled) ? (
+            <button
+              type="button"
+              onClick={relaunch}
+              disabled={isRelaunching}
+              className="rounded-lg bg-amber-500 px-4 py-2 font-semibold text-slate-950 transition hover:bg-amber-400 disabled:opacity-60"
+            >
+              {isRelaunching ? "Relance..." : "Relancer l'analyse"}
+            </button>
+          ) : undefined
+        }
+      />
 
       <section className="mx-auto max-w-7xl px-6 py-8">
         {isLoading && (
@@ -114,8 +144,45 @@ export default function AdminAnalysisDetailPage() {
           </div>
         )}
 
+        {message && (
+          <div className="mb-6 rounded-xl border border-emerald-400/30 bg-emerald-500/10 p-4 text-sm text-emerald-200">
+            {message}
+          </div>
+        )}
+
         {detail && (
           <div className="space-y-6">
+            {detail.analysis_stalled && (
+              <div className="rounded-2xl border border-amber-400/30 bg-amber-500/10 p-5 text-sm text-amber-100">
+                <p className="font-semibold">Analyse bloquée</p>
+                <p className="mt-1 text-amber-100/80">
+                  Aucun signe de vie depuis plus de 20 minutes (redémarrage ou panne du serveur). Elle ne
+                  reprendra pas seule : relancez-la.
+                </p>
+              </div>
+            )}
+
+            {/* Sprint 7.6: post-analysis pipeline, as computed by the backend. */}
+            <section className="rounded-2xl border border-white/10 bg-white/5 p-6">
+              <h2 className="text-lg font-semibold">Pipeline post-analyse</h2>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                {Object.entries(detail.pipeline.stages).map(([stage, state]) => (
+                  <div key={stage} className="rounded-xl border border-white/10 bg-white/5 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="font-medium">{pipelineStageLabel(stage)}</p>
+                      <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/80">
+                        {pipelineStatusLabel(state.status)}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-xs text-white/50">
+                      Tentatives : {state.attempts ?? 0}
+                      {state.error_code ? ` · code : ${state.error_code}` : ""}
+                      {state.next_retry_at ? ` · prochain essai : ${formatDate(state.next_retry_at)}` : ""}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </section>
             <section className="rounded-2xl border border-white/10 bg-white/5 p-6">
               <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
                 <div>

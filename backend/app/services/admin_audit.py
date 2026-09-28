@@ -36,6 +36,7 @@ ACTIONS: dict[str, str] = {
     "user.verification.resend": "Renvoi de l'e-mail de vérification",
     "user.delete": "Suppression d'utilisateur",
     "project.delete": "Suppression de projet",
+    "analysis.relaunch": "Relance d'une analyse",
 }
 
 RESULTS = ("success", "failure", "denied")
@@ -52,6 +53,8 @@ DETAIL_LABELS: dict[str, str] = {
     "too_many_attempts": "Trop de tentatives",
     "confirmation_invalid": "Code de confirmation invalide",
     "2fa_enrollment_required": "Première connexion : activation 2FA demandée",
+    "analysis_active": "Analyse en cours (signe de vie récent)",
+    "never_started": "Analyse jamais lancée par le client",
 }
 
 

@@ -26,13 +26,14 @@ from app.routers.solution_architect import router as solution_architect_router
 from app.routers.export import router as export_router
 from app.routers.pipeline import router as pipeline_router
 from app.services.post_analysis_pipeline import post_analysis_pipeline
+from app.services.analysis_queue import analysis_queue_worker
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ForgeAI")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("=== DÉMARRAGE DE DOTJCOM FORGEAI ===")
+    logger.info("=== DÉMARRAGE DE FORGEAI ===")
     logger.info(f"Environnement détecté : {settings.ENVIRONMENT}")
     
     try:
@@ -50,9 +51,15 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Reprise du pipeline post-analyse impossible au démarrage")
 
+    # Sprint 7.6: this process (the public API) runs the analyses queued by
+    # an admin. The admin API never starts this worker.
+    analysis_queue_worker.start()
+
     yield
 
-    logger.info("=== FERMETURE DE DOTJCOM FORGEAI ===")
+    await analysis_queue_worker.stop()
+
+    logger.info("=== FERMETURE DE FORGEAI ===")
     logger.info("Fermeture du pool de connexions de la base de données...")
     await engine.dispose()
     logger.info("👋 Base de données déconnectée proprement. À bientôt !")
@@ -111,4 +118,4 @@ async def health_check():
     return {
         "status": "healthy" if db_status == "healthy" else "degraded",
         "database": db_status
-    }
+    }

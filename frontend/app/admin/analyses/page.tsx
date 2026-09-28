@@ -2,6 +2,8 @@
 
 import { FormEvent, useState } from "react";
 import Link from "next/link";
+import { isAdminActionCancelled } from "@/lib/admin-api";
+import { canRelaunch, relaunchAnalysis } from "@/app/admin/_components/relaunch";
 import { buildListQuery, type Page } from "@/app/admin/_components/listQuery";
 import Pagination from "@/app/admin/_components/Pagination";
 import type { AdminStats } from "@/app/admin/_components/stats";
@@ -23,6 +25,7 @@ type AdminAnalysis = {
   analysis_completed_at: string | null;
   owner_email: string;
   owner_name: string;
+  analysis_stalled: boolean; // decided by the backend (no sign of life)
 };
 
 const PAGE_SIZE = 25;
@@ -44,6 +47,25 @@ export default function AdminAnalysesPage() {
   );
   const stats = useAdminResource<AdminStats>("/admin/stats");
   const analyses = list.data?.items ?? [];
+  const [message, setMessage] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  async function relaunch(analysis: AdminAnalysis) {
+    try {
+      setBusyId(analysis.project_id);
+      setMessage("");
+      setActionError("");
+      setMessage(await relaunchAnalysis(analysis.project_id, analysis.title));
+      list.reload();
+      stats.reload();
+    } catch (err) {
+      if (isAdminActionCancelled(err)) return;
+      setActionError(err instanceof Error ? err.message : "Relance impossible.");
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   function changeFilter(next: typeof filter) {
     setFilter(next);
@@ -98,9 +120,15 @@ export default function AdminAnalysesPage() {
             </button>
           </form>
 
-          {list.error && (
+          {message && (
+            <div className="mt-5 rounded-lg border border-emerald-400/30 bg-emerald-500/10 p-3 text-sm text-emerald-200">
+              {message}
+            </div>
+          )}
+
+          {(actionError || list.error) && (
             <div className="mt-5 rounded-lg border border-red-400/30 bg-red-500/10 p-3 text-sm text-red-200">
-              {list.error}
+              {actionError || list.error}
             </div>
           )}
 
@@ -149,6 +177,14 @@ export default function AdminAnalysesPage() {
 
                       <td className="px-4 py-4">
                         <Badge status={analysis.analysis_status} />
+                        {analysis.analysis_stalled && (
+                          <span
+                            title="Aucun signe de vie depuis plus de 20 minutes (redémarrage, panne)."
+                            className="ml-2 rounded-full border border-amber-400/30 bg-amber-500/10 px-2 py-1 text-xs text-amber-200"
+                          >
+                            Bloquée
+                          </span>
+                        )}
                       </td>
 
                       <td className="px-4 py-4">
@@ -179,6 +215,16 @@ export default function AdminAnalysesPage() {
                       </td>
 
                       <td className="rounded-r-xl px-4 py-4 text-right">
+                        {canRelaunch(analysis.analysis_status, analysis.analysis_stalled) && (
+                          <button
+                            type="button"
+                            onClick={() => relaunch(analysis)}
+                            disabled={busyId === analysis.project_id}
+                            className="mr-2 rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-200 transition hover:bg-amber-500/20 disabled:opacity-50"
+                          >
+                            Relancer
+                          </button>
+                        )}
                         <Link
                           href={`/admin/analyses/${analysis.project_id}`}
                           className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-2 text-xs font-medium text-cyan-200 transition hover:bg-cyan-500/20"
