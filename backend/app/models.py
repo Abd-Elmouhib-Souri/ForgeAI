@@ -3,6 +3,7 @@ from enum import Enum
 from typing import List, Optional
 
 from sqlalchemy import (
+    Index,
     String,
     Integer,
     Boolean,
@@ -122,6 +123,11 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+
+
+# Every e-mail typed by a person is matched with lower(email) (app/email_identity.py):
+# this expression index keeps those lookups fast.
+Index("ix_users_email_lower", func.lower(User.email))
 
 
 class Project(Base):

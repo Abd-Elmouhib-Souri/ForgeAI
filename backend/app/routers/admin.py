@@ -16,8 +16,9 @@ from sqlalchemy.future import select
 
 from app.config import settings
 from app.database import get_db
-from app.mailer import send_verification_email
+from app.mailer import deliver, send_verification_email
 from app.models import Export, Project, User, UserRole
+from app.email_identity import normalize_email, same_email
 from app.services import admin_audit as audit
 from app.services import analysis_queue, health_checks
 from app.services.post_analysis_pipeline import effective_state
@@ -134,7 +135,10 @@ def queue_verification_email(
 ) -> None:
     verification_link = f"{settings.FRONTEND_URL}/verify-email?token={token}"
 
+    # deliver(): timeout + logged outcome (same path as the public e-mails).
     background_tasks.add_task(
+        deliver,
+        "vérification",
         send_verification_email,
         email,
         verification_link,
@@ -236,7 +240,7 @@ async def admin_login(
             headers={"Retry-After": str(wait)},
         )
 
-    user = (await db.execute(select(User).where(User.email == user_in.email))).scalar_one_or_none()
+    user = (await db.execute(select(User).where(same_email(User.email, user_in.email)))).scalar_one_or_none()
     if not user or not user.hashed_password or not verify_password(user_in.password, user.hashed_password):
         await login_throttle.record_failure(keys)
         # Unknown account: actor stays null, the attempted e-mail is kept.
@@ -585,7 +589,7 @@ async def create_admin_user(
     - Le nouvel admin doit vérifier son email avant de se connecter.
     """
 
-    query = select(User).where(User.email == payload.email)
+    query = select(User).where(same_email(User.email, payload.email))
     result = await db.execute(query)
     existing_user = result.scalar_one_or_none()
 
@@ -598,7 +602,7 @@ async def create_admin_user(
         raise exc
 
     new_admin = User(
-        email=payload.email,
+        email=normalize_email(payload.email),  # stored lowercase
         full_name=payload.full_name,
         hashed_password=get_password_hash(payload.password),
         role=UserRole.ADMIN,

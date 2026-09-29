@@ -1,6 +1,7 @@
 from app.security_policy import delete_refresh_cookie, protect_totp_secret, reveal_totp_secret, set_refresh_cookie
 import datetime
 import hashlib
+import logging
 import secrets
 
 import jwt
@@ -13,8 +14,17 @@ from sqlalchemy.future import select
 
 from app.config import settings
 from app.database import get_db
-from app.mailer import send_verification_email, send_password_reset_email
+from app.mailer import (
+    deliver,
+    mask_email,
+    send_google_account_password_email,
+    send_password_reset_email,
+    send_verification_email,
+)
 from app.models import User, UserRole
+from app.email_identity import normalize_email, same_email
+
+logger = logging.getLogger(__name__)
 from app.schemas.auth import (
     EmailVerificationResponse,
     ForgotPasswordRequest,
@@ -76,7 +86,10 @@ def queue_verification_email(
 ) -> None:
     verification_link = f"{settings.FRONTEND_URL}/verify-email?token={token}"
 
+    # deliver(): timeout + logged outcome (a failure is visible in the logs).
     background_tasks.add_task(
+        deliver,
+        "vérification",
         send_verification_email,
         email,
         verification_link,
@@ -112,9 +125,30 @@ def queue_password_reset_email(
     reset_link = f"{settings.FRONTEND_URL}/reset-password?token={token}"
 
     background_tasks.add_task(
+        deliver,
+        "réinitialisation",
         send_password_reset_email,
         email,
         reset_link,
+    )
+
+
+def queue_google_account_password_email(
+    background_tasks: BackgroundTasks,
+    email: str,
+    token: str,
+) -> None:
+    """Account created with Google: explain it and offer to set a password."""
+    set_password_link = f"{settings.FRONTEND_URL}/reset-password?token={token}"
+    login_link = f"{settings.FRONTEND_URL}/login"
+
+    background_tasks.add_task(
+        deliver,
+        "compte Google",
+        send_google_account_password_email,
+        email,
+        set_password_link,
+        login_link,
     )
 
 
@@ -125,7 +159,7 @@ async def register(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(User).where(User.email == user_in.email)
+    query = select(User).where(same_email(User.email, user_in.email))
     result = await db.execute(query)
 
     if result.scalar_one_or_none():
@@ -141,7 +175,7 @@ async def register(
         )
 
     new_user = User(
-        email=user_in.email,
+        email=normalize_email(user_in.email),  # stored lowercase
         full_name=user_in.full_name,
         hashed_password=get_password_hash(user_in.password),
         role=user_in.role,
@@ -178,24 +212,33 @@ async def forgot_password(
         "un lien de réinitialisation a été envoyé."
     )
 
-    query = select(User).where(User.email == payload.email)
+    query = select(User).where(same_email(User.email, payload.email))
     result = await db.execute(query)
     user = result.scalar_one_or_none()
 
+    # The answer never changes (no account enumeration); the server log says
+    # why an e-mail was or was not sent, with a masked address.
+    masked = mask_email(payload.email)
+
     if not user:
+        logger.info("[PasswordReset] aucun compte pour %s : aucun e-mail envoyé", masked)
         return {"message": generic_message}
 
     if not user.is_active:
-        return {"message": generic_message}
-
-    if not user.hashed_password:
+        logger.info("[PasswordReset] compte désactivé %s : aucun e-mail envoyé", masked)
         return {"message": generic_message}
 
     reset_token = set_password_reset_token(user)
 
     await db.commit()
 
-    queue_password_reset_email(background_tasks, user.email, reset_token)
+    if not user.hashed_password:
+        # Created with Google (RED 28 Sept 2026: used to be silently ignored).
+        queue_google_account_password_email(background_tasks, user.email, reset_token)
+        logger.info("[PasswordReset] compte Google %s : e-mail « définir un mot de passe » programmé", masked)
+    else:
+        queue_password_reset_email(background_tasks, user.email, reset_token)
+        logger.info("[PasswordReset] e-mail de réinitialisation programmé pour %s", masked)
 
     return {"message": generic_message}
 
@@ -228,8 +271,11 @@ async def reset_password(
         )
 
     now = datetime.datetime.now(datetime.timezone.utc)
+    expires_at = user.password_reset_expires_at
+    if expires_at.tzinfo is None:  # naive = stored in UTC (SQLite)
+        expires_at = expires_at.replace(tzinfo=datetime.timezone.utc)
 
-    if user.password_reset_expires_at < now:
+    if expires_at < now:
         user.password_reset_token_hash = None
         user.password_reset_expires_at = None
         await db.commit()
@@ -257,7 +303,7 @@ async def login(
     user_in: UserLogin,
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(User).where(User.email == user_in.email)
+    query = select(User).where(same_email(User.email, user_in.email))
     result = await db.execute(query)
     user = result.scalar_one_or_none()
 
@@ -491,7 +537,7 @@ async def google_callback(
     user = result.scalar_one_or_none()
 
     if not user:
-        query = select(User).where(User.email == email)
+        query = select(User).where(same_email(User.email, email))
         result = await db.execute(query)
         user = result.scalar_one_or_none()
 
@@ -503,7 +549,7 @@ async def google_callback(
 
         else:
             user = User(
-                email=email,
+                email=normalize_email(email),  # stored lowercase
                 full_name=full_name,
                 hashed_password=None,
                 google_id=google_id,
@@ -585,7 +631,7 @@ async def resend_verification(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
-    query = select(User).where(User.email == payload.email)
+    query = select(User).where(same_email(User.email, payload.email))
     result = await db.execute(query)
     user = result.scalar_one_or_none()
 

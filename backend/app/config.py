@@ -42,6 +42,8 @@ class Settings(BaseSettings):
     SMTP_FROM_EMAIL: str = ""
     SMTP_FROM_NAME: str = "ForgeAI"
     SMTP_USE_TLS: bool = True
+    # A mute SMTP server must never block a background task forever.
+    SMTP_TIMEOUT_SECONDS: int = 20
 
     # ðŸ—„ï¸ POSTGRESQL
     POSTGRES_SERVER: str = "postgres"
