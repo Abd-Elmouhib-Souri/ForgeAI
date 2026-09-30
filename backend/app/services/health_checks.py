@@ -241,6 +241,10 @@ def _smtp_login() -> None:
 
 async def check_smtp() -> Result:
     if not (settings.SMTP_USERNAME and settings.SMTP_PASSWORD):
+        if settings.ENVIRONMENT == "development":
+            # Development fallback (app.mailer): the links are in the backend log.
+            return "not_configured", ("SMTP non configuré : en développement, les e-mails (vérification, mot de passe) "
+                                      "sont écrits dans le journal du backend (docker compose logs backend)."), {}
         return "not_configured", "SMTP non configuré : aucun e-mail (vérification, mot de passe) ne partira.", {}
     await asyncio.to_thread(_smtp_login)
     return "healthy", f"Connexion et authentification SMTP réussies ({settings.SMTP_HOST}).", {}
