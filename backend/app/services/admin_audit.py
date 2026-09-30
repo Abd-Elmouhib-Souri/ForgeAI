@@ -31,6 +31,7 @@ ACTIONS: dict[str, str] = {
     "admin.2fa.enable": "Activation de la double authentification",
     "admin.confirmation": "Code de confirmation refusé",
     "admin.create": "Création d'un administrateur",
+    "admin.bootstrap": "Création d'un administrateur en ligne de commande (serveur)",
     "user.role.update": "Changement de rôle",
     "user.status.update": "Activation / désactivation de compte",
     "user.verification.resend": "Renvoi de l'e-mail de vérification",

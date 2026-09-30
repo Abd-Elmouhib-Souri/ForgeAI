@@ -1,176 +1,207 @@
-# ForgeAI
-
-ForgeAI is an AI-powered SaaS platform that transforms a project or startup idea into structured project intelligence, business validation, startup evaluation and actionable planning artifacts.
-
-## Current Status
-
-- Sprint 0 through Sprint 4 product implementation: complete.
-- S4.32 full backend regression: 1987 passed.
-- S4.33 frontend certification: CLOSED_GREEN.
-- S4.34 Docker / Alembic / Security: CLOSED_GREEN.
-- S4.35 documentation closeout: CLOSED_GREEN.
-- S4.36 checkpoint / tag / push: pending.
-- No commit, tag or push is performed automatically by the certification workflow.
-
-
-## Sprint 4 - AI Project Manager
-
-Sprint 4 adds the Product Manager AI layer on top of the canonical project context.
-
-Certified capabilities include:
-
-- canonical project-management context derived from project authority;
-- Product Owner backlog generation;
-- deterministic backlog policy and scope enforcement;
-- MoSCoW prioritization;
-- Story Points;
-- dependency graph handling;
-- deterministic sprint planning;
-- editable sprint settings;
-- story locks;
-- deterministic replan;
-- velocity forecasting;
-- burndown and project-management metrics;
-- Scrum Master advice;
-- versioned project-management plans;
-- obsolete-context detection;
-- owner-protected project-manager API routes;
-- frontend Product Manager integration.
-
-The clarification flow remains part of the canonical input authority:
-
-    needs_clarification
-    -> user answers clarification items
-    -> durable canonical project context is enriched
-    -> context is revalidated
-    -> ready_for_agents
-
-Unknown or missing project facts are not silently replaced by country-, sector- or fixture-specific defaults.
-
-## Sprint 4 Certification
-
-Sprint 4 certification evidence:
-
-- backend full regression: 1987 passed;
-- frontend Node contracts: 14 passed;
-- frontend UTF-8 production-source contract: GREEN;
-- TypeScript: GREEN;
-- ESLint: 0 errors, 13 pre-existing warnings;
-- Next.js production build: GREEN, 21/21 routes generated;
-- Docker runtime: backend, postgres, redis and chromadb running;
-- Alembic database revision: `8b24c1a0f3e7` current and head;
-- backend Security P1 contracts: 9 passed;
-- frontend OAuth bearer-transport security contract: GREEN;
-- TOTP deployment guard: no legacy unprotected secret and no enabled account without a protected secret.
-
-The detailed certification and handoff authority is:
-
-- `docs/SPRINT4_CERTIFICATION.md`
-
-S4.36 checkpoint / tag / push is still pending and requires an explicit Git publication decision.
-
-## Sprint 4 Security Baseline
-
-The certified security invariants are:
-
-- refresh-token cookies use centralized policy with HttpOnly semantics and environment-aware Secure behavior;
-- production, staging and unknown environments fail secure for the refresh cookie;
-- OAuth callback transport does not put bearer access tokens in the redirect URL or query string;
-- the frontend completes OAuth login through `/auth/refresh`;
-- TOTP secrets are stored with the `fernet:v1:` protected representation rather than raw secrets;
-- stored TOTP values fail closed if the protected representation cannot be revealed;
-- authenticated-user access re-checks `is_active` and `is_email_verified`;
-- verification and reset capability URLs may contain their purpose-built token, but token-bearing URLs are not printed to application logs.
-
-## Main Stack
-
-### Backend
-- Python 3.11
-- FastAPI
-- SQLAlchemy
-- PostgreSQL
-- Alembic
-- Redis
-- ChromaDB
-- LangChain / LangGraph
-- Gemini / Groq provider abstraction
-
-### Frontend
-- Next.js
-- React
-- TypeScript
-
-### Infrastructure
-- Docker
-- Docker Compose
-
-## Environment
-
-Real `.env` files are never committed.
-
-Templates:
-
-- `.env.example`
-- `backend/.env.example`
-- `frontend/.env.example`
-
-Create local copies and provide your own secret values.
-
-## Backend Dependencies
-
-Runtime:
-
-    pip install -r backend/requirements.txt
-
-Development / QA:
-
-    pip install -r backend/requirements-dev.txt
-
-## Frontend
-
-    cd frontend
-    npm ci
-    npm run dev
-
-## Backend Docker
-
-    docker compose up -d --build backend
-
-## Quality Method
-
-ForgeAI uses a canonical authority methodology:
-
-    Reproduce
-    -> First Wrong Layer
-    -> REAL RED contract
-    -> Canonical authority
-    -> Universal invariant
-    -> Minimal central patch
-    -> Targeted regression
-    -> Positive / negative / anti-overfit validation
-    -> Cross-domain regression
-    -> Cross-country regression
-    -> Metamorphic validation
-    -> Golden UAT
-    -> Blind UAT
-    -> Full regression
-
-Corrections must remain universal. A production rule must never be introduced only to satisfy one fixture, project, sector, country or region.
-
-The architecture principle is:
-
-    LLM proposes
-    -> Policies validate
-    -> Deterministic engines decide
-    -> Frontend displays
-
-## Known Sprint 3 Debt
-
-The pre-Sprint-4 checkpoint intentionally preserves documented semantic hardening debt around archetype and query authority.
-
-Sprint 4 must consume canonical project facts as primary authority.
-
+---
+base_model: google/paligemma-3b-pt-224
+library_name: peft
+pipeline_tag: text-generation
+tags:
+- base_model:adapter:google/paligemma-3b-pt-224
+- lora
+- transformers
 ---
 
-ForgeAI — Pre-Sprint-4 checkpoint
-26 August 2026
+# Model Card for Model ID
+
+<!-- Provide a quick summary of what the model is/does. -->
+
+
+
+## Model Details
+
+### Model Description
+
+<!-- Provide a longer summary of what this model is. -->
+
+
+
+- **Developed by:** [More Information Needed]
+- **Funded by [optional]:** [More Information Needed]
+- **Shared by [optional]:** [More Information Needed]
+- **Model type:** [More Information Needed]
+- **Language(s) (NLP):** [More Information Needed]
+- **License:** [More Information Needed]
+- **Finetuned from model [optional]:** [More Information Needed]
+
+### Model Sources [optional]
+
+<!-- Provide the basic links for the model. -->
+
+- **Repository:** [More Information Needed]
+- **Paper [optional]:** [More Information Needed]
+- **Demo [optional]:** [More Information Needed]
+
+## Uses
+
+<!-- Address questions around how the model is intended to be used, including the foreseeable users of the model and those affected by the model. -->
+
+### Direct Use
+
+<!-- This section is for the model use without fine-tuning or plugging into a larger ecosystem/app. -->
+
+[More Information Needed]
+
+### Downstream Use [optional]
+
+<!-- This section is for the model use when fine-tuned for a task, or when plugged into a larger ecosystem/app -->
+
+[More Information Needed]
+
+### Out-of-Scope Use
+
+<!-- This section addresses misuse, malicious use, and uses that the model will not work well for. -->
+
+[More Information Needed]
+
+## Bias, Risks, and Limitations
+
+<!-- This section is meant to convey both technical and sociotechnical limitations. -->
+
+[More Information Needed]
+
+### Recommendations
+
+<!-- This section is meant to convey recommendations with respect to the bias, risk, and technical limitations. -->
+
+Users (both direct and downstream) should be made aware of the risks, biases and limitations of the model. More information needed for further recommendations.
+
+## How to Get Started with the Model
+
+Use the code below to get started with the model.
+
+[More Information Needed]
+
+## Training Details
+
+### Training Data
+
+<!-- This should link to a Dataset Card, perhaps with a short stub of information on what the training data is all about as well as documentation related to data pre-processing or additional filtering. -->
+
+[More Information Needed]
+
+### Training Procedure
+
+<!-- This relates heavily to the Technical Specifications. Content here should link to that section when it is relevant to the training procedure. -->
+
+#### Preprocessing [optional]
+
+[More Information Needed]
+
+
+#### Training Hyperparameters
+
+- **Training regime:** [More Information Needed] <!--fp32, fp16 mixed precision, bf16 mixed precision, bf16 non-mixed precision, fp16 non-mixed precision, fp8 mixed precision -->
+
+#### Speeds, Sizes, Times [optional]
+
+<!-- This section provides information about throughput, start/end time, checkpoint size if relevant, etc. -->
+
+[More Information Needed]
+
+## Evaluation
+
+<!-- This section describes the evaluation protocols and provides the results. -->
+
+### Testing Data, Factors & Metrics
+
+#### Testing Data
+
+<!-- This should link to a Dataset Card if possible. -->
+
+[More Information Needed]
+
+#### Factors
+
+<!-- These are the things the evaluation is disaggregating by, e.g., subpopulations or domains. -->
+
+[More Information Needed]
+
+#### Metrics
+
+<!-- These are the evaluation metrics being used, ideally with a description of why. -->
+
+[More Information Needed]
+
+### Results
+
+[More Information Needed]
+
+#### Summary
+
+
+
+## Model Examination [optional]
+
+<!-- Relevant interpretability work for the model goes here -->
+
+[More Information Needed]
+
+## Environmental Impact
+
+<!-- Total emissions (in grams of CO2eq) and additional considerations, such as electricity usage, go here. Edit the suggested text below accordingly -->
+
+Carbon emissions can be estimated using the [Machine Learning Impact calculator](https://mlco2.github.io/impact#compute) presented in [Lacoste et al. (2019)](https://arxiv.org/abs/1910.09700).
+
+- **Hardware Type:** [More Information Needed]
+- **Hours used:** [More Information Needed]
+- **Cloud Provider:** [More Information Needed]
+- **Compute Region:** [More Information Needed]
+- **Carbon Emitted:** [More Information Needed]
+
+## Technical Specifications [optional]
+
+### Model Architecture and Objective
+
+[More Information Needed]
+
+### Compute Infrastructure
+
+[More Information Needed]
+
+#### Hardware
+
+[More Information Needed]
+
+#### Software
+
+[More Information Needed]
+
+## Citation [optional]
+
+<!-- If there is a paper or blog post introducing the model, the APA and Bibtex information for that should go in this section. -->
+
+**BibTeX:**
+
+[More Information Needed]
+
+**APA:**
+
+[More Information Needed]
+
+## Glossary [optional]
+
+<!-- If relevant, include terms and calculations in this section that can help readers understand the model or model card. -->
+
+[More Information Needed]
+
+## More Information [optional]
+
+[More Information Needed]
+
+## Model Card Authors [optional]
+
+[More Information Needed]
+
+## Model Card Contact
+
+[More Information Needed]
+### Framework versions
+
+- PEFT 0.19.0
