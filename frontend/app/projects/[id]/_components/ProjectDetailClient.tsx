@@ -37,6 +37,14 @@ import AnalysisActionCard from "./AnalysisActionCard";
 import { Panel } from "./UIBlocks";
 import FinalReportSection from "../_sections/FinalReportSection";
 import ProjectManagerSection from "../_sections/ProjectManagerSection";
+import SolutionArchitectSection from "../_sections/SolutionArchitectSection";
+import ExportSection from "../_sections/ExportSection";
+import PostAnalysisPipelinePanel from "./PostAnalysisPipelinePanel";
+import {
+  isPipelineActive,
+  isStageDisplayable,
+  type PipelineState,
+} from "../_lib/pipeline";
 
 const content = {
   fr: {
@@ -666,6 +674,12 @@ export default function ProjectDetailClient() {
     projectId: "",
     message: "",
   });
+  // Latest post-analysis pipeline state, tagged with the analysis run it
+  // belongs to so a relaunched analysis never shows a previous run's state.
+  const [pipelineSnapshot, setPipelineSnapshot] = useState<{
+    marker: string | null;
+    state: PipelineState;
+  } | null>(null);
   const analysisRequestInFlight = useRef(false);
   const activeAnalysisRunId = useRef<string | null>(null);
   const analysisStatusRef = useRef<string | null>(null);
@@ -1036,6 +1050,24 @@ export default function ProjectDetailClient() {
 
   const analysisIsRunning = isActiveAnalysisStatus(currentStatus);
 
+  // Plan / Architecture / Export only exist after a completed analysis.
+  // Before that, no "Générer" button is shown: the backend chains the
+  // steps automatically and PostAnalysisPipelinePanel reports progress.
+  const analysisIsCompleted = currentStatus === "completed";
+  const analysisCompletedAt =
+    analysis?.analysis_completed_at ?? project.analysis_completed_at ?? null;
+  const pipeline =
+    pipelineSnapshot && pipelineSnapshot.marker === analysisCompletedAt
+      ? pipelineSnapshot.state
+      : null;
+  const planStage = pipeline?.stages.project_manager;
+  const architectureStage = pipeline?.stages.solution_architecture;
+  const showPlan = analysisIsCompleted && isStageDisplayable(planStage);
+  const showArchitecture =
+    analysisIsCompleted && isStageDisplayable(architectureStage);
+  const showExport =
+    showPlan && !isPipelineActive(architectureStage?.status);
+
   const contextReadiness = resolveContextReadiness(analysisData);
 
   const persistedClarificationAnswers =
@@ -1291,15 +1323,48 @@ export default function ProjectDetailClient() {
                   }}
                 />
 
-                <ProjectManagerSection
-                  projectId={id}
-                  language={reportLanguage}
-                  analysisCompletedAt={
-                    analysis?.analysis_completed_at ??
-                    project.analysis_completed_at ??
-                    null
-                  }
-                />
+                {analysisIsCompleted && (
+                  <PostAnalysisPipelinePanel
+                    key={analysisCompletedAt ?? "pipeline"}
+                    projectId={id}
+                    language={reportLanguage}
+                    onStateChange={(state) =>
+                      setPipelineSnapshot({
+                        marker: analysisCompletedAt,
+                        state,
+                      })
+                    }
+                  />
+                )}
+
+                {showPlan && (
+                  <ProjectManagerSection
+                    projectId={id}
+                    language={reportLanguage}
+                    // Stage completion time: changes when a provisional
+                    // plan is upgraded, which reloads the section.
+                    analysisCompletedAt={
+                      planStage?.finished_at ?? analysisCompletedAt
+                    }
+                  />
+                )}
+
+                {showArchitecture && (
+                  <SolutionArchitectSection
+                    projectId={id}
+                    language={reportLanguage}
+                    analysisCompletedAt={
+                      architectureStage?.finished_at ?? analysisCompletedAt
+                    }
+                  />
+                )}
+
+                {showExport && (
+                  <ExportSection
+                    projectId={id}
+                    language={reportLanguage}
+                  />
+                )}
               </div>
             </div>
           </>
@@ -1308,3 +1373,7 @@ export default function ProjectDetailClient() {
     </main>
   );
 }
+
+
+
+

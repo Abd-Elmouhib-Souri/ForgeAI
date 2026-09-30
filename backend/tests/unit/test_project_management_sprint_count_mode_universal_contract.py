@@ -67,7 +67,7 @@ async def _exercise_generation(
         ProjectManagementPlanService()
     )
 
-    context = object()
+    context = SimpleNamespace(language="fr")
     candidate = object()
     canonical = object()
     prioritized = object()

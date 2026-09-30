@@ -1,4 +1,4 @@
-from typing import List, Optional
+﻿from typing import List, Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -11,12 +11,12 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # 🎯 CONFIGURATION GÉNÉRALE DE L'APPLICATION
-    APP_NAME: str = "DotJcom ForgeAI"
+    # ðŸŽ¯ CONFIGURATION GÃ‰NÃ‰RALE DE L'APPLICATION
+    APP_NAME: str = "ForgeAI"
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
 
-    # 🔒 SÉCURITÉ, SESSIONS & CHIFFREMENT
+    # ðŸ”’ SÃ‰CURITÃ‰, SESSIONS & CHIFFREMENT
     JWT_SECRET_KEY: str
     JWT_REFRESH_SECRET_KEY: str
     JWT_ALGORITHM: str = "HS256"
@@ -24,26 +24,28 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     AES_SECRET_KEY: str
 
-    # 🔐 GOOGLE OAUTH 2.0
+    # ðŸ” GOOGLE OAUTH 2.0
     GOOGLE_CLIENT_ID: str
     GOOGLE_CLIENT_SECRET: str
     GOOGLE_REDIRECT_URI: str
     SESSION_SECRET_KEY: str
 
-    # 📧 VÉRIFICATION EMAIL
+    # ðŸ“§ VÃ‰RIFICATION EMAIL
     FRONTEND_URL: str = "http://localhost:3000"
     EMAIL_VERIFICATION_EXPIRE_HOURS: int = 24
 
-    # 📤 SMTP
+    # ðŸ“¤ SMTP
     SMTP_HOST: str = "smtp.gmail.com"
     SMTP_PORT: int = 587
     SMTP_USERNAME: str = ""
     SMTP_PASSWORD: str = ""
     SMTP_FROM_EMAIL: str = ""
-    SMTP_FROM_NAME: str = "DotJcom ForgeAI"
+    SMTP_FROM_NAME: str = "ForgeAI"
     SMTP_USE_TLS: bool = True
+    # A mute SMTP server must never block a background task forever.
+    SMTP_TIMEOUT_SECONDS: int = 20
 
-    # 🗄️ POSTGRESQL
+    # ðŸ—„ï¸ POSTGRESQL
     POSTGRES_SERVER: str = "postgres"
     POSTGRES_PORT: int = 5432
     POSTGRES_DB: str = "forgeai"
@@ -57,18 +59,36 @@ class Settings(BaseSettings):
     CHROMA_AUTH_TOKEN: str
     REDIS_URL: str = "redis://redis:6379/0"
 
-     # 🤖 LLM PROVIDERS
+     # ðŸ¤– LLM PROVIDERS
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-3-flash-preview"
     GEMINI_FALLBACK_MODEL: str = ""
 
     GROQ_API_KEY: str = ""
-    GROQ_MODEL: str = "llama-3.3-70b-versatile"
-    GROQ_FALLBACK_MODEL: str = "llama-3.1-8b-instant"
+    GROQ_API_BASE: str = ""
+    # Defaults only apply when .env leaves them empty. llama-3.3-70b-versatile,
+    # llama-3.1-8b-instant and groq/compound(-mini) are decommissioned by Groq
+    # (HTTP 404 model_not_found): verify with GET /openai/v1/models.
+    GROQ_MODEL: str = "openai/gpt-oss-120b"
+    GROQ_FALLBACK_MODEL: str = "qwen/qwen3.8-27b"
 
     LLM_PRIMARY_PROVIDER: str = "gemini"
     LLM_FALLBACK_PROVIDER: str = "groq"
     LLM_REQUEST_TIMEOUT_SECONDS: int = 90
+    # Groq free tier answers 429 "Please try again in 7.6s" when the
+    # per-minute token budget is spent: wait that long (bounded) instead of
+    # failing the whole generation. 0 disables in-call waiting.
+    LLM_RATE_LIMIT_MAX_WAIT_SECONDS: float = 20.0
+    # Private folder holding generated exports (PDF/DOCX/PPTX). Never
+    # served statically: files are streamed by the owner-filtered
+    # /projects/{id}/exports/{export_id}/download endpoint only.
+    EXPORTS_DIR: str = "/app/exports"
+    # Smallest useful answer budget: below it a structured JSON answer would
+    # be truncated, so the model is skipped instead of producing junk.
+    LLM_MIN_OUTPUT_TOKENS: int = 1200
+    # gpt-oss models spend hidden reasoning tokens that count against the
+    # per-minute budget; "low" keeps them small. Empty string disables.
+    GROQ_REASONING_EFFORT: str = "low"
     LLM_CIRCUIT_FAILURES: int = 3
     LLM_CIRCUIT_COOLDOWN_SECONDS: int = 180
 
@@ -76,18 +96,39 @@ class Settings(BaseSettings):
 
     OPENAI_API_KEY: Optional[str] = ""
 
-    # 📊 MONITORING
+    # ðŸ“Š MONITORING
     MLFLOW_TRACKING_URI: str = "http://mlflow:5000"
 
-    # 🌐 CORS
+    # ðŸŒ CORS
     
     ALLOWED_ORIGINS: List[str] = ["http://localhost:3000"]
+
+    # --- Sprint 7.1: separate, locked-down admin API (app/admin_main.py) ---
+    # Origins allowed to call the admin API (the admin console only).
+    ADMIN_ALLOWED_ORIGINS: List[str] = ["http://localhost:3000"]
+    # Admin access token: short-lived, no silent refresh.
+    ADMIN_ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    # Token that only allows enrolling 2FA after the password step.
+    ADMIN_ENROLL_TOKEN_EXPIRE_MINUTES: int = 10
+    # Failed password / TOTP attempts allowed per account and per IP
+    # within the window, before a temporary block (HTTP 429).
+    ADMIN_LOGIN_MAX_ATTEMPTS: int = 5
+    ADMIN_LOGIN_WINDOW_SECONDS: int = 900
+    ADMIN_MIN_PASSWORD_LENGTH: int = 12
     PASSWORD_RESET_EXPIRE_HOURS: int = 1
 
 
     # Runtime analysis and web-search configuration.
     GEMINI_SEARCH_MODEL: str = "gemini-3-flash-preview"
     ANALYSIS_MAX_CONCURRENT_RUNS: int = 2
+    # Sprint 7.6: a queued/running analysis without any sign of life for this
+    # long is considered stuck (restart, crash) and may be relaunched.
+    ANALYSIS_STALE_AFTER_SECONDS: int = 1200
+    # Sprint 7.6: how often the public API picks up runs queued by an admin.
+    ANALYSIS_QUEUE_POLL_SECONDS: int = 5
+    # Sprint 7.7: how the admin API reaches the public API for its health
+    # check (docker-compose service name; http://localhost:8000 outside Docker).
+    PUBLIC_API_INTERNAL_URL: str = "http://backend:8000"
     ENABLE_TAVILY_SEARCH: bool = True
     TAVILY_API_KEY: str = ""
     TAVILY_SEARCH_URL: str = "https://api.tavily.com/search"
@@ -123,3 +164,5 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+

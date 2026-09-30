@@ -102,6 +102,7 @@ def _wire_generate(
 
     context = SimpleNamespace(
         project_id="b3-b2",
+        language="fr",
         assumptions=[],
         warnings=[],
         regulatory_flags=[],

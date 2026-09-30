@@ -30,7 +30,8 @@ def test_plan_service_persists_versioned_snapshots_and_never_fabricates_actual_m
     assert "actual_velocity: Optional[float] = None" in (ROOT / "app" / "schemas" / "project_management.py").read_text(encoding="utf-8")
     assert "locked_story_would_move" in source
     assert "ProductOwnerAgent().generate_candidate_backlog" in source
-    assert "AIScrumMasterAgent().generate_advice" in source
+    # Scrum Master advice follows the project output language.
+    assert "AIScrumMasterAgent(\n                output_language=context.language,\n            ).generate_advice" in source
 
 
 def test_project_manager_router_is_registered_in_the_application():

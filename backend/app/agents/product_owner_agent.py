@@ -9,6 +9,10 @@ from app.llm.json_response import (
     JSONResponseError,
     extract_json_object,
 )
+from app.llm.output_language import (
+    structured_output_language_rules,
+    user_story_template,
+)
 from app.llm.provider import LLMProvider
 from app.schemas.project_management import (
     CandidateBacklogV1,
@@ -145,7 +149,9 @@ class ProductOwnerAgent:
                 "title": "...",
                 "capability": "...",
                 "benefit": "...",
-                "story": "As a ... I want ... so that ...",
+                # Example sentence follows the project language so the
+                # model is not pulled back to English by the shape itself.
+                "story": user_story_template(context.language),
                 "business_value": "...",
                 "acceptance_criteria": [{
                     "statement": "...",
@@ -220,6 +226,34 @@ class ProductOwnerAgent:
                 if str(value or "").strip()
             }
         )
+        # Localize human-readable text only; keys, enums, candidate keys
+        # and copied ALLOWED references must stay verbatim for the
+        # strict CandidateBacklogAuthorityValidator.
+        language_rules = structured_output_language_rules(
+            context.language,
+            translatable_fields=[
+                "title",
+                "description",
+                "business_goal",
+                "business_value",
+                "capability",
+                "benefit",
+                "story",
+                "acceptance_criteria[].statement",
+                "candidate_priority_rationale",
+                "candidate_complexity_rationale",
+                "warnings",
+            ],
+        )
+        # The validator's coverage rule is mechanical: every canonical
+        # mvp_scope item must appear verbatim as "mvp_scope:<item>" in at
+        # least one provenance_refs. State it with the exact strings instead
+        # of a vague "preserve the MVP" (observed RED: 2 items silently
+        # dropped and one reference invented).
+        required_mvp_refs_json = json.dumps(
+            self._required_mvp_refs(context),
+            ensure_ascii=False,
+        )
         allowed_actor_refs_json = json.dumps(
             allowed_actor_refs,
             ensure_ascii=False,
@@ -283,6 +317,14 @@ class ProductOwnerAgent:
             "- Return JSON only.\n"
             "- Do not wrap the response in Markdown fences.\n"
             "\n"
+            "REQUIRED MVP COVERAGE (checked by the canonical validator)\n"
+            "- Each reference below must appear verbatim in the provenance_refs "
+            "of at least one story (one story may cover several).\n"
+            "- Never write an mvp_scope: reference that is not in this list.\n"
+            f"{required_mvp_refs_json}\n"
+            "\n"
+            f"{language_rules}"
+            "\n"
             "EXACT OUTPUT SHAPE (replace only example values; preserve keys)\n"
             f"{output_shape_json}\n"
             "\n"
@@ -296,6 +338,51 @@ class ProductOwnerAgent:
             f"{context_json}\n"
         )
 
+
+    @staticmethod
+    def _required_mvp_refs(
+        context: ProjectManagementContextV1,
+    ) -> list[str]:
+        """Exact "mvp_scope:<item>" references the validator requires."""
+        refs: list[str] = []
+        for item in context.mvp_scope:
+            value = str(item or "").strip()
+            ref = f"mvp_scope:{value}"
+            if value and ref not in refs:
+                refs.append(ref)
+        return refs
+
+    @staticmethod
+    def _authority_repair_prompt(
+        prompt: str,
+        authority,
+    ) -> str:
+        """
+        Original contract + the validator's exact findings.
+
+        The previous output is deliberately NOT resent: on small
+        per-minute token budgets (Groq free tier: 8000 TPM) prompt +
+        previous backlog + answer budget cannot fit in one request.
+        """
+        # Bounded report: at most 20 findings of 300 characters.
+        findings = [str(error)[:300] for error in list(authority.errors)[:20]]
+        report = json.dumps(
+            {
+                "error_codes": list(authority.error_codes),
+                "errors": findings,
+            },
+            ensure_ascii=False,
+        )
+        return (
+            f"{prompt}\n"
+            "AUTHORITY VALIDATION FAILED ON YOUR PREVIOUS ANSWER\n"
+            "- Regenerate the COMPLETE candidate backlog from the contract above.\n"
+            "- Every provenance_refs/source_ref must be copied exactly from "
+            "ALLOWED PROVENANCE REFERENCES; drop any reference that is not listed.\n"
+            "- Cover every reference of REQUIRED MVP COVERAGE.\n"
+            "- The validator reported:\n"
+            f"{report}\n"
+        )
 
     async def generate_candidate_backlog(
         self,
@@ -426,6 +513,45 @@ class ProductOwnerAgent:
                 authority.error_codes,
                 authority.errors,
             )
+            # ONE bounded repair with the validator's exact findings. The
+            # LLM still only proposes: the repaired candidate goes through
+            # the same schema + authority validation, nothing is patched
+            # locally.
+            try:
+                repaired_response = await provider.invoke(
+                    self._authority_repair_prompt(prompt, authority),
+                    "product_owner_candidate_backlog",
+                )
+                repaired = CandidateBacklogV1.model_validate(
+                    extract_json_object(repaired_response)
+                )
+                repaired_authority = (
+                    candidate_backlog_authority_validator.validate(
+                        context=context,
+                        candidate=repaired,
+                    )
+                )
+            except Exception as repair_exc:
+                # Provider or schema failure during the repair: keep the
+                # original, more meaningful rejection as the reason.
+                logger.warning(
+                    "[ProductOwner] Authority repair failed | error=%s",
+                    repair_exc,
+                )
+                repaired_authority = None
+
+            if repaired_authority is not None and repaired_authority.is_valid:
+                logger.info("[ProductOwner] Candidate accepted after one authority repair")
+                return repaired
+
+            if repaired_authority is not None:
+                logger.warning(
+                    "[ProductOwner] Authority repair rejected | codes=%s | errors=%s",
+                    repaired_authority.error_codes,
+                    repaired_authority.errors,
+                )
+                authority = repaired_authority
+
             raise ProductOwnerGenerationError(
                 "candidate_authority_rejected",
                 (

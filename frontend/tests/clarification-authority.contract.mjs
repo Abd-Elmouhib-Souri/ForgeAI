@@ -23,15 +23,17 @@ const typesPath = path.join(
 );
 
 
+// Line endings normalized: on Windows (git core.autocrlf) the sources are
+// checked out with CRLF and the "\n\n" markers below would never match.
 const detail = fs.readFileSync(
   detailPath,
   "utf8"
-);
+).replace(/\r\n/g, "\n");
 
 const types = fs.readFileSync(
   typesPath,
   "utf8"
-);
+).replace(/\r\n/g, "\n");
 
 
 const panelStart = detail.indexOf(
