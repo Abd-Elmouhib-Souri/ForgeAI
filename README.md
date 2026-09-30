@@ -1,207 +1,170 @@
----
-base_model: google/paligemma-3b-pt-224
-library_name: peft
-pipeline_tag: text-generation
-tags:
-- base_model:adapter:google/paligemma-3b-pt-224
-- lora
-- transformers
----
+# ForgeAI
 
-# Model Card for Model ID
+ForgeAI transforme une idée de projet ou de startup en dossier complet : étude de marché,
+concurrence, SWOT, Business Model Canvas, estimation financière, personas, score et verdict,
+plan produit (backlog, sprints), architecture de la solution, et exports PDF, Word et PowerPoint.
+Des agents d'IA proposent, des règles déterministes valident et décident, l'interface affiche.
 
-<!-- Provide a quick summary of what the model is/does. -->
+Le projet comprend deux espaces :
 
+- **l'espace utilisateur** : inscription, projets, analyses, rapports, exports ;
+- **la console d'administration** : utilisateurs, projets, analyses (diagnostic, relance),
+  erreurs, santé du système, journal d'audit. Elle est protégée par une double authentification (2FA).
 
+## Architecture
 
-## Model Details
+| Service | Rôle | Adresse sur votre machine |
+|---|---|---|
+| `frontend` (Next.js, lancé avec npm) | espace utilisateur + console admin | http://localhost:3000 |
+| `backend` (FastAPI) | API publique, exécute les analyses | http://localhost:8000 (documentation : `/docs`) |
+| `backend-admin` (FastAPI) | API admin séparée | http://127.0.0.1:8002 (jamais exposée au réseau) |
+| `postgres` | base de données | port 5432 |
+| `redis` | limites de connexion, cache | port 6379 |
+| `chromadb` | base vectorielle | port 8001 |
 
-### Model Description
+Le backend, l'API admin, PostgreSQL, Redis et ChromaDB tournent dans Docker.
+Le frontend se lance à part avec npm.
 
-<!-- Provide a longer summary of what this model is. -->
+## Prérequis
 
+- **Git**
+- **Docker Desktop**, avec Docker Compose v2 (commande `docker compose`)
+- **Node.js 20.9 ou plus récent** (pour le frontend)
+- **Python 3.10 ou plus récent**, uniquement pour le script qui prépare la configuration
+- Une clé d'API **Gemini** (https://aistudio.google.com/apikey) et/ou **Groq**
+  (https://console.groq.com/keys). Les deux sont gratuites ; au moins une est nécessaire pour lancer une analyse.
 
+## Installation
 
-- **Developed by:** [More Information Needed]
-- **Funded by [optional]:** [More Information Needed]
-- **Shared by [optional]:** [More Information Needed]
-- **Model type:** [More Information Needed]
-- **Language(s) (NLP):** [More Information Needed]
-- **License:** [More Information Needed]
-- **Finetuned from model [optional]:** [More Information Needed]
+Les commandes sont les mêmes sous Windows (PowerShell), macOS et Linux.
 
-### Model Sources [optional]
+### 1. Cloner le dépôt
 
-<!-- Provide the basic links for the model. -->
+```
+git clone https://github.com/Abd-Elmouhib-Souri/ForgeAI.git
+cd ForgeAI
+```
 
-- **Repository:** [More Information Needed]
-- **Paper [optional]:** [More Information Needed]
-- **Demo [optional]:** [More Information Needed]
+### 2. Préparer la configuration
 
-## Uses
+```
+python scripts/init_env.py
+```
 
-<!-- Address questions around how the model is intended to be used, including the foreseeable users of the model and those affected by the model. -->
+Le script crée `.env` et `frontend/.env.local` à partir des modèles. Il génère au hasard tous les
+secrets internes (JWT, session, clé de chiffrement 2FA, mot de passe PostgreSQL, jeton ChromaDB),
+puis affiche la liste des clés d'API qu'il vous reste à fournir. Il n'écrase jamais un `.env` existant.
 
-### Direct Use
+Ouvrez ensuite `.env` et collez vos clés :
 
-<!-- This section is for the model use without fine-tuning or plugging into a larger ecosystem/app. -->
+| Clé | Nécessaire ? |
+|---|---|
+| `GEMINI_API_KEY` et/ou `GROQ_API_KEY` | **oui, au moins une** (analyses) |
+| `TAVILY_API_KEY` | recommandée (recherche de sources). Sans clé, mettez `ENABLE_TAVILY_SEARCH=false` |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | facultatives (bouton « Continuer avec Google ») |
+| `SMTP_USERNAME` / `SMTP_PASSWORD` | facultatives (voir « E-mails » plus bas) |
 
-[More Information Needed]
+`.env` est ignoré par git : ne le committez jamais et ne le partagez pas.
 
-### Downstream Use [optional]
+### 3. Démarrer les services
 
-<!-- This section is for the model use when fine-tuned for a task, or when plugged into a larger ecosystem/app -->
+```
+docker compose up -d --build
+```
 
-[More Information Needed]
+La première construction prend plusieurs minutes (installation des dépendances Python).
 
-### Out-of-Scope Use
+### 4. Créer les tables
 
-<!-- This section addresses misuse, malicious use, and uses that the model will not work well for. -->
+```
+docker compose exec backend alembic upgrade head
+```
 
-[More Information Needed]
+À relancer après chaque mise à jour du code qui ajoute une migration. La page
+« Santé du système » signale une base en retard.
 
-## Bias, Risks, and Limitations
+### 5. Créer le premier administrateur
 
-<!-- This section is meant to convey both technical and sociotechnical limitations. -->
+```
+docker compose exec backend python -m app.scripts.create_admin
+```
 
-[More Information Needed]
+Répondez aux questions : e-mail, nom, mot de passe (au moins 12 caractères, saisi deux fois).
+Si l'e-mail appartient déjà à un compte, celui-ci devient administrateur. Seule une personne qui
+contrôle le serveur peut lancer cette commande, et l'opération est inscrite au journal d'audit.
 
-### Recommendations
+### 6. Lancer le frontend
 
-<!-- This section is meant to convey recommendations with respect to the bias, risk, and technical limitations. -->
+```
+cd frontend
+npm ci
+npm run dev
+```
 
-Users (both direct and downstream) should be made aware of the risks, biases and limitations of the model. More information needed for further recommendations.
+## Premiers pas
 
-## How to Get Started with the Model
+**Console d'administration** : http://localhost:3000/admin/login
 
-Use the code below to get started with the model.
+À la première connexion, la console affiche un QR code. Scannez-le avec une application
+d'authentification (Google Authenticator, Microsoft Authenticator…), puis saisissez le code à 6 chiffres.
+Ce code est ensuite demandé à chaque connexion et avant chaque action sensible.
 
-[More Information Needed]
+Ouvrez ensuite **Santé du système** : chaque service y est testé pour de vrai. On y voit
+la base, les migrations, Redis, ChromaDB, l'API publique et les modèles Gemini/Groq configurés.
+Tout doit être « Opérationnel », sauf les services facultatifs que vous n'avez pas configurés.
 
-## Training Details
+**Espace utilisateur** : http://localhost:3000
 
-### Training Data
+1. Créez un compte sur http://localhost:3000/register.
+2. Vérifiez l'adresse e-mail avec le lien reçu (voir « E-mails » ci-dessous si SMTP n'est pas configuré).
+3. Connectez-vous, créez un projet, lancez l'analyse et suivez sa progression.
 
-<!-- This should link to a Dataset Card, perhaps with a short stub of information on what the training data is all about as well as documentation related to data pre-processing or additional filtering. -->
+## E-mails
 
-[More Information Needed]
+Avec SMTP configuré dans `.env` (par exemple un mot de passe d'application Gmail), les e-mails
+de vérification et de mot de passe oublié sont envoyés normalement.
 
-### Training Procedure
+**Sans SMTP, en développement** (`ENVIRONMENT=development`), aucun e-mail ne part : son contenu,
+lien compris, est écrit dans le journal du backend. Pour le retrouver :
 
-<!-- This relates heavily to the Technical Specifications. Content here should link to that section when it is relevant to the training procedure. -->
+```
+docker compose logs backend
+```
 
-#### Preprocessing [optional]
+Cherchez « SMTP non configuré » et ouvrez le lien dans votre navigateur. En production, ce repli
+est désactivé : l'envoi échoue et l'échec est journalisé.
 
-[More Information Needed]
+## Tests
 
+```
+docker compose exec backend python -m pip install -r requirements-dev.txt
+docker compose exec backend python -m pytest -q
+cd frontend
+node --test "tests/*.test.mjs"
+```
 
-#### Training Hyperparameters
+## Arrêter, redémarrer, réinitialiser
 
-- **Training regime:** [More Information Needed] <!--fp32, fp16 mixed precision, bf16 mixed precision, bf16 non-mixed precision, fp16 non-mixed precision, fp8 mixed precision -->
+```
+docker compose stop            # arrêter (les données sont conservées)
+docker compose up -d           # redémarrer
+docker compose down -v         # tout supprimer, base comprise (irréversible)
+```
 
-#### Speeds, Sizes, Times [optional]
+## Dépannage
 
-<!-- This section provides information about throughput, start/end time, checkpoint size if relevant, etc. -->
+- **Un port est déjà pris** (5432, 6379, 8000, 8001, 8002, 3000) : arrêtez le programme qui l'occupe.
+  Pour l'API admin, vous pouvez aussi changer `ADMIN_API_PORT` dans `.env`, et
+  `NEXT_PUBLIC_ADMIN_API_URL` dans `frontend/.env.local`.
+- **Le backend redémarre en boucle** : `docker compose logs backend`. Une variable obligatoire
+  manque souvent dans `.env` ; relancez `python scripts/init_env.py` sur un dépôt sans `.env`.
+- **« Analyse échouée » immédiatement** : clé d'IA absente, invalide ou quota atteint.
+  La page Santé du système indique laquelle, ainsi que les modèles introuvables.
+- **Le bouton « Continuer avec Google » échoue** : c'est normal sans `GOOGLE_CLIENT_ID` /
+  `GOOGLE_CLIENT_SECRET`. Utilisez l'inscription par e-mail.
 
-[More Information Needed]
+## Sécurité
 
-## Evaluation
-
-<!-- This section describes the evaluation protocols and provides the results. -->
-
-### Testing Data, Factors & Metrics
-
-#### Testing Data
-
-<!-- This should link to a Dataset Card if possible. -->
-
-[More Information Needed]
-
-#### Factors
-
-<!-- These are the things the evaluation is disaggregating by, e.g., subpopulations or domains. -->
-
-[More Information Needed]
-
-#### Metrics
-
-<!-- These are the evaluation metrics being used, ideally with a description of why. -->
-
-[More Information Needed]
-
-### Results
-
-[More Information Needed]
-
-#### Summary
-
-
-
-## Model Examination [optional]
-
-<!-- Relevant interpretability work for the model goes here -->
-
-[More Information Needed]
-
-## Environmental Impact
-
-<!-- Total emissions (in grams of CO2eq) and additional considerations, such as electricity usage, go here. Edit the suggested text below accordingly -->
-
-Carbon emissions can be estimated using the [Machine Learning Impact calculator](https://mlco2.github.io/impact#compute) presented in [Lacoste et al. (2019)](https://arxiv.org/abs/1910.09700).
-
-- **Hardware Type:** [More Information Needed]
-- **Hours used:** [More Information Needed]
-- **Cloud Provider:** [More Information Needed]
-- **Compute Region:** [More Information Needed]
-- **Carbon Emitted:** [More Information Needed]
-
-## Technical Specifications [optional]
-
-### Model Architecture and Objective
-
-[More Information Needed]
-
-### Compute Infrastructure
-
-[More Information Needed]
-
-#### Hardware
-
-[More Information Needed]
-
-#### Software
-
-[More Information Needed]
-
-## Citation [optional]
-
-<!-- If there is a paper or blog post introducing the model, the APA and Bibtex information for that should go in this section. -->
-
-**BibTeX:**
-
-[More Information Needed]
-
-**APA:**
-
-[More Information Needed]
-
-## Glossary [optional]
-
-<!-- If relevant, include terms and calculations in this section that can help readers understand the model or model card. -->
-
-[More Information Needed]
-
-## More Information [optional]
-
-[More Information Needed]
-
-## Model Card Authors [optional]
-
-[More Information Needed]
-
-## Model Card Contact
-
-[More Information Needed]
-### Framework versions
-
-- PEFT 0.19.0
+- Ne committez jamais `.env` ni `frontend/.env.local` (ils sont ignorés par git).
+- L'API admin n'écoute que sur `127.0.0.1`. En production, elle se place derrière un VPN.
+- Changez toutes les clés d'API avant une mise en production.
