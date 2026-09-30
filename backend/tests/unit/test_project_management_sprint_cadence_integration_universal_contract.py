@@ -77,6 +77,7 @@ async def _run_pipeline(
 
     context = SimpleNamespace(
         project_id="800",
+        language="fr",
         regulatory_flags=[],
         human_oversight=[],
         unknowns=[],

@@ -73,13 +73,13 @@ async def get_current_user(
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Compte d?sactiv?.",
+            detail="Compte désactivé.",
         )
 
     if not user.is_email_verified:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Adresse email non v?rifi?e.",
+            detail="Adresse e-mail non vérifiée.",
         )
 
     return user

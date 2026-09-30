@@ -2,8 +2,7 @@ import type { Metadata } from "next";
 import localFont from "next/font/local";
 import "./globals.css";
 import { cn } from "@/lib/utils";
-import { AuthProvider } from "@/lib/auth-context";
-import { LanguageProvider } from "@/lib/language-context";
+import Providers from "./providers";
 
 const geistSans = localFont({
   src: "./fonts/GeistVF.woff",
@@ -18,7 +17,7 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "DotJcom ForgeAI",
+  title: "ForgeAI",
   description: "From Idea to Startup, Powered by AI.",
 };
 
@@ -32,9 +31,8 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
-        <LanguageProvider>
-          <AuthProvider>{children}</AuthProvider>
-        </LanguageProvider>
+        {/* Public providers, skipped on /admin (see providers.tsx). */}
+        <Providers>{children}</Providers>
       </body>
     </html>
   );

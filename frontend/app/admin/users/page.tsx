@@ -1,9 +1,16 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { adminFetch, removeAdminToken } from "@/lib/admin-api";
+import { FormEvent, useCallback, useState } from "react";
+import { Download, Eye, Mail, Plus, Power, Search, Trash2, X } from "lucide-react";
+import { Button, ButtonLink } from "@/app/admin/_components/Button";
+import FilterTabs from "@/app/admin/_components/FilterTabs";
+import { adminDownload, adminFetch, isAdminActionCancelled } from "@/lib/admin-api";
+import { buildListQuery, type Page } from "@/app/admin/_components/listQuery";
+import Pagination from "@/app/admin/_components/Pagination";
+import type { AdminStats } from "@/app/admin/_components/stats";
+import { useAdminResource } from "@/app/admin/_components/useAdminResource";
+import { ROLE_LABELS, roleLabel } from "@/app/admin/_components/labels";
+import AdminPageHeader from "@/app/admin/_components/AdminPageHeader";
 
 type AdminUser = {
   id: number;
@@ -26,52 +33,99 @@ type CurrentAdmin = {
 
 const roles = ["admin", "entrepreneur", "student", "consultant"];
 
+// Sprint 7.4: each quick filter is a query sent to the API (no browser filtering).
+type QuickFilter = "all" | "verified" | "unverified" | "inactive" | "admins";
+const QUICK_FILTER_TABS: { value: QuickFilter; label: string }[] = [
+  { value: "all", label: "Tous" },
+  { value: "admins", label: "Administrateurs" },
+  { value: "verified", label: "Vérifiés" },
+  { value: "unverified", label: "Non vérifiés" },
+  { value: "inactive", label: "Inactifs" },
+];
+const QUICK_FILTERS: Record<QuickFilter, Record<string, string>> = {
+  all: {},
+  admins: { role: "admin" },
+  verified: { verified: "true" },
+  unverified: { verified: "false" },
+  inactive: { status: "inactive" },
+};
+
+const SORTS: Record<string, { label: string; sort: string; order: "asc" | "desc" }> = {
+  recent: { label: "Plus récents", sort: "created_at", order: "desc" },
+  oldest: { label: "Plus anciens", sort: "created_at", order: "asc" },
+  email: { label: "E-mail (A → Z)", sort: "email", order: "asc" },
+  name: { label: "Nom (A → Z)", sort: "full_name", order: "asc" },
+  projects: { label: "Plus de projets", sort: "project_count", order: "desc" },
+};
+
+const PAGE_SIZE = 25;
+
 export default function AdminUsersPage() {
-  const router = useRouter();
+  // The signed-in admin (to lock their own role / status controls).
+  const me = useAdminResource<CurrentAdmin>("/admin/me");
+  const currentAdmin = me.data;
+  const reloadMe = me.reload;
 
-  const [users, setUsers] = useState<AdminUser[]>([]);
-  const [currentAdmin, setCurrentAdmin] = useState<CurrentAdmin | null>(null);
-
-  const [isLoading, setIsLoading] = useState(true);
   const [actionLoadingId, setActionLoadingId] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
 
-  const [filter, setFilter] = useState<
-    "all" | "verified" | "unverified" | "inactive" | "admins"
-  >("all");
+  const [filter, setFilter] = useState<QuickFilter>("all");
+  const [searchDraft, setSearchDraft] = useState("");
+  const [search, setSearch] = useState("");
+  const [sortKey, setSortKey] = useState("recent");
+  const [page, setPage] = useState(1);
+
+  // The screen's filters: the same object drives the list and the CSV export.
+  const filters = {
+    ...QUICK_FILTERS[filter],
+    search,
+    sort: SORTS[sortKey].sort,
+    order: SORTS[sortKey].order,
+  };
+  const list = useAdminResource<Page<AdminUser>>(
+    `/admin/users${buildListQuery({ ...filters, page, page_size: PAGE_SIZE })}`,
+  );
+  const stats = useAdminResource<AdminStats>("/admin/stats");
+  const users = list.data?.items ?? [];
+  const reloadList = list.reload;
+  const reloadStats = stats.reload;
 
   const [showCreateAdmin, setShowCreateAdmin] = useState(false);
   const [newAdminEmail, setNewAdminEmail] = useState("");
   const [newAdminName, setNewAdminName] = useState("");
   const [newAdminPassword, setNewAdminPassword] = useState("");
 
-  const loadCurrentAdmin = useCallback(async () => {
-    try {
-      const data = await adminFetch("/auth/me");
-      setCurrentAdmin(data);
-    } catch {
-      setCurrentAdmin(null);
-    }
-  }, []);
-
+  // After an action: reload the current page and the counters.
   const loadUsers = useCallback(async () => {
-    try {
-      setIsLoading(true);
-      setError("");
-
-      const data = await adminFetch("/admin/users");
-      setUsers(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Erreur inconnue.");
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+    reloadList();
+    reloadStats();
+  }, [reloadList, reloadStats]);
 
   const refreshPageData = useCallback(async () => {
-    await Promise.all([loadCurrentAdmin(), loadUsers()]);
-  }, [loadCurrentAdmin, loadUsers]);
+    reloadMe();
+    await loadUsers();
+  }, [reloadMe, loadUsers]);
+
+  function changeFilter(next: QuickFilter) {
+    setFilter(next);
+    setPage(1); // a new filter starts at the first page
+  }
+
+  function applySearch(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSearch(searchDraft);
+    setPage(1);
+  }
+
+  async function exportCsv() {
+    try {
+      setError("");
+      await adminDownload(`/admin/users/export.csv${buildListQuery(filters)}`, "forgeai-utilisateurs.csv");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Export impossible.");
+    }
+  }
 
   async function toggleUserStatus(user: AdminUser) {
     try {
@@ -79,7 +133,11 @@ export default function AdminUsersPage() {
       setError("");
       setMessage("");
 
+      // Sensitive: the admin API requires a fresh 2FA code (Sprint 7.1).
       await adminFetch(`/admin/users/${user.id}/status`, {
+        confirm: user.is_active
+          ? `Désactiver le compte ${user.email} ?\nLa personne ne pourra plus se connecter.`
+          : `Réactiver le compte ${user.email} ?`,
         method: "PATCH",
         body: JSON.stringify({
           is_active: !user.is_active,
@@ -94,6 +152,7 @@ export default function AdminUsersPage() {
 
       await loadUsers();
     } catch (err) {
+      if (isAdminActionCancelled(err)) return;
       setError(err instanceof Error ? err.message : "Erreur action utilisateur.");
     } finally {
       setActionLoadingId(null);
@@ -107,6 +166,7 @@ export default function AdminUsersPage() {
       setMessage("");
 
       await adminFetch(`/admin/users/${user.id}/role`, {
+        confirm: `Changer le rôle de ${user.email} : ${roleLabel(user.role)} → ${roleLabel(newRole)} ?`,
         method: "PATCH",
         body: JSON.stringify({
           role: newRole,
@@ -116,6 +176,7 @@ export default function AdminUsersPage() {
       setMessage(`Rôle de ${user.email} mis à jour.`);
       await loadUsers();
     } catch (err) {
+      if (isAdminActionCancelled(err)) return;
       setError(err instanceof Error ? err.message : "Erreur changement rôle.");
     } finally {
       setActionLoadingId(null);
@@ -145,24 +206,21 @@ export default function AdminUsersPage() {
   }
 
   async function deleteUser(user: AdminUser) {
-    const confirmed = window.confirm(
-      `Supprimer définitivement le compte ${user.email} ?\n\nCette action est irréversible.`
-    );
-
-    if (!confirmed) return;
-
     try {
       setActionLoadingId(user.id);
       setError("");
       setMessage("");
 
+      // One dialog: what is deleted + the 2FA code (no window.confirm).
       await adminFetch(`/admin/users/${user.id}`, {
+        confirm: `Supprimer définitivement le compte ${user.email} ?\nCette action est irréversible.`,
         method: "DELETE",
       });
 
       setMessage(`Compte ${user.email} supprimé avec succès.`);
       await refreshPageData();
     } catch (err) {
+      if (isAdminActionCancelled(err)) return;
       setError(
         err instanceof Error ? err.message : "Erreur suppression utilisateur."
       );
@@ -180,6 +238,7 @@ export default function AdminUsersPage() {
       setActionLoadingId(-1);
 
       const data = await adminFetch("/admin/users/create-admin", {
+        confirm: `Créer le compte administrateur ${newAdminEmail} ?\nIl aura accès à toute la console.`,
         method: "POST",
         body: JSON.stringify({
           email: newAdminEmail,
@@ -200,127 +259,25 @@ export default function AdminUsersPage() {
 
       await loadUsers();
     } catch (err) {
+      if (isAdminActionCancelled(err)) return;
       setError(err instanceof Error ? err.message : "Erreur création admin.");
     } finally {
       setActionLoadingId(null);
     }
   }
 
-  function handleLogout() {
-    removeAdminToken();
-    router.replace("/admin/login");
-  }
-
-  useEffect(() => {
-    void refreshPageData();
-  }, [refreshPageData]);
-
-  const filteredUsers = useMemo(() => {
-    if (filter === "verified") {
-      return users.filter((user) => user.is_email_verified);
-    }
-
-    if (filter === "unverified") {
-      return users.filter((user) => !user.is_email_verified);
-    }
-
-    if (filter === "inactive") {
-      return users.filter((user) => !user.is_active);
-    }
-
-    if (filter === "admins") {
-      return users.filter((user) => user.role === "admin");
-    }
-
-    return users;
-  }, [users, filter]);
-
-  const stats = useMemo(() => {
-    return {
-      total: users.length,
-      verified: users.filter((user) => user.is_email_verified).length,
-      unverified: users.filter((user) => !user.is_email_verified).length,
-      inactive: users.filter((user) => !user.is_active).length,
-      admins: users.filter((user) => user.role === "admin").length,
-    };
-  }, [users]);
-
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
-      <header className="border-b border-white/10 bg-white/5 px-6 py-4 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div>
-            <p className="text-sm font-medium text-red-300">ForgeAI Admin</p>
-            <h1 className="text-2xl font-bold">Gestion utilisateurs</h1>
-            {currentAdmin && (
-              <p className="mt-1 text-xs text-white/40">
-                Connecté : {currentAdmin.email}
-              </p>
-            )}
-          </div>
-
-          <nav className="flex flex-wrap items-center gap-3 text-sm">
-            <button
-              type="button"
-              onClick={() => router.back()}
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 transition hover:bg-white/10"
-            >
-              Retour
-            </button>
-
-            <Link
-              href="/admin/dashboard"
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 transition hover:bg-white/10"
-            >
-              Dashboard
-            </Link>
-
-            <Link
-              href="/admin/projects"
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 transition hover:bg-white/10"
-            >
-              Projects
-            </Link>
-
-            <Link
-              href="/admin/analyses"
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 transition hover:bg-white/10"
-            >
-              Analyses
-            </Link>
-
-            <Link
-              href="/admin/health"
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 transition hover:bg-white/10"
-            >
-              Health
-            </Link>
-
-            <Link
-              href="/admin/errors"
-              className="rounded-lg border border-white/10 px-4 py-2 text-white/80 transition hover:bg-white/10"
-            >
-              Errors
-            </Link>
-
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="rounded-lg border border-red-400/30 bg-red-500/10 px-4 py-2 text-red-200 transition hover:bg-red-500/20"
-            >
-              Déconnexion
-            </button>
-          </nav>
-        </div>
-      </header>
+    <div>
+      <AdminPageHeader title="Utilisateurs" subtitle="Comptes clients et administrateurs." />
 
       <section className="mx-auto max-w-7xl px-6 py-8">
         <div className="grid gap-4 md:grid-cols-5">
-          <StatCard title="Total" value={stats.total} />
-          <StatCard title="Admins" value={stats.admins} />
-          <StatCard title="Vérifiés" value={stats.verified} />
-          <StatCard title="Non vérifiés" value={stats.unverified} />
-          <StatCard title="Inactifs" value={stats.inactive} />
+          {/* Counters of the whole platform, computed by the database. */}
+          <StatCard title="Total" value={stats.data?.users.total ?? 0} />
+          <StatCard title="Administrateurs" value={stats.data?.users.admins ?? 0} />
+          <StatCard title="Vérifiés" value={stats.data?.users.verified ?? 0} />
+          <StatCard title="Non vérifiés" value={stats.data?.users.unverified ?? 0} />
+          <StatCard title="Inactifs" value={stats.data?.users.inactive ?? 0} />
         </div>
 
         <div className="mt-6 rounded-2xl border border-white/10 bg-white/5 p-6">
@@ -332,46 +289,47 @@ export default function AdminUsersPage() {
               </p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setShowCreateAdmin(true)}
-                className="rounded-lg bg-red-500 px-4 py-2 text-xs font-semibold text-white transition hover:bg-red-400"
-              >
-                + Ajouter admin
-              </button>
-
-              <FilterButton
-                label="Tous"
-                active={filter === "all"}
-                onClick={() => setFilter("all")}
-              />
-
-              <FilterButton
-                label="Admins"
-                active={filter === "admins"}
-                onClick={() => setFilter("admins")}
-              />
-
-              <FilterButton
-                label="Vérifiés"
-                active={filter === "verified"}
-                onClick={() => setFilter("verified")}
-              />
-
-              <FilterButton
-                label="Non vérifiés"
-                active={filter === "unverified"}
-                onClick={() => setFilter("unverified")}
-              />
-
-              <FilterButton
-                label="Inactifs"
-                active={filter === "inactive"}
-                onClick={() => setFilter("inactive")}
-              />
+            {/* Actions first, then the filters on their own line. */}
+            <div className="flex flex-col items-start gap-3 md:items-end">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="primary" size="sm" icon={Plus} onClick={() => setShowCreateAdmin(true)}>
+                  Ajouter un admin
+                </Button>
+                <Button size="sm" icon={Download} onClick={exportCsv}>
+                  Exporter en CSV
+                </Button>
+              </div>
+              <FilterTabs label="Filtrer les utilisateurs" options={QUICK_FILTER_TABS} value={filter} onChange={changeFilter} />
             </div>
           </div>
+
+          {/* Search and sort run on the server (Sprint 7.4). */}
+          <form onSubmit={applySearch} className="mt-5 flex flex-col gap-3 md:flex-row">
+            <input
+              value={searchDraft}
+              onChange={(event) => setSearchDraft(event.target.value)}
+              placeholder="Rechercher par e-mail ou nom..."
+              className="w-full rounded-lg border border-white/10 bg-slate-900 px-4 py-2.5 text-sm outline-none focus:border-red-300 md:max-w-md"
+            />
+            <Button type="submit" icon={Search}>
+              Rechercher
+            </Button>
+            <select
+              value={sortKey}
+              onChange={(event) => {
+                setSortKey(event.target.value);
+                setPage(1);
+              }}
+              aria-label="Trier"
+              className="rounded-lg border border-white/10 bg-slate-900 px-3 py-2.5 text-sm md:ml-auto"
+            >
+              {Object.entries(SORTS).map(([key, option]) => (
+                <option key={key} value={key}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </form>
 
           {message && (
             <div className="mt-5 rounded-lg border border-emerald-400/30 bg-emerald-500/10 p-3 text-sm text-emerald-200">
@@ -379,9 +337,9 @@ export default function AdminUsersPage() {
             </div>
           )}
 
-          {error && (
+          {(error || list.error) && (
             <div className="mt-5 rounded-lg border border-red-400/30 bg-red-500/10 p-3 text-sm text-red-200">
-              {error}
+              {error || list.error}
             </div>
           )}
 
@@ -397,13 +355,9 @@ export default function AdminUsersPage() {
                   </p>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => setShowCreateAdmin(false)}
-                  className="rounded-lg border border-white/10 px-3 py-2 text-xs text-white/70 transition hover:bg-white/10"
-                >
+                <Button variant="ghost" size="sm" icon={X} onClick={() => setShowCreateAdmin(false)}>
                   Fermer
-                </button>
+                </Button>
               </div>
 
               <form onSubmit={createAdmin} className="grid gap-4 md:grid-cols-4">
@@ -441,53 +395,49 @@ export default function AdminUsersPage() {
                     value={newAdminPassword}
                     onChange={(event) => setNewAdminPassword(event.target.value)}
                     required
-                    minLength={8}
-                    placeholder="Minimum 8 caractères"
+                    minLength={12}
+                    placeholder="Minimum 12 caractères"
                     className="mt-1 w-full rounded-lg border border-white/10 bg-slate-900 px-4 py-3 text-sm outline-none focus:border-red-300"
                   />
                 </div>
 
                 <div className="flex items-end">
-                  <button
-                    type="submit"
-                    disabled={actionLoadingId === -1}
-                    className="w-full rounded-lg bg-red-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-red-400 disabled:opacity-50"
-                  >
+                  <Button type="submit" variant="primary" block loading={actionLoadingId === -1}>
                     {actionLoadingId === -1 ? "Création..." : "Créer admin"}
-                  </button>
+                  </Button>
                 </div>
               </form>
             </div>
           )}
 
-          {isLoading ? (
+          {!list.data ? (
             <div className="mt-6 rounded-xl border border-white/10 bg-white/5 p-6 text-white/60">
               Chargement des utilisateurs...
             </div>
           ) : (
             <div className="mt-6 overflow-x-auto">
-              <table className="w-full min-w-[1250px] border-separate border-spacing-y-3 text-left text-sm">
+              <table className="w-full min-w-[960px] border-separate border-spacing-y-3 text-left text-sm">
                 <thead className="text-white/50">
                   <tr>
-                    <th className="px-4 py-2">Utilisateur</th>
-                    <th className="px-4 py-2">Rôle</th>
-                    <th className="px-4 py-2">Email</th>
-                    <th className="px-4 py-2">Statut</th>
-                    <th className="px-4 py-2">Projets</th>
-                    <th className="px-4 py-2">Créé le</th>
-                    <th className="px-4 py-2 text-right">Actions</th>
+                    <th className="px-3 py-2">Utilisateur</th>
+                    <th className="px-3 py-2">Rôle</th>
+                    <th className="px-3 py-2">Email</th>
+                    <th className="px-3 py-2">Statut</th>
+                    <th className="px-3 py-2">Projets</th>
+                    <th className="px-3 py-2">Créé le</th>
+                    <th className="px-3 py-2 text-right">Actions</th>
                   </tr>
                 </thead>
 
                 <tbody>
-                  {filteredUsers.map((user) => {
+                  {users.map((user) => {
                     const isBusy = actionLoadingId === user.id;
                     const isCurrentAdmin = currentAdmin?.id === user.id;
                     const canDelete = user.project_count === 0 && !isCurrentAdmin;
 
                     return (
                       <tr key={user.id} className="rounded-xl bg-white/5">
-                        <td className="rounded-l-xl px-4 py-4">
+                        <td className="rounded-l-xl px-3 py-4">
                           <div className="font-medium">{user.full_name}</div>
                           <div className="text-xs text-white/50">{user.email}</div>
 
@@ -498,10 +448,11 @@ export default function AdminUsersPage() {
                           )}
                         </td>
 
-                        <td className="px-4 py-4">
+                        <td className="px-3 py-4">
                           <select
                             value={user.role}
-                            disabled={isBusy}
+                            // An admin cannot change their own role from here.
+                            disabled={isBusy || isCurrentAdmin}
                             onChange={(event) =>
                               updateUserRole(user, event.target.value)
                             }
@@ -509,13 +460,13 @@ export default function AdminUsersPage() {
                           >
                             {roles.map((role) => (
                               <option key={role} value={role}>
-                                {role}
+                                {ROLE_LABELS[role] ?? role}
                               </option>
                             ))}
                           </select>
                         </td>
 
-                        <td className="px-4 py-4">
+                        <td className="px-3 py-4">
                           {user.is_email_verified ? (
                             <Badge color="green">Vérifié</Badge>
                           ) : (
@@ -523,7 +474,7 @@ export default function AdminUsersPage() {
                           )}
                         </td>
 
-                        <td className="px-4 py-4">
+                        <td className="px-3 py-4">
                           {user.is_active ? (
                             <Badge color="green">Actif</Badge>
                           ) : (
@@ -537,54 +488,43 @@ export default function AdminUsersPage() {
                           )}
                         </td>
 
-                        <td className="px-4 py-4 font-semibold">
+                        <td className="px-3 py-4 font-semibold">
                           {user.project_count}
                         </td>
 
-                        <td className="px-4 py-4 text-white/60">
+                        <td className="px-3 py-4 text-white/60">
                           {formatDate(user.created_at)}
                         </td>
 
-                        <td className="rounded-r-xl px-4 py-4">
-                          <div className="flex justify-end gap-2">
-                            <Link
-                              href={`/admin/users/${user.id}`}
-                              className="rounded-lg border border-white/10 px-3 py-2 text-xs text-white/80 transition hover:bg-white/10"
-                            >
+                        <td className="rounded-r-xl px-3 py-4">
+                          {/* Flex + gap: buttons wrap cleanly, never on top of each other. */}
+                          <div className="flex flex-wrap justify-end gap-2">
+                            <ButtonLink href={`/admin/users/${user.id}`} size="sm" icon={Eye}>
                               Voir
-                            </Link>
+                            </ButtonLink>
 
                             {!user.is_email_verified && (
-                              <button
-                                disabled={isBusy}
-                                onClick={() => resendVerification(user)}
-                                className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-200 transition hover:bg-cyan-500/20 disabled:opacity-50"
-                              >
-                                Renvoyer email
-                              </button>
+                              <Button variant="info" size="sm" icon={Mail} disabled={isBusy} onClick={() => resendVerification(user)}>
+                                Renvoyer l&apos;e-mail
+                              </Button>
                             )}
 
                             {canDelete && (
-                              <button
-                                disabled={isBusy}
-                                onClick={() => deleteUser(user)}
-                                className="rounded-lg border border-red-500/40 bg-red-600/10 px-3 py-2 text-xs text-red-200 transition hover:bg-red-600/20 disabled:opacity-50"
-                              >
+                              <Button variant="danger" size="sm" icon={Trash2} disabled={isBusy} onClick={() => deleteUser(user)}>
                                 Supprimer
-                              </button>
+                              </Button>
                             )}
 
-                            <button
+                            <Button
+                              variant={user.is_active ? "danger" : "success"}
+                              size="sm"
+                              icon={Power}
                               disabled={isBusy || isCurrentAdmin}
+                              title={isCurrentAdmin ? "Vous ne pouvez pas désactiver votre propre compte." : undefined}
                               onClick={() => toggleUserStatus(user)}
-                              className={
-                                user.is_active
-                                  ? "rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-2 text-xs text-red-200 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-                                  : "rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-                              }
                             >
                               {user.is_active ? "Désactiver" : "Activer"}
-                            </button>
+                            </Button>
                           </div>
                         </td>
                       </tr>
@@ -593,16 +533,24 @@ export default function AdminUsersPage() {
                 </tbody>
               </table>
 
-              {filteredUsers.length === 0 && (
+              {list.data.total === 0 && (
                 <div className="rounded-xl border border-white/10 bg-white/5 p-6 text-center text-white/50">
                   Aucun utilisateur trouvé.
                 </div>
               )}
+
+              <Pagination
+                page={page}
+                pageSize={PAGE_SIZE}
+                total={list.data.total}
+                isLoading={list.isLoading}
+                onPageChange={setPage}
+              />
             </div>
           )}
         </div>
       </section>
-    </main>
+    </div>
   );
 }
 
@@ -612,29 +560,6 @@ function StatCard({ title, value }: { title: string; value: number }) {
       <p className="text-sm text-white/50">{title}</p>
       <p className="mt-2 text-3xl font-bold">{value}</p>
     </div>
-  );
-}
-
-function FilterButton({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={
-        active
-          ? "rounded-lg bg-red-500 px-3 py-2 text-xs font-medium text-white"
-          : "rounded-lg border border-white/10 px-3 py-2 text-xs text-white/70 transition hover:bg-white/10"
-      }
-    >
-      {label}
-    </button>
   );
 }
 

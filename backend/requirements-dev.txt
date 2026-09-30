@@ -9,3 +9,5 @@
 
 pytest==9.1.1
 pytest-asyncio==1.4.0
+# Sprint 7.1: in-memory SQLite for the admin API contracts
+aiosqlite==0.22.1
