@@ -2,8 +2,12 @@
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
+import { Download, Filter, RotateCcw } from "lucide-react";
+
 import { adminDownload, adminFetch } from "@/lib/admin-api";
 import AdminPageHeader from "@/app/admin/_components/AdminPageHeader";
+import { Button } from "@/app/admin/_components/Button";
+import Pagination from "@/app/admin/_components/Pagination";
 
 // Sprint 7.2: read-only view of the admin audit log (who, what, when, from where).
 
@@ -133,7 +137,6 @@ export default function AdminAuditPage() {
     }
   }
 
-  const totalPages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
   const inputClass =
     "mt-1 w-full rounded-lg border border-white/10 bg-white/10 px-3 py-2 text-sm text-white outline-none focus:border-red-300";
 
@@ -143,13 +146,9 @@ export default function AdminAuditPage() {
         title="Journal d'audit"
         subtitle="Toutes les actions et connexions admin. Les entrées ne peuvent être ni modifiées ni supprimées."
         actions={
-          <button
-            onClick={exportCsv}
-            disabled={isExporting}
-            className="rounded-lg bg-red-500 px-4 py-2 font-semibold text-white transition hover:bg-red-400 disabled:opacity-60"
-          >
+          <Button variant="primary" icon={Download} loading={isExporting} onClick={exportCsv}>
             {isExporting ? "Export..." : "Exporter en CSV"}
-          </button>
+          </Button>
         }
       />
 
@@ -216,16 +215,12 @@ export default function AdminAuditPage() {
             />
           </label>
           <div className="flex gap-3 md:col-span-3 lg:col-span-6">
-            <button type="submit" className="rounded-lg bg-white/15 px-4 py-2 text-sm font-semibold hover:bg-white/25">
+            <Button type="submit" icon={Filter}>
               Filtrer
-            </button>
-            <button
-              type="button"
-              onClick={resetFilters}
-              className="rounded-lg border border-white/10 px-4 py-2 text-sm text-white/70 hover:bg-white/10"
-            >
+            </Button>
+            <Button variant="ghost" icon={RotateCcw} onClick={resetFilters}>
               Réinitialiser
-            </button>
+            </Button>
           </div>
         </form>
 
@@ -309,24 +304,14 @@ export default function AdminAuditPage() {
               </tbody>
             </table>
           </div>
-          <div className="flex items-center justify-between border-t border-white/10 px-4 py-3 text-sm">
-            <button
-              onClick={() => setPage((current) => Math.max(1, current - 1))}
-              disabled={page <= 1 || isLoading}
-              className="rounded-lg border border-white/10 px-3 py-1.5 hover:bg-white/10 disabled:opacity-40"
-            >
-              Précédent
-            </button>
-            <span className="text-white/60">
-              Page {page} / {totalPages}
-            </span>
-            <button
-              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
-              disabled={page >= totalPages || isLoading}
-              className="rounded-lg border border-white/10 px-3 py-1.5 hover:bg-white/10 disabled:opacity-40"
-            >
-              Suivant
-            </button>
+          <div className="border-t border-white/10 px-4 pb-3">
+            <Pagination
+              page={page}
+              pageSize={PAGE_SIZE}
+              total={data?.total ?? 0}
+              isLoading={isLoading}
+              onPageChange={setPage}
+            />
           </div>
         </div>
       </section>

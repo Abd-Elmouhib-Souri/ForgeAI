@@ -1,7 +1,9 @@
 "use client";
 
 import { FormEvent, useCallback, useState } from "react";
-import Link from "next/link";
+import { Download, Eye, Mail, Plus, Power, Search, Trash2, X } from "lucide-react";
+import { Button, ButtonLink } from "@/app/admin/_components/Button";
+import FilterTabs from "@/app/admin/_components/FilterTabs";
 import { adminDownload, adminFetch, isAdminActionCancelled } from "@/lib/admin-api";
 import { buildListQuery, type Page } from "@/app/admin/_components/listQuery";
 import Pagination from "@/app/admin/_components/Pagination";
@@ -33,6 +35,13 @@ const roles = ["admin", "entrepreneur", "student", "consultant"];
 
 // Sprint 7.4: each quick filter is a query sent to the API (no browser filtering).
 type QuickFilter = "all" | "verified" | "unverified" | "inactive" | "admins";
+const QUICK_FILTER_TABS: { value: QuickFilter; label: string }[] = [
+  { value: "all", label: "Tous" },
+  { value: "admins", label: "Administrateurs" },
+  { value: "verified", label: "Vérifiés" },
+  { value: "unverified", label: "Non vérifiés" },
+  { value: "inactive", label: "Inactifs" },
+];
 const QUICK_FILTERS: Record<QuickFilter, Record<string, string>> = {
   all: {},
   admins: { role: "admin" },
@@ -280,28 +289,17 @@ export default function AdminUsersPage() {
               </p>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setShowCreateAdmin(true)}
-                className="rounded-lg bg-red-500 px-4 py-2 text-xs font-semibold text-white transition hover:bg-red-400"
-              >
-                + Ajouter admin
-              </button>
-
-              <button
-                type="button"
-                onClick={exportCsv}
-                className="rounded-lg border border-white/10 px-4 py-2 text-xs text-white/80 transition hover:bg-white/10"
-              >
-                Exporter en CSV
-              </button>
-
-              <FilterButton label="Tous" active={filter === "all"} onClick={() => changeFilter("all")} />
-              <FilterButton label="Administrateurs" active={filter === "admins"} onClick={() => changeFilter("admins")} />
-              <FilterButton label="Vérifiés" active={filter === "verified"} onClick={() => changeFilter("verified")} />
-              <FilterButton label="Non vérifiés" active={filter === "unverified"} onClick={() => changeFilter("unverified")} />
-              <FilterButton label="Inactifs" active={filter === "inactive"} onClick={() => changeFilter("inactive")} />
+            {/* Actions first, then the filters on their own line. */}
+            <div className="flex flex-col items-start gap-3 md:items-end">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="primary" size="sm" icon={Plus} onClick={() => setShowCreateAdmin(true)}>
+                  Ajouter un admin
+                </Button>
+                <Button size="sm" icon={Download} onClick={exportCsv}>
+                  Exporter en CSV
+                </Button>
+              </div>
+              <FilterTabs label="Filtrer les utilisateurs" options={QUICK_FILTER_TABS} value={filter} onChange={changeFilter} />
             </div>
           </div>
 
@@ -313,9 +311,9 @@ export default function AdminUsersPage() {
               placeholder="Rechercher par e-mail ou nom..."
               className="w-full rounded-lg border border-white/10 bg-slate-900 px-4 py-2.5 text-sm outline-none focus:border-red-300 md:max-w-md"
             />
-            <button type="submit" className="rounded-lg bg-white/15 px-4 py-2.5 text-sm font-semibold hover:bg-white/25">
+            <Button type="submit" icon={Search}>
               Rechercher
-            </button>
+            </Button>
             <select
               value={sortKey}
               onChange={(event) => {
@@ -357,13 +355,9 @@ export default function AdminUsersPage() {
                   </p>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => setShowCreateAdmin(false)}
-                  className="rounded-lg border border-white/10 px-3 py-2 text-xs text-white/70 transition hover:bg-white/10"
-                >
+                <Button variant="ghost" size="sm" icon={X} onClick={() => setShowCreateAdmin(false)}>
                   Fermer
-                </button>
+                </Button>
               </div>
 
               <form onSubmit={createAdmin} className="grid gap-4 md:grid-cols-4">
@@ -408,13 +402,9 @@ export default function AdminUsersPage() {
                 </div>
 
                 <div className="flex items-end">
-                  <button
-                    type="submit"
-                    disabled={actionLoadingId === -1}
-                    className="w-full rounded-lg bg-red-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-red-400 disabled:opacity-50"
-                  >
+                  <Button type="submit" variant="primary" block loading={actionLoadingId === -1}>
                     {actionLoadingId === -1 ? "Création..." : "Créer admin"}
-                  </button>
+                  </Button>
                 </div>
               </form>
             </div>
@@ -426,16 +416,16 @@ export default function AdminUsersPage() {
             </div>
           ) : (
             <div className="mt-6 overflow-x-auto">
-              <table className="w-full min-w-[1250px] border-separate border-spacing-y-3 text-left text-sm">
+              <table className="w-full min-w-[960px] border-separate border-spacing-y-3 text-left text-sm">
                 <thead className="text-white/50">
                   <tr>
-                    <th className="px-4 py-2">Utilisateur</th>
-                    <th className="px-4 py-2">Rôle</th>
-                    <th className="px-4 py-2">Email</th>
-                    <th className="px-4 py-2">Statut</th>
-                    <th className="px-4 py-2">Projets</th>
-                    <th className="px-4 py-2">Créé le</th>
-                    <th className="px-4 py-2 text-right">Actions</th>
+                    <th className="px-3 py-2">Utilisateur</th>
+                    <th className="px-3 py-2">Rôle</th>
+                    <th className="px-3 py-2">Email</th>
+                    <th className="px-3 py-2">Statut</th>
+                    <th className="px-3 py-2">Projets</th>
+                    <th className="px-3 py-2">Créé le</th>
+                    <th className="px-3 py-2 text-right">Actions</th>
                   </tr>
                 </thead>
 
@@ -447,7 +437,7 @@ export default function AdminUsersPage() {
 
                     return (
                       <tr key={user.id} className="rounded-xl bg-white/5">
-                        <td className="rounded-l-xl px-4 py-4">
+                        <td className="rounded-l-xl px-3 py-4">
                           <div className="font-medium">{user.full_name}</div>
                           <div className="text-xs text-white/50">{user.email}</div>
 
@@ -458,7 +448,7 @@ export default function AdminUsersPage() {
                           )}
                         </td>
 
-                        <td className="px-4 py-4">
+                        <td className="px-3 py-4">
                           <select
                             value={user.role}
                             // An admin cannot change their own role from here.
@@ -476,7 +466,7 @@ export default function AdminUsersPage() {
                           </select>
                         </td>
 
-                        <td className="px-4 py-4">
+                        <td className="px-3 py-4">
                           {user.is_email_verified ? (
                             <Badge color="green">Vérifié</Badge>
                           ) : (
@@ -484,7 +474,7 @@ export default function AdminUsersPage() {
                           )}
                         </td>
 
-                        <td className="px-4 py-4">
+                        <td className="px-3 py-4">
                           {user.is_active ? (
                             <Badge color="green">Actif</Badge>
                           ) : (
@@ -498,54 +488,43 @@ export default function AdminUsersPage() {
                           )}
                         </td>
 
-                        <td className="px-4 py-4 font-semibold">
+                        <td className="px-3 py-4 font-semibold">
                           {user.project_count}
                         </td>
 
-                        <td className="px-4 py-4 text-white/60">
+                        <td className="px-3 py-4 text-white/60">
                           {formatDate(user.created_at)}
                         </td>
 
-                        <td className="rounded-r-xl px-4 py-4">
-                          <div className="flex justify-end gap-2">
-                            <Link
-                              href={`/admin/users/${user.id}`}
-                              className="rounded-lg border border-white/10 px-3 py-2 text-xs text-white/80 transition hover:bg-white/10"
-                            >
+                        <td className="rounded-r-xl px-3 py-4">
+                          {/* Flex + gap: buttons wrap cleanly, never on top of each other. */}
+                          <div className="flex flex-wrap justify-end gap-2">
+                            <ButtonLink href={`/admin/users/${user.id}`} size="sm" icon={Eye}>
                               Voir
-                            </Link>
+                            </ButtonLink>
 
                             {!user.is_email_verified && (
-                              <button
-                                disabled={isBusy}
-                                onClick={() => resendVerification(user)}
-                                className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-200 transition hover:bg-cyan-500/20 disabled:opacity-50"
-                              >
-                                Renvoyer email
-                              </button>
+                              <Button variant="info" size="sm" icon={Mail} disabled={isBusy} onClick={() => resendVerification(user)}>
+                                Renvoyer l&apos;e-mail
+                              </Button>
                             )}
 
                             {canDelete && (
-                              <button
-                                disabled={isBusy}
-                                onClick={() => deleteUser(user)}
-                                className="rounded-lg border border-red-500/40 bg-red-600/10 px-3 py-2 text-xs text-red-200 transition hover:bg-red-600/20 disabled:opacity-50"
-                              >
+                              <Button variant="danger" size="sm" icon={Trash2} disabled={isBusy} onClick={() => deleteUser(user)}>
                                 Supprimer
-                              </button>
+                              </Button>
                             )}
 
-                            <button
+                            <Button
+                              variant={user.is_active ? "danger" : "success"}
+                              size="sm"
+                              icon={Power}
                               disabled={isBusy || isCurrentAdmin}
+                              title={isCurrentAdmin ? "Vous ne pouvez pas désactiver votre propre compte." : undefined}
                               onClick={() => toggleUserStatus(user)}
-                              className={
-                                user.is_active
-                                  ? "rounded-lg border border-red-400/30 bg-red-500/10 px-3 py-2 text-xs text-red-200 transition hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-                                  : "rounded-lg border border-emerald-400/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200 transition hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-                              }
                             >
                               {user.is_active ? "Désactiver" : "Activer"}
-                            </button>
+                            </Button>
                           </div>
                         </td>
                       </tr>
@@ -581,29 +560,6 @@ function StatCard({ title, value }: { title: string; value: number }) {
       <p className="text-sm text-white/50">{title}</p>
       <p className="mt-2 text-3xl font-bold">{value}</p>
     </div>
-  );
-}
-
-function FilterButton({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={
-        active
-          ? "rounded-lg bg-red-500 px-3 py-2 text-xs font-medium text-white"
-          : "rounded-lg border border-white/10 px-3 py-2 text-xs text-white/70 transition hover:bg-white/10"
-      }
-    >
-      {label}
-    </button>
   );
 }
 

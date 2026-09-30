@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { RefreshCw } from "lucide-react";
 
 import AdminPageHeader from "@/app/admin/_components/AdminPageHeader";
+import { Button } from "@/app/admin/_components/Button";
 import { healthStatusLabel } from "@/app/admin/_components/labels";
 import { useAdminResource } from "@/app/admin/_components/useAdminResource";
 
@@ -67,14 +69,14 @@ export default function AdminHealthPage() {
         title="Santé du système"
         subtitle="Chaque service est réellement contacté (délai maximal 5 s par service)."
         actions={
-          <button
-            type="button"
+          <Button
+            variant="primary"
+            icon={RefreshCw}
+            loading={report.isLoading}
             onClick={() => setRun((current) => current + 1)}
-            disabled={report.isLoading}
-            className="rounded-lg bg-red-500 px-4 py-2 font-semibold text-white transition hover:bg-red-400 disabled:opacity-60"
           >
             {report.isLoading ? "Test en cours..." : "Tester maintenant"}
-          </button>
+          </Button>
         }
       />
 

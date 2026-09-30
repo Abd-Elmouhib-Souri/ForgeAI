@@ -51,9 +51,11 @@ test("G3: the pipeline stages are shown with French labels", () => {
 });
 
 test("row actions never overlap (RED 28 Sept 2026, user's screenshot)", () => {
-  // Buttons wrap inside a flex container with a gap instead of piling up.
+  // Buttons sit in a flex container with a gap instead of piling up.
+  // 30 Sept 2026 (user's screenshot): wrapping still stacked them in a narrow
+  // column, so the row stays on one line and the column takes their width.
   const cell = list.slice(list.indexOf("canRelaunch(analysis.analysis_status") - 400, list.indexOf("Diagnostic"));
-  assert.match(cell, /className="flex flex-wrap items-center justify-end gap-2"/);
+  assert.match(cell, /className="flex flex-nowrap items-center justify-end gap-2"/);
   assert.doesNotMatch(cell, /className="mr-2 /);
 });
 

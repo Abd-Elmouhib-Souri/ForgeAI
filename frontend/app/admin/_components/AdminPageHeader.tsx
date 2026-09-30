@@ -1,9 +1,11 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
+import { ArrowLeft } from "lucide-react";
+
+import { ButtonLink } from "./Button";
 
 // Sprint 7.3: the title block of every console page. Navigation lives in
 // the shell's sidebar; a page only adds its own actions (export...) and,
-// for a detail page, a link back to its list.
+// for a detail page, a real "back" button to its list.
 export default function AdminPageHeader({
   title,
   subtitle,
@@ -22,14 +24,14 @@ export default function AdminPageHeader({
       <div className="mx-auto flex max-w-7xl flex-wrap items-end justify-between gap-4">
         <div>
           {backHref && (
-            <Link href={backHref} className="text-xs text-white/50 transition hover:text-white">
-              ← {backLabel}
-            </Link>
+            <ButtonLink href={backHref} variant="secondary" size="sm" icon={ArrowLeft} className="mb-3">
+              {backLabel}
+            </ButtonLink>
           )}
-          <h1 className="mt-1 text-2xl font-bold">{title}</h1>
+          <h1 className="text-2xl font-bold">{title}</h1>
           {subtitle && <p className="mt-1 text-sm text-white/50">{subtitle}</p>}
         </div>
-        {actions && <div className="flex flex-wrap items-center gap-3 text-sm">{actions}</div>}
+        {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
       </div>
     </div>
   );

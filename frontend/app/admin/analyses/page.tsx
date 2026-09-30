@@ -1,8 +1,10 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import Link from "next/link";
+import { RotateCcw, Search, Stethoscope } from "lucide-react";
 import { isAdminActionCancelled } from "@/lib/admin-api";
+import { Button, ButtonLink } from "@/app/admin/_components/Button";
+import FilterTabs from "@/app/admin/_components/FilterTabs";
 import { canRelaunch, relaunchAnalysis } from "@/app/admin/_components/relaunch";
 import { buildListQuery, type Page } from "@/app/admin/_components/listQuery";
 import Pagination from "@/app/admin/_components/Pagination";
@@ -30,8 +32,17 @@ type AdminAnalysis = {
 
 const PAGE_SIZE = 25;
 
+type StatusFilter = "all" | "completed" | "running" | "failed";
+
+const STATUS_FILTERS: { value: StatusFilter; label: string }[] = [
+  { value: "all", label: "Toutes" },
+  { value: "completed", label: "Terminées" },
+  { value: "running", label: "En cours" },
+  { value: "failed", label: "Échouées" },
+];
+
 export default function AdminAnalysesPage() {
-  const [filter, setFilter] = useState<"all" | "completed" | "running" | "failed">("all");
+  const [filter, setFilter] = useState<StatusFilter>("all");
   const [searchDraft, setSearchDraft] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -100,12 +111,7 @@ export default function AdminAnalysesPage() {
               </p>
             </div>
 
-            <div className="flex flex-wrap gap-2">
-              <FilterButton label="Toutes" active={filter === "all"} onClick={() => changeFilter("all")} />
-              <FilterButton label="Terminées" active={filter === "completed"} onClick={() => changeFilter("completed")} />
-              <FilterButton label="En cours" active={filter === "running"} onClick={() => changeFilter("running")} />
-              <FilterButton label="Échouées" active={filter === "failed"} onClick={() => changeFilter("failed")} />
-            </div>
+            <FilterTabs label="Filtrer par statut" options={STATUS_FILTERS} value={filter} onChange={changeFilter} />
           </div>
 
           <form onSubmit={applySearch} className="mt-5 flex flex-col gap-3 md:flex-row">
@@ -115,9 +121,9 @@ export default function AdminAnalysesPage() {
               placeholder="Rechercher projet, secteur, région, propriétaire..."
               className="w-full rounded-lg border border-white/10 bg-slate-900 px-4 py-2.5 text-sm outline-none focus:border-red-300 md:max-w-md"
             />
-            <button type="submit" className="rounded-lg bg-white/15 px-4 py-2.5 text-sm font-semibold hover:bg-white/25">
+            <Button type="submit" icon={Search}>
               Rechercher
-            </button>
+            </Button>
           </form>
 
           {message && (
@@ -138,25 +144,25 @@ export default function AdminAnalysesPage() {
             </div>
           ) : (
             <div className="mt-6 overflow-x-auto">
-              <table className="w-full min-w-[1250px] border-separate border-spacing-y-3 text-left text-sm">
+              <table className="w-full min-w-[960px] border-separate border-spacing-y-3 text-left text-sm">
                 <thead className="text-white/50">
                   <tr>
-                    <th className="px-4 py-2">Projet</th>
-                    <th className="px-4 py-2">Secteur</th>
-                    <th className="px-4 py-2">Région</th>
-                    <th className="px-4 py-2">Score</th>
-                    <th className="px-4 py-2">Statut</th>
-                    <th className="px-4 py-2">Progression</th>
-                    <th className="px-4 py-2">Propriétaire</th>
-                    <th className="px-4 py-2">Fin</th>
-                    <th className="px-4 py-2 text-right">Actions</th>
+                    <th className="px-3 py-2">Projet</th>
+                    <th className="px-3 py-2">Secteur</th>
+                    <th className="px-3 py-2">Région</th>
+                    <th className="px-3 py-2">Score</th>
+                    <th className="px-3 py-2">Statut</th>
+                    <th className="px-3 py-2">Progression</th>
+                    <th className="px-3 py-2">Propriétaire</th>
+                    <th className="px-3 py-2">Fin</th>
+                    <th className="px-3 py-2 text-right">Actions</th>
                   </tr>
                 </thead>
 
                 <tbody>
                   {analyses.map((analysis) => (
                     <tr key={analysis.project_id} className="bg-white/5">
-                      <td className="rounded-l-xl px-4 py-4">
+                      <td className="rounded-l-xl px-3 py-4">
                         <div className="font-medium">{analysis.title}</div>
                         <div className="text-xs text-white/40">
                           {analysis.analysis_step || "-"}
@@ -169,13 +175,13 @@ export default function AdminAnalysesPage() {
                         )}
                       </td>
 
-                      <td className="px-4 py-4">{analysis.industry}</td>
-                      <td className="px-4 py-4">{analysis.market_region}</td>
-                      <td className="px-4 py-4 font-semibold">
+                      <td className="px-3 py-4">{analysis.industry}</td>
+                      <td className="px-3 py-4">{analysis.market_region}</td>
+                      <td className="px-3 py-4 font-semibold">
                         {analysis.startup_score ?? "-"}
                       </td>
 
-                      <td className="px-4 py-4">
+                      <td className="px-3 py-4">
                         <Badge status={analysis.analysis_status} />
                         {analysis.analysis_stalled && (
                           <span
@@ -187,8 +193,8 @@ export default function AdminAnalysesPage() {
                         )}
                       </td>
 
-                      <td className="px-4 py-4">
-                        <div className="h-2 w-32 overflow-hidden rounded-full bg-white/10">
+                      <td className="px-3 py-4">
+                        <div className="h-2 w-24 overflow-hidden rounded-full bg-white/10">
                           <div
                             className="h-full bg-cyan-400"
                             style={{
@@ -201,38 +207,41 @@ export default function AdminAnalysesPage() {
                         </div>
                       </td>
 
-                      <td className="px-4 py-4">
+                      <td className="px-3 py-4">
                         <div>{analysis.owner_name}</div>
                         <div className="text-xs text-white/40">
                           {analysis.owner_email}
                         </div>
                       </td>
 
-                      <td className="px-4 py-4 text-white/60">
+                      <td className="whitespace-nowrap px-3 py-4 text-white/60">
                         {analysis.analysis_completed_at
                           ? formatDate(analysis.analysis_completed_at)
                           : "-"}
                       </td>
 
-                      <td className="rounded-r-xl px-4 py-4 text-right">
-                        {/* Flex + gap: the buttons wrap cleanly, never on top of each other. */}
-                        <div className="flex flex-wrap items-center justify-end gap-2">
+                      <td className="rounded-r-xl px-3 py-4 text-right">
+                        {/* Flex + gap, no wrap: both actions on one line, the column takes their width. */}
+                        <div className="flex flex-nowrap items-center justify-end gap-2">
                         {canRelaunch(analysis.analysis_status, analysis.analysis_stalled) && (
-                          <button
-                            type="button"
+                          <Button
+                            variant="warning"
+                            size="sm"
+                            icon={RotateCcw}
+                            loading={busyId === analysis.project_id}
                             onClick={() => relaunch(analysis)}
-                            disabled={busyId === analysis.project_id}
-                            className="rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs font-medium text-amber-200 transition hover:bg-amber-500/20 disabled:opacity-50"
                           >
                             Relancer
-                          </button>
+                          </Button>
                         )}
-                        <Link
+                        <ButtonLink
                           href={`/admin/analyses/${analysis.project_id}`}
-                          className="rounded-lg border border-cyan-400/30 bg-cyan-500/10 px-3 py-2 text-xs font-medium text-cyan-200 transition hover:bg-cyan-500/20"
+                          variant="info"
+                          size="sm"
+                          icon={Stethoscope}
                         >
                           Diagnostic
-                        </Link>
+                        </ButtonLink>
                         </div>
                       </td>
                     </tr>
@@ -270,29 +279,6 @@ function Stat({ title, value }: { title: string; value: string | number }) {
   );
 }
 
-function FilterButton({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={
-        active
-          ? "rounded-lg bg-red-500 px-3 py-2 text-xs font-medium text-white"
-          : "rounded-lg border border-white/10 px-3 py-2 text-xs text-white/70 transition hover:bg-white/10"
-      }
-    >
-      {label}
-    </button>
-  );
-}
-
 function Badge({ status }: { status: string }) {
   const className =
     status === "completed"
@@ -314,7 +300,10 @@ function formatDate(value: string) {
   if (!value) return "-";
 
   return new Intl.DateTimeFormat("fr-FR", {
-    dateStyle: "medium",
-    timeStyle: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
   }).format(new Date(value));
 }

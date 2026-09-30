@@ -20,7 +20,7 @@ from app.mailer import deliver, send_verification_email
 from app.models import Export, Project, User, UserRole
 from app.email_identity import normalize_email, same_email
 from app.services import admin_audit as audit
-from app.services import analysis_queue, health_checks
+from app.services import analysis_diagnostics, analysis_queue, health_checks
 from app.services.post_analysis_pipeline import effective_state
 from app.services.admin_listing import (
     ANALYSIS_STATUS_LABELS,
@@ -1140,179 +1140,12 @@ async def list_admin_analyses(
 
 
 # ============================================================
-# 5.1 Détail diagnostic brut d'une analyse IA
+# 5.1 Détail diagnostic d'une analyse IA
 # ============================================================
 
-def collect_nested_values(value: Any, target_keys: set[str]) -> list[Any]:
-    """
-    Parcourt récursivement un JSON et récupère toutes les valeurs
-    dont la clé fait partie de target_keys.
-
-    Utilisé côté admin seulement.
-    """
-
-    collected: list[Any] = []
-
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if key in target_keys:
-                collected.append(item)
-
-            collected.extend(collect_nested_values(item, target_keys))
-
-    elif isinstance(value, list):
-        for item in value:
-            collected.extend(collect_nested_values(item, target_keys))
-
-    return collected
-
-
-def flatten_admin_list(values: list[Any]) -> list[str]:
-    """
-    Transforme une liste mixte en liste de strings lisibles.
-    """
-
-    flattened: list[str] = []
-
-    for value in values:
-        if value is None:
-            continue
-
-        if isinstance(value, list):
-            for item in value:
-                if item is not None:
-                    flattened.append(str(item))
-
-        elif isinstance(value, dict):
-            flattened.append(str(value))
-
-        else:
-            flattened.append(str(value))
-
-    return flattened
-
-
 def build_admin_analysis_diagnostics(project: Project) -> dict:
-    """
-    Construit un résumé technique réservé à l'admin.
-    """
-
-    analysis_data = project.analysis_data or {}
-
-    forgecrawler = {}
-    startup_meta = {}
-    debate_room = {}
-    debate_meta = {}
-
-    if isinstance(analysis_data, dict):
-        forgecrawler = analysis_data.get("forgecrawler") or {}
-        startup_meta = analysis_data.get("startup_evaluator_meta") or {}
-        debate_room = analysis_data.get("debate_room") or {}
-
-        if isinstance(debate_room, dict):
-            debate_meta = debate_room.get("meta") or {}
-
-    technical_errors = flatten_admin_list(
-        collect_nested_values(
-            analysis_data,
-            {
-                "errors",
-                "error",
-                "raw_errors",
-                "ddgs_errors",
-                "scraping_errors",
-                "provider_errors",
-                "llm_errors",
-                "model_errors",
-                "fallback_errors",
-            },
-        )
-    )
-
-    technical_queries = flatten_admin_list(
-        collect_nested_values(
-            analysis_data,
-            {
-                "queries",
-                "query",
-                "search_query",
-            },
-        )
-    )
-
-    return {
-        "project_id": project.id,
-        "analysis_status": project.analysis_status,
-        "analysis_step": project.analysis_step,
-        "analysis_progress": project.analysis_progress,
-        "analysis_error": project.analysis_error,
-        "analysis_started_at": project.analysis_started_at,
-        "analysis_completed_at": project.analysis_completed_at,
-
-        "startup_evaluator": {
-            "completed_steps": startup_meta.get("completed_steps", [])
-            if isinstance(startup_meta, dict)
-            else [],
-            "failed_steps": startup_meta.get("failed_steps", [])
-            if isinstance(startup_meta, dict)
-            else [],
-            "current_step": startup_meta.get("current_step")
-            if isinstance(startup_meta, dict)
-            else None,
-            "progress": startup_meta.get("progress")
-            if isinstance(startup_meta, dict)
-            else None,
-            "error": startup_meta.get("error")
-            if isinstance(startup_meta, dict)
-            else None,
-        },
-
-        "debate_room": {
-            "completed": debate_meta.get("completed")
-            if isinstance(debate_meta, dict)
-            else None,
-            "completed_steps": debate_meta.get("completed_steps", [])
-            if isinstance(debate_meta, dict)
-            else [],
-            "failed_steps": debate_meta.get("failed_steps", [])
-            if isinstance(debate_meta, dict)
-            else [],
-            "current_step": debate_meta.get("current_step")
-            if isinstance(debate_meta, dict)
-            else None,
-            "progress": debate_meta.get("progress")
-            if isinstance(debate_meta, dict)
-            else None,
-            "error": debate_meta.get("error")
-            if isinstance(debate_meta, dict)
-            else None,
-        },
-
-        "forgecrawler": {
-            "status": forgecrawler.get("status")
-            if isinstance(forgecrawler, dict)
-            else None,
-            "confidence_level": forgecrawler.get("confidence_level")
-            if isinstance(forgecrawler, dict)
-            else None,
-            "sources_count": len(forgecrawler.get("sources", []))
-            if isinstance(forgecrawler, dict)
-            else 0,
-            "local_competitors_count": forgecrawler.get("local_competitors_count")
-            if isinstance(forgecrawler, dict)
-            else None,
-            "market_sources_count": forgecrawler.get("market_sources_count")
-            if isinstance(forgecrawler, dict)
-            else None,
-        },
-
-        "technical": {
-            "errors_count": len(technical_errors),
-            "queries_count": len(technical_queries),
-            "errors": technical_errors[:100],
-            "queries": technical_queries[:100],
-        },
-    }
+    """Readable diagnostic (Sprint 7.8): decided by analysis_diagnostics, displayed as is."""
+    return analysis_diagnostics.build(project)
 
 
 @router.get("/analyses/{project_id}")
