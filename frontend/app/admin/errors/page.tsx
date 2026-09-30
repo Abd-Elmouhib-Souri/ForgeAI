@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { RefreshCw } from "lucide-react";
+import { Button } from "@/app/admin/_components/Button";
 import { buildListQuery, type Page } from "@/app/admin/_components/listQuery";
 import Pagination from "@/app/admin/_components/Pagination";
 import { useAdminResource } from "@/app/admin/_components/useAdminResource";
@@ -42,12 +44,9 @@ export default function AdminErrorsPage() {
           <p className="text-sm text-white/50">Erreurs ouvertes</p>
           <p className="mt-2 text-3xl font-bold">{total}</p>
 
-          <button
-            onClick={list.reload}
-            className="mt-4 rounded-lg bg-red-500 px-4 py-2 text-sm font-medium hover:bg-red-400"
-          >
+          <Button variant="primary" icon={RefreshCw} loading={list.isLoading} className="mt-4" onClick={list.reload}>
             Rafraîchir
-          </button>
+          </Button>
         </div>
 
         {!list.data && <p className="text-white/60">Chargement...</p>}

@@ -4,6 +4,8 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { type ConfirmationRequest, setConfirmationHandler } from "@/lib/admin-api";
 
+import { Button } from "./Button";
+
 // Sprint 7.3: the console's confirmation dialog. adminFetch(..., { confirm })
 // calls the handler registered here; the returned promise resolves with the
 // 6-digit code, or null when the admin cancels.
@@ -86,21 +88,13 @@ export default function ConfirmDialog() {
           </p>
         )}
 
-        <div className="mt-6 flex justify-end gap-3 text-sm">
-          <button
-            type="button"
-            onClick={() => close(null)}
-            className="rounded-lg border border-white/10 px-4 py-2 text-white/80 hover:bg-white/10"
-          >
+        <div className="mt-6 flex justify-end gap-3">
+          <Button variant="ghost" onClick={() => close(null)}>
             Annuler
-          </button>
-          <button
-            type="submit"
-            disabled={code.length !== 6}
-            className="rounded-lg bg-red-500 px-4 py-2 font-semibold text-white hover:bg-red-400 disabled:opacity-50"
-          >
+          </Button>
+          <Button type="submit" variant="primary" disabled={code.length !== 6}>
             Confirmer
-          </button>
+          </Button>
         </div>
       </form>
     </div>

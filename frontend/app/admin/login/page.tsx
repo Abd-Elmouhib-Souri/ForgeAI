@@ -2,6 +2,8 @@
 
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
+import { ArrowLeft } from "lucide-react";
+import { Button } from "@/app/admin/_components/Button";
 
 import { AdminApiError, adminRequest, setAdminToken } from "@/lib/admin-api";
 
@@ -198,13 +200,9 @@ export default function AdminLoginPage() {
           )}
 
           {step !== "credentials" && (
-            <button
-              type="button"
-              onClick={backToCredentials}
-              className="text-xs text-white/60 underline hover:text-white"
-            >
+            <Button variant="ghost" size="sm" icon={ArrowLeft} className="-ml-3" onClick={backToCredentials}>
               Retour à la connexion
-            </button>
+            </Button>
           )}
 
           {error && (
@@ -213,11 +211,7 @@ export default function AdminLoginPage() {
             </div>
           )}
 
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            className="w-full rounded-lg bg-red-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-red-400 disabled:cursor-not-allowed disabled:opacity-60"
-          >
+          <Button type="submit" variant="primary" block loading={isSubmitting} className="h-11">
             {isSubmitting
               ? "Vérification..."
               : step === "credentials"
@@ -225,7 +219,7 @@ export default function AdminLoginPage() {
                 : step === "totp"
                   ? "Vérifier le code"
                   : "Activer la 2FA et se connecter"}
-          </button>
+          </Button>
         </form>
 
         <p className="mt-6 text-center text-xs text-white/40">Espace sécurisé — ForgeAI</p>
