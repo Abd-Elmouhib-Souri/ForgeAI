@@ -18,6 +18,14 @@ def mask_email(email: str) -> str:
     return f"{local[:2]}***@{domain}"
 
 
+class EmailLoggedInsteadOfSent(Exception):
+    """Development without SMTP: the e-mail was written to the server log."""
+
+
+def smtp_configured() -> bool:
+    return bool(settings.SMTP_USERNAME and settings.SMTP_PASSWORD)
+
+
 def deliver(kind: str, send: Callable[..., None], to_email: str, *args) -> None:
     """
     Background delivery of one e-mail: logs the outcome, never crashes the task.
@@ -28,6 +36,10 @@ def deliver(kind: str, send: Callable[..., None], to_email: str, *args) -> None:
     masked = mask_email(to_email)
     try:
         send(to_email, *args)
+    except EmailLoggedInsteadOfSent:
+        # Never claim it was sent: the link is in the log just above.
+        logger.info("E-mail « %s » pour %s non envoyé (SMTP non configuré) : voir le journal ci-dessus", kind, masked)
+        return
     except Exception as exc:
         # The server's message may quote the recipient: mask it too.
         reason = str(exc).replace(to_email, masked)[:200]
@@ -46,7 +58,16 @@ def send_email(
     Envoie un email via SMTP.
     """
 
-    if not settings.SMTP_USERNAME or not settings.SMTP_PASSWORD:
+    if not smtp_configured():
+        if settings.ENVIRONMENT == "development":
+            # Local install without SMTP (e.g. a fresh clone): print the e-mail,
+            # links included, in the server log so sign-up and password reset
+            # can still be completed. Never in production.
+            logger.warning(
+                "SMTP non configuré (développement) : e-mail « %s » pour %s écrit ici au lieu d'être envoyé :\n%s",
+                subject, mask_email(to_email), text_body,
+            )
+            raise EmailLoggedInsteadOfSent()
         raise RuntimeError("SMTP_USERNAME ou SMTP_PASSWORD manquant dans .env")
 
     from_email = settings.SMTP_FROM_EMAIL or settings.SMTP_USERNAME

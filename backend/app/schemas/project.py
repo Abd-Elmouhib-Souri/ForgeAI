@@ -21,7 +21,8 @@ class ProjectCreate(BaseModel):
     description: str
     industry: Optional[str] = None
     # A missing region must remain unknown for the context-confidence gate.
-    market_region: str = ""
+    # The creation page sends null when no region is chosen: same meaning.
+    market_region: Optional[str] = ""
 
     # Language Lock.
     # fr => toute l’analyse doit sortir en français.
@@ -32,6 +33,12 @@ class ProjectCreate(BaseModel):
     @classmethod
     def validate_output_language(cls, value: Optional[str]) -> str:
         return normalize_output_language(value)
+
+    @field_validator("market_region")
+    @classmethod
+    def unknown_region_stays_empty(cls, value: Optional[str]) -> str:
+        # null, "" and blanks all mean "unknown": never a default country.
+        return (value or "").strip()
 
 
 class ProjectUpdate(BaseModel):
