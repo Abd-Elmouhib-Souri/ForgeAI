@@ -1,270 +1,399 @@
 # ForgeAI
 
-ForgeAI transforme une idée de projet ou de startup en dossier complet et argumenté :
-étude de marché, concurrence, SWOT, Business Model Canvas, estimation financière, personas,
-vérification des faits, score et verdict, plan produit (backlog, sprints), architecture de la
-solution (stack, base de données, diagrammes UML), puis exports PDF, Word et PowerPoint.
+**Plateforme d'aide à la décision qui transforme une idée de projet ou de startup en dossier
+d'étude complet, argumenté et exportable.**
 
-Principe : **les agents d'IA proposent, des règles déterministes valident et décident, l'interface affiche.**
-Une analyse ne démarre que si le contexte du projet est assez clair ; sinon, ForgeAI pose d'abord des questions.
+ForgeAI produit, à partir d'une description libre, une étude de marché, une analyse de la
+concurrence, un SWOT, un Business Model Canvas, une estimation financière, des personas, une
+vérification des faits, un score et un verdict, puis un plan produit (backlog, sprints) et une
+architecture technique (stack, base de données, diagrammes UML). L'ensemble est exportable en
+PDF, Word et PowerPoint.
 
-Ce guide explique, pas à pas, comment installer ForgeAI sur votre machine à partir du dépôt,
-obtenir toutes les clés d'API utilisées, puis accéder à la plateforme en tant qu'**utilisateur**
-et en tant qu'**administrateur**.
+Le système repose sur un principe de séparation des responsabilités : **les agents d'IA
+proposent, des règles déterministes valident et décident, l'interface affiche.** Une analyse ne
+démarre que lorsque le contexte du projet est suffisamment précis ; à défaut, la plateforme
+soumet d'abord des questions de clarification.
 
 ---
 
 ## Sommaire
 
-1. [Ce que contient la plateforme](#1-ce-que-contient-la-plateforme)
-2. [Prérequis](#2-prérequis)
-3. [Cloner le dépôt](#3-cloner-le-dépôt)
-4. [Obtenir les clés d'API](#4-obtenir-les-clés-dapi)
-5. [Installer et démarrer](#5-installer-et-démarrer)
-6. [Accéder à la plateforme en tant qu'utilisateur](#6-accéder-à-la-plateforme-en-tant-quutilisateur)
-7. [Accéder à la console d'administration](#7-accéder-à-la-console-dadministration)
-8. [Utilisation au quotidien](#8-utilisation-au-quotidien)
-9. [Tests](#9-tests)
-10. [Dépannage](#10-dépannage)
-11. [Sécurité](#11-sécurité)
+1. [Fonctionnalités](#1-fonctionnalités)
+2. [Architecture](#2-architecture)
+3. [Démarrage rapide](#3-démarrage-rapide)
+4. [Prérequis](#4-prérequis)
+5. [Récupération du code](#5-récupération-du-code)
+6. [Configuration des services externes](#6-configuration-des-services-externes)
+7. [Installation détaillée](#7-installation-détaillée)
+8. [Espace utilisateur](#8-espace-utilisateur)
+9. [Console d'administration](#9-console-dadministration)
+10. [Exploitation](#10-exploitation)
+11. [Tests](#11-tests)
+12. [Dépannage](#12-dépannage)
+13. [Sécurité](#13-sécurité)
 
 ---
 
-## 1. Ce que contient la plateforme
+## 1. Fonctionnalités
 
-**Espace utilisateur** (entrepreneurs, étudiants, consultants) :
-inscription par e-mail ou avec Google, création de projets, questions de clarification,
-analyse complète par des agents d'IA, rapport, plan produit, architecture et exports.
+### Espace utilisateur
 
-**Console d'administration** : tableau de bord, utilisateurs, projets, analyses (diagnostic
-lisible étape par étape, relance), erreurs, santé du système (chaque service testé pour de vrai)
-et journal d'audit inaltérable. Elle a sa propre API, n'écoute que sur la machine locale
-et exige une double authentification (2FA).
+| Domaine | Fonctionnalités |
+|---|---|
+| Compte | Inscription par e-mail ou via Google, vérification de l'adresse, réinitialisation du mot de passe |
+| Projets | Création, modification, langue du rapport (français ou anglais) |
+| Contexte | Contrôle de maturité de l'idée, questions de clarification ciblées |
+| Analyse | Marché, concurrence, SWOT, Business Model Canvas, finances, personas, vérification des faits, score, verdict, débat contradictoire |
+| Plan produit | Backlog priorisé, estimation en points, planification des sprints, métriques |
+| Architecture | Style d'architecture, stack technique, schéma de base de données, diagrammes UML (cas d'usage, classes, séquence, activité) |
+| Exports | Rapport PDF, document Word, pitch deck PowerPoint |
 
-| Service | Rôle | Adresse sur votre machine |
-|---|---|---|
-| `frontend` (Next.js, lancé avec npm) | espace utilisateur + console admin | http://localhost:3000 |
-| `backend` (FastAPI) | API publique, exécute les analyses | http://localhost:8000 (documentation : http://localhost:8000/docs) |
-| `backend-admin` (FastAPI) | API de la console admin | http://127.0.0.1:8002 (jamais exposée au réseau) |
-| `postgres` | base de données | port 5432 |
-| `redis` | limites de tentatives de connexion, cache | port 6379 |
-| `chromadb` | base vectorielle | port 8001 |
+### Console d'administration
 
-Le backend, l'API admin, PostgreSQL, Redis et ChromaDB tournent dans **Docker**.
-Le frontend se lance à part avec **npm**.
+| Page | Rôle |
+|---|---|
+| Tableau de bord | Indicateurs clés de la plateforme |
+| Utilisateurs | Recherche, filtres, rôles, activation, renvoi de l'e-mail de vérification, création d'administrateurs, export CSV |
+| Projets | Consultation, recherche, suppression, export CSV |
+| Analyses IA | Suivi, relance, diagnostic détaillé par étape (sources, preuves, erreurs, données brutes) |
+| Erreurs | Analyses en échec |
+| Santé du système | Test effectif de chaque service et de chaque modèle d'IA configuré |
+| Journal d'audit | Traçabilité des connexions et actions d'administration, export CSV |
 
 ---
 
-## 2. Prérequis
+## 2. Architecture
 
-| Outil | Version | Téléchargement | Vérification |
+```mermaid
+flowchart LR
+    B[Navigateur] --> F["Frontend<br/>Next.js · :3000"]
+    F --> P["API publique<br/>FastAPI · :8000"]
+    F --> A["API d'administration<br/>FastAPI · 127.0.0.1:8002"]
+    P --> DB[("PostgreSQL")]
+    A --> DB
+    P --> R[("Redis")]
+    A --> R
+    P --> V[("ChromaDB")]
+    P --> L["Modèles d'IA<br/>Gemini · Groq"]
+    P --> W["Recherche web<br/>Tavily · DuckDuckGo"]
+    P --> K["Rendu des diagrammes<br/>Kroki"]
+    P --> M["E-mails<br/>SMTP"]
+```
+
+| Composant | Technologie | Rôle | Adresse locale |
+|---|---|---|---|
+| `frontend` | Next.js, React, TypeScript | Espace utilisateur et console d'administration | http://localhost:3000 |
+| `backend` | FastAPI (Python 3.11) | API publique, exécution des analyses | http://localhost:8000 (documentation : `/docs`) |
+| `backend-admin` | FastAPI | API d'administration, isolée de l'API publique | http://127.0.0.1:8002 |
+| `postgres` | PostgreSQL 16 | Données applicatives et journal d'audit | port 5432 |
+| `redis` | Redis 7 | Limitation des tentatives de connexion, cache | port 6379 |
+| `chromadb` | ChromaDB 0.5.5 | Base vectorielle | port 8001 |
+
+Les services backend, base de données, cache et base vectorielle sont orchestrés par Docker
+Compose. Le frontend est exécuté séparément avec npm. Les demandes de relance d'analyse émises
+par la console sont placées dans une file en base de données, puis exécutées par l'API publique.
+
+---
+
+## 3. Démarrage rapide
+
+Procédure résumée pour un poste disposant déjà des prérequis (section 4) et des clés d'API
+(section 6).
+
+```
+git clone https://github.com/Abd-Elmouhib-Souri/ForgeAI.git
+cd ForgeAI
+python scripts/init_env.py                 # crée .env et génère les secrets internes
+# renseigner GEMINI_API_KEY et/ou GROQ_API_KEY dans .env
+docker compose up -d --build
+docker compose exec backend alembic upgrade head
+docker compose exec backend python -m app.scripts.create_admin
+cd frontend
+npm ci
+npm run dev
+```
+
+| Accès | Adresse |
+|---|---|
+| Espace utilisateur | http://localhost:3000 |
+| Console d'administration | http://localhost:3000/admin/login |
+| Documentation de l'API publique | http://localhost:8000/docs |
+
+---
+
+## 4. Prérequis
+
+| Outil | Version minimale | Téléchargement | Vérification |
 |---|---|---|---|
 | Git | récente | https://git-scm.com/downloads | `git --version` |
-| Docker Desktop (avec Docker Compose v2) | récente | https://www.docker.com/products/docker-desktop/ | `docker compose version` |
-| Node.js | **20.9 ou plus** (LTS conseillée) | https://nodejs.org/ | `node --version` |
-| Python | 3.10 ou plus | https://www.python.org/downloads/ | `python --version` |
+| Docker Desktop (Docker Compose v2) | récente | https://www.docker.com/products/docker-desktop/ | `docker compose version` |
+| Node.js | 20.9 | https://nodejs.org/ | `node --version` |
+| Python | 3.10 | https://www.python.org/downloads/ | `python --version` |
 
-- **Windows** : Docker Desktop utilise WSL 2 ; acceptez son installation au premier lancement,
-  puis **démarrez Docker Desktop** avant toute commande `docker`.
-- Python ne sert qu'au script qui prépare la configuration (étape 5.1). Aucun paquet à installer.
-- Prévoyez environ **10 Go** libres (images Docker et dépendances).
+- **Espace disque** : environ 10 Go (images Docker et dépendances).
+- **Windows** : Docker Desktop s'appuie sur WSL 2, installé au premier lancement. Docker Desktop
+  doit être démarré avant toute commande `docker`.
+- **Python** n'est requis que pour le script de configuration (`scripts/init_env.py`), qui
+  n'utilise que la bibliothèque standard.
 
 ---
 
-## 3. Cloner le dépôt
+## 5. Récupération du code
 
-Le dépôt est **privé**. Il faut d'abord y être invité :
+Le dépôt est privé : l'accès nécessite une invitation du propriétaire.
 
-1. Créez un compte GitHub si besoin : https://github.com/signup
-2. Donnez votre identifiant GitHub au propriétaire du dépôt, qui vous invite
+1. Disposer d'un compte GitHub (https://github.com/signup).
+2. Communiquer l'identifiant GitHub au propriétaire du dépôt, qui envoie l'invitation
    (Settings → Collaborators → Add people).
-3. Acceptez l'invitation reçue par e-mail, ou sur https://github.com/notifications
-
-Clonez ensuite le dépôt (branche `main`) :
+3. Accepter l'invitation reçue par e-mail ou depuis https://github.com/notifications.
+4. Cloner la branche `main` :
 
 ```
 git clone https://github.com/Abd-Elmouhib-Souri/ForgeAI.git
 cd ForgeAI
 ```
 
-Git vous demande de vous connecter à GitHub la première fois (une fenêtre de navigateur s'ouvre
-sous Windows). Si un mot de passe est demandé en ligne de commande, utilisez un
-*personal access token* et non votre mot de passe GitHub : https://github.com/settings/tokens
+> [!NOTE]
+> Lors du premier accès, Git ouvre une authentification GitHub dans le navigateur. En ligne de
+> commande, l'authentification s'effectue avec un jeton d'accès personnel
+> (https://github.com/settings/tokens), et non avec le mot de passe du compte.
 
-> Clonez dans un dossier **sans espaces ni accents** dans le chemin (par exemple `C:\projets\ForgeAI`).
+> [!TIP]
+> Un chemin d'installation sans espaces ni caractères accentués (par exemple `C:\projets\ForgeAI`)
+> évite les incompatibilités de certains outils.
 
 ---
 
-## 4. Obtenir les clés d'API
+## 6. Configuration des services externes
 
-ForgeAI utilise des services externes. Chacun a une offre gratuite suffisante pour tester.
-**Chaque personne qui installe ForgeAI crée ses propres clés** : ne réutilisez pas celles de quelqu'un d'autre.
+ForgeAI s'appuie sur des services tiers disposant d'offres gratuites adaptées à l'évaluation.
+Chaque installation utilise ses propres clés.
 
-| Clé dans `.env` | Service | Obligatoire ? | À quoi elle sert |
+| Variable (`.env`) | Service | Statut | Usage |
 |---|---|---|---|
-| `GEMINI_API_KEY` | Google Gemini | **au moins une des deux** | agents d'IA de l'analyse |
-| `GROQ_API_KEY` | Groq | **au moins une des deux** | agents d'IA (relais si Gemini est indisponible ou à court de quota) |
-| `TAVILY_API_KEY` | Tavily | recommandée | recherche web des sources (concurrents, marché) |
-| `GEMINI_SEARCH_CLASSIFIER_API_KEY` | Google Gemini | facultative | classement des sources trouvées |
-| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Google Cloud (OAuth) | facultatives | bouton « Continuer avec Google » |
-| `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_FROM_EMAIL` | Gmail (ou autre SMTP) | facultatives | envoi des e-mails (vérification, mot de passe oublié) |
+| `GEMINI_API_KEY` | Google Gemini | Requise (au moins un fournisseur d'IA) | Agents d'IA de l'analyse |
+| `GROQ_API_KEY` | Groq | Requise (au moins un fournisseur d'IA) | Agents d'IA, relais automatique de Gemini |
+| `TAVILY_API_KEY` | Tavily | Recommandée | Recherche web des sources |
+| `GEMINI_SEARCH_CLASSIFIER_API_KEY` | Google Gemini | Optionnelle | Classement des sources par Gemini |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google Cloud (OAuth 2.0) | Optionnelles | Connexion « Continuer avec Google » |
+| `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_EMAIL` | Gmail ou autre serveur SMTP | Optionnelles | Envoi des e-mails transactionnels |
+| `KROKI_ENABLED`, `KROKI_BASE_URL` | Kroki | Préconfigurées, sans clé | Rendu des diagrammes UML |
 
-Avoir **les deux** clés d'IA est conseillé : si l'une atteint sa limite gratuite, l'autre prend le relais.
+La configuration des deux fournisseurs d'IA est recommandée : en cas de quota atteint ou
+d'indisponibilité de l'un, l'autre est utilisé automatiquement. Les secrets internes (signature
+des jetons, session, chiffrement des secrets 2FA, mot de passe PostgreSQL, jeton ChromaDB) sont
+générés par `scripts/init_env.py` et ne nécessitent aucune action.
 
-Les secrets **internes** (JWT, session, clé de chiffrement 2FA, mot de passe PostgreSQL,
-jeton ChromaDB) ne sont pas à créer : le script de l'étape 5.1 les génère.
+### 6.1 Google Gemini
 
-Le rendu des diagrammes UML utilise le service public Kroki (https://kroki.io) : aucune clé
-n'est nécessaire. Le texte des diagrammes lui est envoyé ; pour un usage confidentiel,
-Kroki peut être installé localement et désigné par `KROKI_BASE_URL`.
+1. Ouvrir https://aistudio.google.com/apikey et se connecter avec un compte Google.
+2. Accepter les conditions d'utilisation de Google AI Studio si elles sont présentées.
+3. Sélectionner **Create API key**, puis choisir ou créer un projet Google Cloud.
+4. Reporter la clé obtenue (préfixe `AIza`) dans `.env` : `GEMINI_API_KEY=...`
+5. Optionnel : reporter la même clé dans `GEMINI_SEARCH_CLASSIFIER_API_KEY` pour activer le
+   classement des sources par Gemini.
 
-### 4.1 Google Gemini (`GEMINI_API_KEY`)
+### 6.2 Groq
 
-1. Ouvrez https://aistudio.google.com/apikey et connectez-vous avec un compte Google.
-2. Acceptez les conditions de Google AI Studio si elles s'affichent.
-3. Cliquez sur **Create API key** (Créer une clé API), puis choisissez ou créez un projet Google Cloud.
-4. Copiez la clé (elle commence par `AIza`).
-5. Collez-la dans `.env` : `GEMINI_API_KEY=AIza...`
-6. Facultatif : collez la même clé dans `GEMINI_SEARCH_CLASSIFIER_API_KEY` pour que Gemini classe aussi les sources.
+1. Créer un compte sur https://console.groq.com.
+2. Ouvrir la page **API Keys** (https://console.groq.com/keys) et sélectionner **Create API Key**.
+3. Copier la clé à l'affichage (préfixe `gsk_`) : elle n'est plus consultable ensuite.
+4. Reporter la clé dans `.env` : `GROQ_API_KEY=...`
 
-L'offre gratuite a des limites par minute et par jour. Si les analyses échouent pour « quota »,
-attendez le lendemain ou ajoutez la clé Groq.
+### 6.3 Tavily
 
-### 4.2 Groq (`GROQ_API_KEY`)
+1. Créer un compte sur https://app.tavily.com.
+2. Copier la clé affichée dans la section **API Keys** du tableau de bord (préfixe `tvly-`).
+3. Reporter la clé dans `.env` : `TAVILY_API_KEY=...`
 
-1. Ouvrez https://console.groq.com et créez un compte (e-mail, Google ou GitHub).
-2. Allez dans **API Keys** : https://console.groq.com/keys
-3. Cliquez sur **Create API Key**, donnez-lui un nom (par exemple `ForgeAI`) et validez.
-4. Copiez la clé **immédiatement** : elle ne sera plus affichée ensuite (elle commence par `gsk_`).
-5. Collez-la dans `.env` : `GROQ_API_KEY=gsk_...`
+En l'absence de clé Tavily, la recherche web bascule automatiquement sur DuckDuckGo, avec un
+nombre de sources généralement inférieur.
 
-### 4.3 Tavily, recherche web (`TAVILY_API_KEY`)
+### 6.4 Connexion avec Google (optionnelle)
 
-1. Ouvrez https://app.tavily.com et créez un compte.
-2. Votre clé s'affiche sur le tableau de bord, section **API Keys** (elle commence par `tvly-`).
-3. Collez-la dans `.env` : `TAVILY_API_KEY=tvly-...`
+1. Créer un projet sur https://console.cloud.google.com.
+2. Configurer l'écran de consentement OAuth
+   (https://console.cloud.google.com/apis/credentials/consent) :
+   type **Externe**, nom de l'application `ForgeAI`, adresse de support, et liste des
+   **utilisateurs de test** autorisés tant que l'application est en mode test.
+3. Créer un identifiant **ID client OAuth** de type **Application Web**
+   (https://console.cloud.google.com/apis/credentials) :
 
-Sans clé Tavily, la recherche passe automatiquement par DuckDuckGo : l'analyse fonctionne,
-mais avec moins de sources.
+   | Paramètre | Valeur |
+   |---|---|
+   | Origines JavaScript autorisées | `http://localhost:3000` |
+   | URI de redirection autorisés | `http://localhost:8000/auth/google/callback` |
 
-### 4.4 Connexion avec Google (facultatif)
+4. Reporter l'ID client et le code secret (préfixe `GOCSPX-`) dans `GOOGLE_CLIENT_ID` et
+   `GOOGLE_CLIENT_SECRET`.
 
-Nécessaire seulement pour le bouton « Continuer avec Google ».
+L'URI de redirection doit correspondre exactement à la valeur de `GOOGLE_REDIRECT_URI` dans `.env`.
 
-1. Ouvrez https://console.cloud.google.com et créez un projet (par exemple `ForgeAI`)
-   avec le sélecteur de projet en haut de la page.
-2. Configurez l'écran de consentement : https://console.cloud.google.com/apis/credentials/consent
-   - type d'utilisateurs : **Externe** ;
-   - nom de l'application : `ForgeAI`, e-mail d'assistance : le vôtre ;
-   - dans **Utilisateurs de test** (Audience), ajoutez les adresses Gmail qui pourront se connecter
-     tant que l'application est en mode test.
-3. Créez les identifiants : https://console.cloud.google.com/apis/credentials
-   - **Créer des identifiants** → **ID client OAuth** → type **Application Web** ;
-   - **Origines JavaScript autorisées** : `http://localhost:3000`
-   - **URI de redirection autorisés** : `http://localhost:8000/auth/google/callback`
-     (exactement la valeur de `GOOGLE_REDIRECT_URI` dans `.env`).
-4. Copiez l'**ID client** et le **Code secret du client** (il commence par `GOCSPX-`) :
+### 6.5 Envoi des e-mails (optionnel)
+
+Configuration avec Gmail :
+
+1. Activer la validation en deux étapes du compte Google
+   (https://myaccount.google.com/signinoptions/twosv).
+2. Générer un mot de passe d'application (https://myaccount.google.com/apppasswords), nommé
+   par exemple `ForgeAI`. Le mot de passe de 16 caractères n'est affiché qu'une seule fois.
+3. Renseigner `.env` :
+
    ```
-   GOOGLE_CLIENT_ID=....apps.googleusercontent.com
-   GOOGLE_CLIENT_SECRET=GOCSPX-...
+   SMTP_USERNAME=adresse@gmail.com
+   SMTP_FROM_EMAIL=adresse@gmail.com
+   SMTP_PASSWORD=<mot de passe d'application, sans espaces>
    ```
 
-### 4.5 Envoi des e-mails avec Gmail (facultatif)
+Pour un autre fournisseur (Brevo, Mailgun, Outlook…), les variables `SMTP_HOST` et `SMTP_PORT`
+sont à adapter selon sa documentation.
 
-Sans SMTP, ForgeAI fonctionne quand même en développement : le contenu des e-mails,
-lien compris, est écrit dans le journal du backend (voir 6.2). Pour recevoir de vrais e-mails :
+> [!NOTE]
+> Sans configuration SMTP et en environnement de développement (`ENVIRONMENT=development`), le
+> contenu des e-mails, liens compris, est écrit dans le journal du backend (section 8.2). Ce mode
+> de secours est désactivé en production.
 
-1. Activez la **validation en deux étapes** de votre compte Google :
-   https://myaccount.google.com/signinoptions/twosv
-2. Créez un **mot de passe d'application** : https://myaccount.google.com/apppasswords
-   - nom : `ForgeAI` → **Créer** ;
-   - Google affiche 16 lettres (4 groupes de 4) : c'est la seule fois où il est visible.
-3. Renseignez `.env` (sans espaces dans le mot de passe) :
-   ```
-   SMTP_USERNAME=votre.adresse@gmail.com
-   SMTP_FROM_EMAIL=votre.adresse@gmail.com
-   SMTP_PASSWORD=abcdefghijklmnop
-   ```
-   N'utilisez **jamais** le mot de passe habituel de votre compte Google.
+> [!IMPORTANT]
+> Le mot de passe d'application est distinct du mot de passe du compte Google, qui ne doit
+> jamais figurer dans `.env`.
 
-Autre fournisseur (Brevo, Mailgun, Outlook…) : remplacez aussi `SMTP_HOST` et `SMTP_PORT`
-par les valeurs qu'il indique.
+### 6.6 Rendu des diagrammes : Kroki (aucune clé)
 
-Les premiers e-mails arrivent souvent dans le dossier **Spam** : marquez-les « Non spam ».
+ForgeAI génère le code PlantUML des diagrammes de l'architecture, puis en délègue le rendu à un
+serveur **Kroki** : SVG pour l'interface, PNG pour les exports. Kroki est un logiciel libre ; il ne
+requiert ni compte ni clé d'API, uniquement l'adresse d'un serveur :
+
+```
+KROKI_ENABLED=true
+KROKI_BASE_URL=https://kroki.io
+```
+
+| `KROKI_BASE_URL` | Serveur | Contexte d'utilisation |
+|---|---|---|
+| `https://kroki.io` (par défaut) | Service public | Accès Internet sans restriction vers kroki.io |
+| `http://host.docker.internal:8010` | Conteneur local | Réseau filtré (VPN, réseau d'entreprise), usage hors connexion, confidentialité des diagrammes |
+
+Déploiement du conteneur local (opération unique) :
+
+```
+docker run -d --name kroki-local --restart unless-stopped -p 8010:8000 yuzutech/kroki
+```
+
+Renseigner ensuite `KROKI_BASE_URL=http://host.docker.internal:8010` dans `.env`, puis recharger
+le backend (section 10.2). L'adresse `host.docker.internal` désigne le poste hôte depuis les
+conteneurs sous Docker Desktop (Windows, macOS) ; sous Linux, ajouter
+`extra_hosts: ["host.docker.internal:host-gateway"]` au service `backend`.
+
+Contrôle de la connectivité depuis le backend :
+
+```
+docker compose exec backend python -c "import os, httpx; u = os.getenv('KROKI_BASE_URL'); print(os.getenv('KROKI_ENABLED'), u, httpx.get(u + '/health', timeout=10).status_code)"
+```
+
+Résultat attendu : `true <adresse> 200`.
+
+> [!NOTE]
+> Lorsque Kroki n'est pas joignable, l'architecture et le code PlantUML restent disponibles :
+> l'interface affiche « Rendu visuel indisponible » accompagné du code source, et les exports
+> remplacent chaque image par la mention « diagramme indisponible ». L'action
+> « Régénérer l'architecture » produit les images une fois Kroki accessible.
+
+### 6.7 Limites des offres gratuites
+
+Une analyse complète enchaîne de nombreux appels aux modèles d'IA. Les offres gratuites
+permettent l'évaluation de la plateforme, avec les limites suivantes :
+
+| Fournisseur | Limite constatée | Effet |
+|---|---|---|
+| Gemini (offre gratuite) | Environ 20 requêtes par jour et par modèle récent | Environ une analyse complète par jour ; message « Quota exceeded… FreeTier » au-delà |
+| Groq (offre gratuite) | Plafond de jetons par minute | Refus des requêtes volumineuses (« Request too large »), notamment pour le plan produit |
+
+Comportement de la plateforme face à ces limites :
+
+- bascule automatique entre Gemini et Groq lorsque les deux clés sont configurées ;
+- en l'absence de modèle disponible, le plan produit est construit par des règles déterministes
+  (statut « Provisoire »), puis régénéré automatiquement par l'IA (jusqu'à six tentatives) ;
+- `GEMINI_FALLBACK_MODEL` est laissé vide par défaut : certains modèles ne sont plus ouverts aux
+  nouveaux comptes (« no longer available to new users »). La page **Santé du système** contrôle
+  l'existence de chaque modèle configuré.
+
+Un usage régulier (démonstrations, analyses multiples) nécessite l'activation de la facturation
+dans la rubrique « Billing » de Google AI Studio (https://aistudio.google.com) et de la console
+Groq (https://console.groq.com).
 
 ---
 
-## 5. Installer et démarrer
+## 7. Installation détaillée
 
-Toutes les commandes sont à lancer **depuis le dossier du dépôt** (`ForgeAI`).
-Elles sont identiques sous Windows (PowerShell), macOS et Linux.
+Les commandes s'exécutent depuis la racine du dépôt et sont identiques sous Windows
+(PowerShell), macOS et Linux.
 
-### 5.1 Préparer la configuration
+### 7.1 Configuration
 
 ```
 python scripts/init_env.py
 ```
 
-Le script crée deux fichiers à partir des modèles du dépôt :
+Le script génère, à partir des modèles versionnés :
 
-- `.env` : configuration du backend, de l'API admin, de PostgreSQL et de ChromaDB ;
-- `frontend/.env.local` : adresses des deux API pour le frontend.
+| Fichier | Contenu |
+|---|---|
+| `.env` | Configuration du backend, de l'API d'administration, de PostgreSQL et de ChromaDB ; secrets internes générés aléatoirement |
+| `frontend/.env.local` | Adresses de l'API publique et de l'API d'administration |
 
-Il génère au hasard tous les secrets internes, puis liste les clés d'API qu'il vous reste à fournir.
-Il n'écrase jamais un `.env` existant : pour tout régénérer, supprimez d'abord `.env` et `frontend/.env.local`.
+Le script liste ensuite les clés d'API restant à renseigner (section 6). Il ne remplace jamais
+un fichier existant ; une régénération complète nécessite la suppression préalable de `.env` et
+de `frontend/.env.local`.
 
-Ouvrez ensuite `.env` (par exemple `notepad .env` sous Windows) et collez vos clés
-obtenues à l'étape 4. Enregistrez.
+> [!TIP]
+> Le fichier `.env` généré commence par la ligne `# ForgeAI : modèle de configuration`, ce qui
+> permet de s'assurer que le bon fichier est modifié.
 
-> Vérifiez que vous modifiez bien le `.env` **de ce dossier** : sa première ligne est
-> `# ForgeAI : modèle de configuration`.
-
-### 5.2 Démarrer les services
+### 7.2 Démarrage des services
 
 ```
 docker compose up -d --build
 docker compose ps
 ```
 
-La première fois, Docker télécharge les images et installe les dépendances Python :
-comptez de 5 à 15 minutes. `docker compose ps` doit montrer 5 services « Up »,
-PostgreSQL « healthy ».
+La première exécution télécharge les images et installe les dépendances Python (5 à 15 minutes
+selon la connexion). `docker compose ps` doit présenter cinq services à l'état `Up`, dont
+PostgreSQL à l'état `healthy`.
 
-### 5.3 Créer les tables de la base
+### 7.3 Schéma de la base de données
 
 ```
 docker compose exec backend alembic upgrade head
+docker compose exec backend alembic current
 ```
 
-La dernière ligne doit mentionner `f4a2b6c8d013` (ou une version plus récente).
-À relancer après chaque mise à jour du code (voir 8.3).
+La seconde commande doit afficher une révision suivie de `(head)`. Cette étape est à répéter
+après chaque mise à jour du code (section 10.3).
 
-### 5.4 Créer le premier administrateur
+### 7.4 Premier administrateur
 
 ```
 docker compose exec backend python -m app.scripts.create_admin
 ```
 
-Répondez aux questions :
+La commande demande l'adresse e-mail, le nom complet et le mot de passe de l'administrateur
+(12 caractères minimum, saisie masquée et confirmée). Le compte est créé avec une adresse
+vérifiée ; si l'adresse correspond à un compte existant, ce compte reçoit le rôle
+d'administrateur. L'opération est inscrite au journal d'audit.
 
-- **e-mail** de l'administrateur (les majuscules sont ignorées) ;
-- **nom complet** ;
-- **mot de passe** : au moins **12 caractères**, saisi deux fois. **Rien ne s'affiche pendant la saisie**, c'est normal.
-
-Le message `Compte … créé.` confirme la création. Si l'e-mail appartient déjà à un compte
-(par exemple créé avec Google), ce compte devient administrateur.
-Seule une personne qui contrôle le serveur peut lancer cette commande, et elle est inscrite au journal d'audit.
-
-Si la saisie masquée ne fonctionne pas dans votre terminal, passez le mot de passe
-par une variable (il restera dans l'historique du terminal : effacez-le ensuite avec `Clear-History` sous PowerShell) :
+Variante non interactive, notamment lorsque le terminal ne prend pas en charge la saisie masquée :
 
 ```
-docker compose exec -e FORGEAI_ADMIN_PASSWORD="VotreMotDePasseLong" backend python -m app.scripts.create_admin --email vous@exemple.com --name "Prénom Nom"
+docker compose exec -e FORGEAI_ADMIN_PASSWORD="<mot de passe>" backend python -m app.scripts.create_admin --email admin@exemple.com --name "Prénom Nom"
 ```
 
-### 5.5 Lancer le frontend
+> [!WARNING]
+> La variante non interactive conserve le mot de passe dans l'historique du terminal
+> (effacement sous PowerShell : `Clear-History`).
 
-Dans un **nouveau terminal**, laissé ouvert tant que vous utilisez la plateforme :
+### 7.5 Frontend
+
+Dans un terminal dédié, maintenu ouvert pendant l'utilisation :
 
 ```
 cd frontend
@@ -272,143 +401,122 @@ npm ci
 npm run dev
 ```
 
-`npm ci` installe les dépendances (1 à 2 minutes, la première fois seulement).
-La plateforme est prête quand le terminal affiche `Ready` et `http://localhost:3000`.
+L'application est disponible lorsque le terminal affiche `Ready` et l'adresse http://localhost:3000.
 
-### 5.6 Vérifier que tout fonctionne
+### 7.6 Vérification
 
-Connectez-vous à la console (section 7) et ouvrez **Santé du système**, puis cliquez sur « Tester maintenant ».
-Chaque service y est réellement contacté :
+La page **Santé du système** de la console (section 9) contacte chaque service et indique son état :
 
-- **Opérationnel** : PostgreSQL, Migrations de la base, File des analyses, API publique, Redis,
-  ChromaDB, Espace disque, et Gemini et/ou Groq selon vos clés ;
-- **Non configuré** : normal pour les services facultatifs que vous n'avez pas renseignés
-  (Tavily, SMTP, connexion Google) ;
-- **Hors service** ou **Dégradé** : le message de la carte dit quoi corriger
-  (clé invalide, modèle introuvable, migrations en retard…).
-
----
-
-## 6. Accéder à la plateforme en tant qu'utilisateur
-
-Adresse : **http://localhost:3000**
-
-### 6.1 Créer un compte
-
-1. Ouvrez http://localhost:3000/register.
-2. Renseignez votre nom, votre e-mail, votre profil (entrepreneur, étudiant ou consultant) et un mot de passe
-   d'au moins 8 caractères.
-3. Un e-mail de vérification est envoyé (voir 6.2). Tant que l'adresse n'est pas vérifiée, la connexion est refusée.
-
-Avec la connexion Google configurée (4.4), le bouton **Continuer avec Google** crée et vérifie le compte directement.
-
-### 6.2 Vérifier l'adresse e-mail
-
-- **SMTP configuré** : ouvrez l'e-mail « Vérifiez votre adresse email — ForgeAI » (regardez aussi les Spam)
-  et cliquez sur le lien.
-- **Sans SMTP** : le lien est écrit dans le journal du backend. Affichez-le avec :
-  ```
-  docker compose logs backend
-  ```
-  Cherchez « SMTP non configuré », copiez le lien `http://localhost:3000/verify-email?token=…`
-  et ouvrez-le dans le navigateur. Sous PowerShell, pour n'afficher que les liens :
-  ```
-  docker compose logs backend | Select-String "verify-email"
-  ```
-  Si vous avez demandé un nouvel e-mail, utilisez le **dernier** lien : les précédents ne sont plus valables.
-
-La page affiche « Email vérifié avec succès ». Connectez-vous sur http://localhost:3000/login.
-
-**Mot de passe oublié** : lien « Mot de passe oublié ? » sur la page de connexion. Le lien de
-réinitialisation arrive par e-mail ou, sans SMTP, dans le journal du backend (même méthode).
-Un compte créé avec Google peut ainsi se définir un mot de passe.
-
-### 6.3 Créer un projet et lancer l'analyse
-
-1. **Nouveau projet** : titre, secteur, pays ou région cible (facultatif), description.
-   Plus la description est complète (problème, cible, solution, modèle économique, MVP,
-   ce que vous voulez valider), moins ForgeAI posera de questions.
-2. La **langue du rapport** suit le bouton FR / EN de l'interface.
-3. Lancez l'analyse. Si le contexte n'est pas assez clair, ForgeAI affiche d'abord des
-   **questions de clarification** : répondez-y, puis « Enregistrer et revérifier ».
-4. La progression s'affiche en direct. Une analyse complète prend de quelques minutes à une vingtaine de minutes
-   selon les quotas des fournisseurs d'IA.
-5. Consultez ensuite le rapport, le plan produit et l'architecture, puis exportez en **PDF**, **Word** ou **PowerPoint**.
-
-Exemple de description qui passe directement :
-
-> Problème : chaque année, des milliers d'étudiants en Tunisie cherchent un stage obligatoire sans réponse,
-> tandis que beaucoup de PME n'ont pas le temps de trier les candidatures. Cible : étudiants des écoles d'ingénieurs
-> et PME de moins de 50 salariés. Solution : une plateforme web de mise en relation avec correspondance automatique
-> par compétences et prise de rendez-vous. Modèle économique : gratuit pour les étudiants, abonnement mensuel
-> pour les entreprises, licence annuelle pour les écoles. MVP : profils, offres, correspondance, messagerie.
-> À valider : la volonté de payer des PME, la taille du marché et les concurrents.
-
----
-
-## 7. Accéder à la console d'administration
-
-Adresse : **http://localhost:3000/admin/login**
-
-Les comptes administrateurs ne se créent pas par l'inscription publique : le premier se crée
-avec la commande de l'étape 5.4, les suivants depuis la console (Utilisateurs → **Ajouter un admin**).
-
-### 7.1 Première connexion : activer la double authentification
-
-1. Installez une application d'authentification sur votre téléphone :
-   Google Authenticator, Microsoft Authenticator, Authy…
-2. Connectez-vous avec l'e-mail et le mot de passe de l'administrateur.
-3. La console affiche un **QR code** (et la clé en texte, si vous ne pouvez pas scanner) :
-   scannez-le avec l'application.
-4. Saisissez le code à 6 chiffres affiché par l'application : la 2FA est activée
-   et vous arrivez sur le tableau de bord.
-
-### 7.2 Connexions suivantes
-
-E-mail, mot de passe **et** code à 6 chiffres de l'application.
-
-- La session admin dure **15 minutes** (compte à rebours en bas du menu), puis il faut se reconnecter.
-- Chaque **action sensible** (changer un rôle, désactiver ou supprimer un compte, supprimer un projet,
-  relancer une analyse…) redemande un code 2FA.
-- Après 5 tentatives de connexion échouées, la connexion est bloquée 15 minutes.
-- Toutes les connexions et actions admin sont inscrites au **journal d'audit**, qui ne peut être ni modifié ni supprimé.
-
-### 7.3 Pages de la console
-
-| Page | Contenu |
+| État | Signification |
 |---|---|
-| Tableau de bord | chiffres clés de la plateforme |
-| Utilisateurs | recherche, filtres, rôles, activation, renvoi de l'e-mail de vérification, ajout d'un admin, export CSV |
-| Projets | tous les projets, recherche, suppression, export CSV |
-| Analyses IA | suivi, relance, **diagnostic** (chaque étape, sources, preuves, erreurs, données brutes) |
-| Erreurs | analyses en échec |
-| Santé du système | test réel de chaque service et de chaque modèle d'IA configuré |
-| Journal d'audit | qui a fait quoi, quand et depuis où ; export CSV |
+| Opérationnel | Service joignable et correctement configuré |
+| Non configuré | Service optionnel sans configuration (Tavily, SMTP, connexion Google) |
+| Dégradé / Hors service | Anomalie détaillée dans la carte du service : clé invalide, modèle introuvable, migrations en retard, service injoignable |
 
 ---
 
-## 8. Utilisation au quotidien
+## 8. Espace utilisateur
 
-### 8.1 Arrêter et redémarrer
+Adresse : http://localhost:3000
+
+### 8.1 Création de compte
+
+L'inscription s'effectue sur http://localhost:3000/register : nom, adresse e-mail, profil
+(entrepreneur, étudiant ou consultant) et mot de passe de 8 caractères minimum. La connexion
+n'est autorisée qu'après vérification de l'adresse e-mail. L'inscription via Google (section 6.4)
+produit un compte directement vérifié.
+
+### 8.2 Vérification de l'adresse e-mail
+
+| Configuration | Procédure |
+|---|---|
+| SMTP configuré | Ouvrir l'e-mail « Vérifiez votre adresse email — ForgeAI » (y compris dans le dossier Spam) et suivre le lien |
+| Sans SMTP (développement) | Récupérer le lien dans le journal du backend, puis l'ouvrir dans le navigateur |
+
+Extraction du lien depuis le journal (`docker compose logs backend`) :
 
 ```
-docker compose stop            # arrêter (les données sont conservées)
-docker compose up -d           # redémarrer
+docker compose logs backend | Select-String "verify-email"     # PowerShell
+docker compose logs backend | grep verify-email                # macOS, Linux
 ```
 
-Puis, dans un autre terminal : `cd frontend` et `npm run dev`.
+Seul le lien le plus récent est valide après un renvoi de l'e-mail. La réinitialisation du mot
+de passe (« Mot de passe oublié ? ») suit le même principe ; elle permet également à un compte
+créé via Google de définir un mot de passe.
 
-### 8.2 Après une modification de `.env`
+### 8.3 Analyse d'un projet
 
-Les conteneurs ne lisent `.env` qu'à leur création : un simple `restart` ne suffit pas.
+1. Créer un projet : titre, secteur, pays ou région cible (optionnel) et description.
+2. La langue du rapport correspond à la langue de l'interface (sélecteur FR / EN).
+3. Lancer l'analyse. Lorsque le contexte est insuffisant, la plateforme présente des questions
+   de clarification ; l'analyse démarre après « Enregistrer et revérifier ».
+4. Suivre la progression, affichée en temps réel (de quelques minutes à une vingtaine de minutes
+   selon la disponibilité des fournisseurs d'IA).
+5. Consulter le rapport, le plan produit et l'architecture, puis exporter en PDF, Word ou PowerPoint.
+
+Une description couvrant le problème, la cible, la solution, le modèle économique, le périmètre
+du MVP et les hypothèses à valider limite le nombre de questions de clarification. Exemple :
+
+> Problème : chaque année, des milliers d'étudiants en Tunisie cherchent un stage obligatoire sans
+> réponse, tandis que de nombreuses PME manquent de temps pour trier les candidatures. Cible :
+> étudiants des écoles d'ingénieurs et PME de moins de 50 salariés. Solution : plateforme web de
+> mise en relation avec correspondance automatique par compétences et prise de rendez-vous.
+> Modèle économique : gratuit pour les étudiants, abonnement mensuel pour les entreprises, licence
+> annuelle pour les écoles. MVP : profils, offres, correspondance, messagerie. À valider : la
+> disposition à payer des PME, la taille du marché et la concurrence.
+
+---
+
+## 9. Console d'administration
+
+Adresse : http://localhost:3000/admin/login
+
+Les comptes d'administration ne sont pas accessibles par l'inscription publique. Le premier
+compte est créé en ligne de commande (section 7.4) ; les suivants depuis la console
+(Utilisateurs → Ajouter un admin), avec vérification de l'adresse e-mail.
+
+### 9.1 Activation de la double authentification
+
+À la première connexion, après validation de l'adresse e-mail et du mot de passe, la console
+affiche un QR code et la clé correspondante. Le QR code est à enregistrer dans une application
+d'authentification (Google Authenticator, Microsoft Authenticator, Authy…), puis le code à six
+chiffres généré est à saisir pour activer la double authentification.
+
+### 9.2 Règles d'accès
+
+| Règle | Valeur |
+|---|---|
+| Authentification | E-mail, mot de passe et code à six chiffres |
+| Durée de session | 15 minutes, sans renouvellement silencieux |
+| Actions sensibles (rôles, désactivation, suppression, relance d'analyse) | Confirmation par un nouveau code 2FA |
+| Tentatives de connexion | Blocage de 15 minutes après 5 échecs |
+| Traçabilité | Connexions et actions inscrites dans un journal d'audit non modifiable |
+
+---
+
+## 10. Exploitation
+
+### 10.1 Arrêt et redémarrage
+
+```
+docker compose stop        # arrêt, données conservées
+docker compose up -d       # redémarrage
+```
+
+Le frontend est relancé séparément avec `npm run dev` depuis le dossier `frontend`.
+
+### 10.2 Prise en compte d'une modification de `.env`
+
+Les variables d'environnement sont lues à la création des conteneurs ; un redémarrage simple
+ne suffit pas :
 
 ```
 docker compose up -d --force-recreate backend backend-admin
 ```
 
-Après une modification de `frontend/.env.local`, arrêtez `npm run dev` (Ctrl+C) et relancez-le.
+Une modification de `frontend/.env.local` nécessite l'arrêt (Ctrl+C) et la relance de `npm run dev`.
 
-### 8.3 Mettre à jour le code
+### 10.3 Mise à jour
 
 ```
 git pull
@@ -419,59 +527,68 @@ npm ci
 npm run dev
 ```
 
-### 8.4 Tout réinitialiser
+### 10.4 Réinitialisation complète
 
 ```
 docker compose down -v
 ```
 
-Supprime les conteneurs **et toutes les données** (comptes, projets, analyses). Irréversible.
-Refaites ensuite les étapes 5.2 à 5.4.
+> [!WARNING]
+> Cette commande supprime les conteneurs et l'ensemble des données (comptes, projets, analyses,
+> journal d'audit) de façon irréversible. Les étapes 7.2 à 7.4 sont ensuite à reprendre.
 
 ---
 
-## 9. Tests
+## 11. Tests
 
-Backend (dans le conteneur) :
-
-```
-docker compose exec backend python -m pip install -r requirements-dev.txt
-docker compose exec backend python -m pytest -q
-```
-
-Frontend :
-
-```
-cd frontend
-node --test "tests/*.test.mjs"
-```
-
----
-
-## 10. Dépannage
-
-| Symptôme | Cause et solution |
+| Périmètre | Commande |
 |---|---|
-| `docker` : commande introuvable, ou erreur de connexion au démon | Docker Desktop n'est pas démarré : lancez-le et attendez « Engine running ». |
-| `Conflict. The container name "/forgeai_postgres" is already in use` | Une autre installation de ForgeAI existe sur la machine. Arrêtez-la (`docker compose stop` dans son dossier), puis supprimez ses conteneurs : `docker rm forgeai_backend_admin forgeai_backend forgeai_chroma forgeai_redis forgeai_postgres`. Ses données restent dans ses volumes. |
-| Un port est déjà pris (5432, 6379, 8000, 8001, 8002, 3000) | Arrêtez le programme qui l'occupe. Pour l'API admin, vous pouvez changer `ADMIN_API_PORT` dans `.env` et `NEXT_PUBLIC_ADMIN_API_URL` dans `frontend/.env.local`. |
-| `service "backend" is not running` | `docker compose up -d` a échoué : lisez son message, puis `docker compose logs backend`. |
-| Le backend redémarre en boucle | Une variable obligatoire manque dans `.env` : `docker compose logs backend` la nomme. Sur un dépôt sans `.env`, relancez `python scripts/init_env.py`. |
-| `create_admin` : « Mot de passe trop court » | Il faut **au moins 12 caractères** pour un administrateur. |
-| Pas d'e-mail reçu | Regardez les **Spam**. Dans `docker compose logs backend`, « envoyé à » confirme l'envoi, « Échec de l'envoi » donne la raison, « SMTP non configuré » signifie que `.env` n'est pas pris en compte (voir 8.2). |
-| Connexion utilisateur refusée juste après l'inscription | L'adresse e-mail n'est pas encore vérifiée (voir 6.2). |
-| L'analyse échoue tout de suite | Clé d'IA absente, invalide ou quota atteint : **Santé du système** indique laquelle, et les modèles introuvables. Ajoutez l'autre clé d'IA ou attendez la réinitialisation du quota. |
-| « Continuer avec Google » échoue | Sans `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`, c'est normal : utilisez l'inscription par e-mail. Sinon, vérifiez l'URI de redirection (4.4) et que votre adresse figure parmi les utilisateurs de test. |
-| Page blanche ou erreur réseau dans le navigateur | `npm run dev` n'est pas lancé, ou le backend ne répond pas : vérifiez http://localhost:8000/health |
-| Accents mal affichés par `Get-Content` sous PowerShell | Affichage seulement : ajoutez `-Encoding utf8`. |
+| Backend (dans le conteneur) | `docker compose exec backend python -m pip install -r requirements-dev.txt` puis `docker compose exec backend python -m pytest -q` |
+| Frontend | `cd frontend` puis `node --test "tests/*.test.mjs"` |
 
 ---
 
-## 11. Sécurité
+## 12. Dépannage
 
-- **Ne committez jamais** `.env` ni `frontend/.env.local` (ils sont ignorés par git).
-- Ne partagez pas vos clés et ne les montrez pas dans des captures d'écran. Une clé qui a été affichée
-  ou envoyée quelque part doit être **remplacée** (révoquez-la dans la console du fournisseur, créez-en une nouvelle).
-- L'API admin n'écoute que sur `127.0.0.1`. En production, elle se place derrière un VPN,
-  et le repli « e-mails dans le journal » est désactivé (`ENVIRONMENT=production`).
-- Remplacez toutes les clés de développement avant une mise en production.
+| Symptôme | Cause et résolution |
+|---|---|
+| Commande `docker` introuvable ou démon injoignable | Docker Desktop n'est pas démarré. Le lancer et attendre l'état « Engine running ». |
+| `Conflict. The container name "/forgeai_postgres" is already in use` | Une autre installation de ForgeAI existe sur le poste. L'arrêter (`docker compose stop` dans son dossier) et supprimer ses conteneurs : `docker rm forgeai_backend_admin forgeai_backend forgeai_chroma forgeai_redis forgeai_postgres`. Ses volumes de données sont conservés. |
+| Port déjà utilisé (5432, 6379, 8000, 8001, 8002, 3000) | Arrêter l'application concernée. Le port de l'API d'administration est modifiable via `ADMIN_API_PORT` (`.env`) et `NEXT_PUBLIC_ADMIN_API_URL` (`frontend/.env.local`). |
+| `service "backend" is not running` | Échec de `docker compose up -d` : consulter son message, puis `docker compose logs backend`. |
+| Redémarrages en boucle du backend | Variable obligatoire absente de `.env`, indiquée par `docker compose logs backend`. |
+| `create_admin` : « Mot de passe trop court » | Le mot de passe d'un administrateur comporte au moins 12 caractères. |
+| E-mail non reçu | Vérifier le dossier Spam. Dans `docker compose logs backend` : « envoyé à » confirme l'envoi, « Échec de l'envoi » en donne la cause, « SMTP non configuré » indique que `.env` n'a pas été rechargé (section 10.2). |
+| Connexion refusée après inscription | Adresse e-mail non vérifiée (section 8.2). |
+| Échec immédiat de l'analyse | Clé d'IA absente, invalide ou quota épuisé ; la page Santé du système identifie le service et les modèles en cause. |
+| Journal : « Quota exceeded… FreeTier » | Quota quotidien gratuit de Gemini atteint (section 6.7). |
+| Journal : « no longer available to new users » | Modèle Gemini fermé aux nouveaux comptes : vider `GEMINI_FALLBACK_MODEL` ou modifier `GEMINI_MODEL`, puis recharger le backend (section 10.2). |
+| Journal : « Request too large » (Groq) | Plafond par minute de l'offre gratuite Groq ; le plan produit reste « Provisoire » puis est régénéré automatiquement. |
+| Diagrammes : « Rendu visuel indisponible » | Kroki injoignable depuis le backend (VPN, pare-feu, absence de réseau). Contrôler la connectivité (section 6.6) ou utiliser le conteneur local, puis « Régénérer l'architecture ». |
+| Échec de « Continuer avec Google » | Identifiants OAuth absents, URI de redirection non conforme (section 6.4) ou adresse absente des utilisateurs de test. |
+| Page blanche ou erreur réseau | Frontend non démarré ou backend injoignable : vérifier http://localhost:8000/health. |
+| Accents altérés par `Get-Content` (PowerShell) | Problème d'affichage uniquement : ajouter `-Encoding utf8`. |
+
+---
+
+## 13. Sécurité
+
+### Gestion des secrets
+
+Les fichiers `.env` et `frontend/.env.local` contiennent les secrets de l'installation (clés
+d'API, identifiants SMTP, clés de signature et de chiffrement). Ils sont exclus du suivi Git par
+`.gitignore` et ne doivent être ni versionnés ni diffusés. Toute clé exposée doit être révoquée
+auprès du fournisseur concerné, puis remplacée.
+
+### Isolation de la console d'administration
+
+L'API d'administration est publiée uniquement sur l'interface locale (`127.0.0.1`) et n'est pas
+accessible depuis le réseau. L'accès est protégé par une double authentification, les actions
+sensibles exigent une confirmation, et l'ensemble des opérations est tracé dans un journal
+d'audit non modifiable.
+
+### Environnement de production
+
+En production (`ENVIRONMENT=production`), le mode de secours qui écrit les e-mails dans le
+journal du serveur est désactivé. Les clés utilisées en développement doivent être renouvelées
+avant toute mise en production.

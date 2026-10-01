@@ -70,6 +70,10 @@ def test_the_template_has_a_value_or_an_explained_blank_for_every_setting():
                  "GEMINI_MODEL", "GROQ_MODEL", "APP_NAME", "SMTP_FROM_NAME", "ENVIRONMENT"):
         assert example[name].strip(), name
     assert example["APP_NAME"] == example["SMTP_FROM_NAME"] == "ForgeAI"  # no DotJcom in the product
+    # RED 1 Oct 2026 (clone test): gemini-2.5-flash answers 404 "no longer available
+    # to new users" on a fresh account. The template must not configure it.
+    assert example["GEMINI_FALLBACK_MODEL"] == ""
+    assert example["KROKI_ENABLED"] == "true" and example["KROKI_BASE_URL"].startswith("http")
 
 
 def test_the_template_never_carries_a_secret():
@@ -241,3 +245,8 @@ def test_the_readme_gives_every_installation_step():
                  "docker compose logs backend", "Santé du système"):
         assert step in readme, step
     assert "DotJcom" not in readme
+    # Kroki needs no key, only a server address; the local option and the check are explained.
+    for text in ("Kroki (aucune clé)", "KROKI_BASE_URL=http://host.docker.internal:8010",
+                 "docker run -d --name kroki-local", "/health", "Rendu visuel indisponible",
+                 "Limites des offres gratuites", "Request too large"):
+        assert text in readme, text
