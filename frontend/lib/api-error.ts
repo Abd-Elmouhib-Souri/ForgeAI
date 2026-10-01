@@ -25,6 +25,10 @@
         }
       }
     }
+
+    // A validation error (422, detail = list) or a server error: axios's
+    // English technical message must never reach the page.
+    return fallback; // HTTP error without a readable detail
   }
 
   if (error instanceof Error && error.message.trim().length > 0) {
