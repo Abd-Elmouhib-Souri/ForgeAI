@@ -95,6 +95,6 @@ Project-level setup, architecture and operational status:
 
 - `../README.md`
 
-Sprint 4 certification and handoff:
+Sprint 4 internal review and handoff:
 
-- `../docs/SPRINT4_CERTIFICATION.md`
+- `../docs/SPRINT4_REVIEW.md`

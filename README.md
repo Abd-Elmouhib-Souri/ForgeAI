@@ -1,5 +1,30 @@
 # ForgeAI
 
+ForgeAI is a decision-support platform that turns a free-text startup or project idea into a structured study: market study, competitive analysis, SWOT, Business Model Canvas, financial estimate, personas, fact-checking, a startup score and a verdict, followed by a product plan (backlog, sprints) and a technical architecture. Reports export to PDF, Word and PowerPoint.
+
+I designed and built it alone as my internship project at DotJcom (July–September 2026).
+
+**Architecture in one sentence:** an 8-node LangGraph pipeline (market study, SWOT, Business Model Canvas, competitive analysis, financial estimation, startup score, personas, fact-checking) backed by two ChromaDB RAG modules (a seeded market corpus and dynamic web retrieval), a startup score computed by rules over 9 criteria, and a debate committee of 8 roles whose scores are currently rule-based, not model-judged.
+
+**Stack:** FastAPI, Next.js, PostgreSQL, Redis, ChromaDB, Docker Compose; Gemini and Groq as language models.
+
+**Status:** a working prototype. The score and verdict are decision aids, not validated predictions; see the measured limits below.
+
+## Results and limitations
+
+- **Analyses run:** 25 completed analyses (counted in the database, excluding my 5 test projects).
+- **Automated tests:** 2,630 backend tests collected by pytest, and 96 frontend tests run with `node --test` (96 passed, 0 failed). I have not run the full backend suite for this README, so I make no pass-rate claim for it.
+- **Pre-registered discrimination test:** before running it, I fixed a protocol (2 strong ideas, 3 weak ideas, success criterion: mean gap of at least 2.0 points) and recorded its SHA-256 (`561680B1C7436EA8C39A99BFADC27DBCBBCAE2FA0850E4F5AA94BC944E5BDBDC`). **Result: all five ideas scored 7.0 (gap 0.0), so the criterion was not met.** The protocol file is kept outside this repository.
+- **Why the score does not separate ideas yet:** the 9 sub-scores do vary between ideas (from 6.1 to 7.7), but the final score came out at 7.0 for all five. In the debate committee, `backend/app/agents/debate_room_graph.py` sets the defender's `opportunity_score` to a fixed `6.0` (line 638) and the critic's `risk_score` to `7.0` whenever any risk is listed, otherwise `4.0` (line 648), so those values do not depend on the idea.
+- **Other observations from the same run:** the three weak ideas received no project-type classification (confidence 0.25), and the strong ideas' sub-scores were identical to each other. Free-tier rate limits (HTTP 429) also occurred during the run; I did not establish whether they affected the result.
+- **Test setup:** the five analyses first stopped at the clarification step; I re-ran them after answering with text taken only from each idea's own description, and "not specified" otherwise.
+- **Sample size:** n = 5 shows an absence of separation; it does not support statistics.
+- **Next step:** make the committee scores depend on each idea's evidence, then re-run the same protocol unchanged on a larger set of ideas.
+
+---
+
+## Documentation (français)
+
 **Plateforme d'aide à la décision qui transforme une idée de projet ou de startup en dossier
 d'étude complet, argumenté et exportable.**
 
